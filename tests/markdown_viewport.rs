@@ -229,7 +229,7 @@ fn reading_fixture_keeps_code_diagrams_math_and_quotes_in_the_actual_sidebar() {
             ready(&mut s);
             let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
             let full =
-                preview::render(&source, std::path::Path::new("reading.md"), true, 98, light);
+                preview::render(&source, std::path::Path::new("reading.md"), true, 96, light);
             assert!(r.complete, "fixture should fit the viewport plus prefetch");
             assert_eq!(r.plain, full.plain, "crlf={crlf} light={light}");
             let window = r.window.as_ref().unwrap();
@@ -267,7 +267,7 @@ fn reading_fixture_keeps_code_diagrams_math_and_quotes_in_the_actual_sidebar() {
             let mut terminal = Terminal::new(TestBackend::new(100, 120)).unwrap();
             terminal.draw(|f| s.draw(f)).unwrap();
             let buffer = terminal.backend().buffer();
-            let row = &buffer.content[(code + 1) * 100..(code + 2) * 100];
+            let row = &buffer.content[(code + 2) * 100..(code + 3) * 100];
             assert!(
                 row.iter()
                     .filter(|c| !c.symbol().trim().is_empty())
@@ -339,8 +339,8 @@ fn code_language_is_fixed_at_top_right_without_entering_code_or_source_selection
                             "label must stay out of searchable text"
                         );
                         let buffer = terminal.backend().buffer();
-                        let label: String = (1..width - 1)
-                            .map(|x| buffer[(x, 1 + header as u16)].symbol())
+                        let label: String = (2..width - 2)
+                            .map(|x| buffer[(x, 2 + header as u16)].symbol())
                             .collect();
                         // Hide a label that cannot fit; never truncate it into a misleading language.
                         assert_eq!(
@@ -362,9 +362,9 @@ fn code_language_is_fixed_at_top_right_without_entering_code_or_source_selection
                             r.selected_source((header, 0), (code, 15)),
                             "let value = 42;"
                         );
-                        let bg = buffer[(1, 1 + code as u16)].bg;
-                        for x in 1..width - 1 {
-                            assert_eq!(buffer[(x, 1 + header as u16)].bg, bg);
+                        let bg = buffer[(2, 2 + code as u16)].bg;
+                        for x in 2..width - 2 {
+                            assert_eq!(buffer[(x, 2 + header as u16)].bg, bg);
                         }
                     }
                 }
@@ -426,7 +426,7 @@ fn list_markers_have_no_underline_but_links_still_do() {
                 .take_while(|c| c.is_whitespace())
                 .count();
             for x in col..col + marker.chars().count() {
-                let cell = &buffer[(1 + x as u16, 1 + row as u16)];
+                let cell = &buffer[(2 + x as u16, 2 + row as u16)];
                 assert!(
                     !cell.modifier.contains(Modifier::UNDERLINED),
                     "marker {marker} light={light} is underlined"
@@ -435,7 +435,7 @@ fn list_markers_have_no_underline_but_links_still_do() {
         }
         let row = r.plain.iter().position(|s| s == "link").unwrap();
         assert!(
-            buffer[(1, 1 + row as u16)]
+            buffer[(2, 2 + row as u16)]
                 .modifier
                 .contains(Modifier::UNDERLINED),
             "link underline was lost"
@@ -517,19 +517,26 @@ fn code_background_fills_sidebar_width_for_short_empty_and_scrolled_rows() {
                             .style
                             .bg
                             .expect("code row must retain a block background");
-                        for x in 1..width - 1 {
+                        for x in 2..width - 2 {
                             assert_eq!(
-                                buffer[(x, 1 + row as u16)].bg,
+                                buffer[(x, 2 + row as u16)].bg,
                                 expected,
                                 "code row {row} col {x} width={width} light={light} left={left} fallback={fallback} kind={:?}",
                                 mapping.kind
                             );
                         }
                         assert_eq!(
-                            buffer[(0, 1 + row as u16)].bg,
+                            buffer[(0, 2 + row as u16)].bg,
                             Color::Reset,
                             "code background leaked into the border"
                         );
+                        for x in [1, width - 2] {
+                            assert_eq!(
+                                buffer[(x, 2 + row as u16)].bg,
+                                Color::Reset,
+                                "code background leaked into the padding"
+                            );
+                        }
                         checked += 1;
                     }
                     assert!(checked >= 3, "must cover short code and an empty code row");
@@ -539,7 +546,7 @@ fn code_background_fills_sidebar_width_for_short_empty_and_scrolled_rows() {
                         .position(|s| s.starts_with("inline "))
                         .unwrap();
                     assert_eq!(
-                        buffer[(width - 2, 1 + row as u16)].bg,
+                        buffer[(width - 3, 2 + row as u16)].bg,
                         Color::Reset,
                         "inline code must not fill the entire row"
                     );

@@ -476,6 +476,15 @@ impl Sidebar {
     pub fn showing(&self) -> bool {
         self.preview_visible && self.document.is_some()
     }
+    fn document_area(&self) -> Option<Rect> {
+        self.geometry.preview.map(|rect| {
+            if self.document.as_ref().is_some_and(|d| d.editing) {
+                crate::ui::content(rect)
+            } else {
+                crate::ui::preview_content(rect)
+            }
+        })
+    }
     pub fn update_layout(&mut self, area: Rect, split: bool) -> bool {
         let next = panels(area, split, self.visible, self.showing());
         let changed = next != self.geometry;
@@ -596,6 +605,7 @@ impl Sidebar {
         Ok(())
     }
     fn render_document(&mut self) -> Result<()> {
+        let viewport_area = self.document_area();
         let Some(d) = &mut self.document else {
             return Ok(());
         };
@@ -605,11 +615,7 @@ impl Sidebar {
         if d.render_pending {
             return Ok(());
         }
-        let width = self
-            .geometry
-            .preview
-            .map(crate::ui::content)
-            .map_or(80, |r| r.width);
+        let width = viewport_area.map_or(80, |r| r.width);
         self.serial += 1;
         let id = self.serial;
         let source = d.editor.as_ref().map_or_else(
@@ -632,11 +638,7 @@ impl Sidebar {
             } else {
                 d.offset().0
             },
-            rows: self
-                .geometry
-                .preview
-                .map(crate::ui::content)
-                .map_or(40, |r| r.height.max(1)) as usize,
+            rows: viewport_area.map_or(40, |r| r.height.max(1)) as usize,
         };
         self.io.send(Job::Render {
             editor: d.editing,
@@ -659,7 +661,7 @@ impl Sidebar {
         Ok(())
     }
     fn highlight_document(&mut self) {
-        let Some(rect) = self.geometry.preview.map(crate::ui::content) else {
+        let Some(rect) = self.document_area() else {
             return;
         };
         let Some(d) = &mut self.document else {
@@ -952,11 +954,7 @@ impl Sidebar {
                     stats,
                     markdown_stats,
                 } => {
-                    let expected_width = self
-                        .geometry
-                        .preview
-                        .map(crate::ui::content)
-                        .map_or(80, |r| r.width);
+                    let expected_width = self.document_area().map_or(80, |r| r.width);
                     if let Some(d) = &mut self.document
                         && d.path == path
                         && d.render_id == id
@@ -1018,11 +1016,8 @@ impl Sidebar {
             }
         }
         if active && let Some(d) = &self.document {
-            let width = self
-                .geometry
-                .preview
-                .map(crate::ui::content)
-                .map_or(80, |r| r.width);
+            let viewport_area = self.document_area();
+            let width = viewport_area.map_or(80, |r| r.width);
             if !d.render_pending
                 && d.loaded.is_some()
                 && (d.rendered.as_ref().is_none_or(|r| {
@@ -1041,22 +1036,13 @@ impl Sidebar {
                                     || d.markdown_end
                                     || d.markdown_copy
                                     || d.offset().0.saturating_add(
-                                        self.geometry
-                                            .preview
-                                            .map(crate::ui::content)
-                                            .map_or(40, |r| r.height)
-                                            as usize,
+                                        viewport_area.map_or(40, |r| r.height) as usize,
                                     ) > r.plain.len()))
                                 || r.window.as_ref().is_none_or(|w| {
                                     !w.covers(
                                         preview::CodeViewport {
                                             top: d.offset().0,
-                                            rows: self
-                                                .geometry
-                                                .preview
-                                                .map(crate::ui::content)
-                                                .map_or(40, |r| r.height)
-                                                as usize,
+                                            rows: viewport_area.map_or(40, |r| r.height) as usize,
                                         },
                                         self.files.light,
                                     )
@@ -1634,9 +1620,7 @@ impl Sidebar {
             }
         } else if self.focus == Focus::Preview {
             let page = self
-                .geometry
-                .preview
-                .map(crate::ui::content)
+                .document_area()
                 .map_or(10, |r| r.height.saturating_sub(1).max(1) as usize);
             if matches!(key.code, KeyCode::Char('t' | 'T')) {
                 self.start_outline();
@@ -1885,7 +1869,7 @@ impl Sidebar {
                 return Ok((true, Action::None));
             }
             self.focus = Focus::Preview;
-            let inner = crate::ui::content(rect);
+            let inner = crate::ui::preview_content(rect);
             if event.row == rect.y && matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
             {
                 self.menu();
@@ -2078,7 +2062,7 @@ impl Sidebar {
                 d.loaded.as_ref().is_some_and(|l| l.markdown()),
                 d.markdown,
             );
-            let inner = crate::ui::content(rect);
+            let inner = crate::ui::preview_content(rect);
             let (_, left) = d.offset();
             if let Some(r) = &d.rendered {
                 for (y, row) in d.screen_rows(inner.height as usize).into_iter().enumerate() {
@@ -2502,8 +2486,9 @@ mod performance_tests {
         s.preview_visible = true;
         let buffer = draw(&mut s, 100);
         let rect = s.geometry.preview.unwrap();
-        let x = rect.x + 1 + 6;
-        let y = rect.y + 1;
+        let inner = crate::ui::preview_content(rect);
+        let x = inner.x + 6;
+        let y = inner.y;
         for col in 0..3 {
             assert_eq!(buffer[(x + col, y)].bg, Color::Yellow);
         }

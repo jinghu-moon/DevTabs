@@ -297,7 +297,13 @@ fn sidebar_resize_theme_and_unsaved_preview_use_current_render_state() {
             let width = s
                 .geometry
                 .preview
-                .map(devtabs::ui::content)
+                .map(|r| {
+                    if s.document.as_ref().is_some_and(|d| d.editing) {
+                        devtabs::ui::content(r)
+                    } else {
+                        devtabs::ui::preview_content(r)
+                    }
+                })
                 .map_or(80, |r| r.width);
             if s.document.as_ref().is_some_and(|d| {
                 !d.loading

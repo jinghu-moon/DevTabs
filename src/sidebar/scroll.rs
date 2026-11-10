@@ -103,7 +103,7 @@ impl Sidebar {
         if let Some(rect) = self.geometry.preview
             && let Some(d) = &self.document
         {
-            let inner = crate::ui::content(rect);
+            let inner = self.document_area().expect("preview area");
             let (total, page, position, bytes, target) = if d.editing {
                 let Some(e) = &d.editor else {
                     return tracks;

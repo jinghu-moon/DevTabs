@@ -69,6 +69,87 @@ fn md(text: &str) -> preview::Rendered {
 }
 
 #[test]
+fn preview_padding_keeps_all_four_sides_blank_and_uses_the_smaller_viewport() {
+    let f = Fixture::new();
+    for markdown in [true, false] {
+        let mut s = f.open(&"abcdefghij ".repeat(120), 80, 20);
+        if !markdown {
+            key(&mut s, KeyCode::Char('m'));
+            wait(&mut s, |s| {
+                s.document
+                    .as_ref()
+                    .unwrap()
+                    .rendered
+                    .as_ref()
+                    .is_some_and(|r| !r.markdown)
+            });
+        }
+        let b = draw(&mut s, 80, 20);
+        let rect = s.geometry.preview.unwrap();
+        let inner = devtabs::ui::preview_content(rect);
+        assert_eq!(
+            (inner.x, inner.y, inner.width, inner.height),
+            (2, 2, 76, 14)
+        );
+        assert_eq!(
+            s.document
+                .as_ref()
+                .unwrap()
+                .rendered
+                .as_ref()
+                .unwrap()
+                .width,
+            inner.width
+        );
+        for y in rect.y + 1..rect.bottom() - 1 {
+            for x in rect.x + 1..rect.right() - 1 {
+                if !inner.contains((x, y).into()) {
+                    assert_eq!(
+                        b[(x, y)].symbol(),
+                        " ",
+                        "padding at ({x}, {y}) markdown={markdown}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            b[(inner.x + if markdown { 0 } else { 6 }, inner.y)].symbol(),
+            "a"
+        );
+        // Clicking the padding cannot select document text.
+        mouse(
+            &mut s,
+            MouseEventKind::Down(MouseButton::Left),
+            rect.x + 1,
+            inner.y,
+        );
+        mouse(
+            &mut s,
+            MouseEventKind::Up(MouseButton::Left),
+            rect.x + 1,
+            inner.y,
+        );
+        assert!(s.document.as_ref().unwrap().selection.is_none());
+        mouse(
+            &mut s,
+            MouseEventKind::Down(MouseButton::Left),
+            inner.x + if markdown { 0 } else { 6 },
+            inner.y,
+        );
+        mouse(
+            &mut s,
+            MouseEventKind::Drag(MouseButton::Left),
+            inner.x + if markdown { 3 } else { 9 },
+            inner.y,
+        );
+        assert_eq!(
+            s.document.as_ref().unwrap().selected_text().as_deref(),
+            Some("abc")
+        );
+    }
+}
+
+#[test]
 fn code_copy_preserves_full_body_tabs_empty_lines_and_excludes_labels() {
     let r = md("```rust,no_run\n\tlet x = 1;\n\nlet y = 2;\n```\n");
     assert_eq!(
@@ -251,8 +332,8 @@ fn clicking_local_links_jumps_to_fragment_and_back_restores_position() {
         .iter()
         .position(|s| s == "Open")
         .unwrap() as u16;
-    mouse(&mut s, MouseEventKind::Down(MouseButton::Left), 2, row + 1);
-    mouse(&mut s, MouseEventKind::Up(MouseButton::Left), 2, row + 1);
+    mouse(&mut s, MouseEventKind::Down(MouseButton::Left), 3, row + 2);
+    mouse(&mut s, MouseEventKind::Up(MouseButton::Left), 3, row + 2);
     wait(&mut s, |s| {
         let d = s.document.as_ref().unwrap();
         d.path.ends_with("other.md")
@@ -292,7 +373,7 @@ fn resize_mode_switch_and_file_switch_preserve_logical_reading_position() {
             .as_ref()
             .unwrap()
             .width
-            == 62
+            == 60
     });
     let d = s.document.as_ref().unwrap();
     assert_eq!(
@@ -336,7 +417,7 @@ fn table_header_pins_and_horizontal_scrollbar_drags() {
     let mut s = f.open(&text, 64, 20);
     s.document.as_mut().unwrap().scroll[1].0 = 10;
     let b = draw(&mut s, 64, 20);
-    let top: String = (1..63).map(|x| b[(x, 1)].symbol()).collect();
+    let top: String = (2..62).map(|x| b[(x, 2)].symbol()).collect();
     assert!(top.contains("Name"), "{top}");
     let rect = s.geometry.preview.unwrap();
     let y = rect.bottom() - 1;
@@ -354,7 +435,7 @@ fn vertical_scrollbar_drags_to_unlaid_tail_and_short_documents_have_no_thumb() {
         .collect::<String>();
     let mut s = f.open(&text, 80, 20);
     let b = draw(&mut s, 80, 20);
-    assert_eq!(b[(79, 1)].symbol(), "█");
+    assert_eq!(b[(79, 2)].symbol(), "█");
     mouse(&mut s, MouseEventKind::Down(MouseButton::Left), 79, 14);
     mouse(&mut s, MouseEventKind::Drag(MouseButton::Left), 79, 16);
     mouse(&mut s, MouseEventKind::Up(MouseButton::Left), 79, 16);
@@ -544,10 +625,10 @@ fn dragging_links_and_missing_targets_keep_the_current_document() {
     let f = Fixture::new();
     fs::write(f.0.join("other.md"), "other").unwrap();
     let mut s = f.open("[Open](other.md)\n", 80, 20);
-    mouse(&mut s, MouseEventKind::Down(MouseButton::Left), 1, 1);
-    mouse(&mut s, MouseEventKind::Drag(MouseButton::Left), 3, 1);
-    mouse(&mut s, MouseEventKind::Drag(MouseButton::Left), 1, 1);
-    mouse(&mut s, MouseEventKind::Up(MouseButton::Left), 1, 1);
+    mouse(&mut s, MouseEventKind::Down(MouseButton::Left), 2, 2);
+    mouse(&mut s, MouseEventKind::Drag(MouseButton::Left), 4, 2);
+    mouse(&mut s, MouseEventKind::Drag(MouseButton::Left), 2, 2);
+    mouse(&mut s, MouseEventKind::Up(MouseButton::Left), 2, 2);
     assert!(s.document.as_ref().unwrap().path.ends_with("read.md"));
     assert!(
         s.activate_reading(ReadingAction::Link("missing.md".into()))

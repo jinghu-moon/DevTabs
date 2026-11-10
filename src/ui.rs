@@ -33,6 +33,14 @@ pub fn content(rect: Rect) -> Rect {
     })
 }
 
+/// Read-only document viewport: one blank cell inside each border.
+pub fn preview_content(rect: Rect) -> Rect {
+    content(rect).inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    })
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let _perf = crate::perf::span(crate::perf::Metric::Ui);
     let area = frame.area();
