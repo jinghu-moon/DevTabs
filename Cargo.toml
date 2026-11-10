@@ -1,0 +1,51 @@
+[package]
+name = "devtabs"
+version = "0.4.0"
+edition = "2024"
+rust-version = "1.98"
+description = "Agent and Debug terminals together in a Windows TUI"
+license = "MIT"
+repository = "https://github.com/jinghu-moon/DevTabs"
+
+[workspace]
+members = ["crates/devtabs-mermaid"]
+resolver = "3"
+
+[dependencies]
+anyhow = "1.0.104"
+base64 = "0.23.1"
+arboard = { version = "3.7.0", default-features = false }
+clap = { version = "4.6.7", features = ["derive"] }
+crossterm = "0.29.0"
+dunce = "1.0.5"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.2.1"
+uuid = { version = "1.29.2", features = ["v4", "serde"] }
+interprocess = "2.4.8"
+widestring = "1.2.1"
+portable-pty = "0.9.0"
+ratatui = "0.30.2"
+tui-term = { version = "0.3.4", default-features = false }
+vt100 = "0.18.1"
+tui-tree-widget = "0.24.1"
+devicons = "0.6.13"
+ignore = "0.4.34"
+notify = "8.2.2"
+syntect = { version = "5.3.0", default-features = false, features = ["default-onig"] }
+two-face = { version = "0.5.2", default-features = false, features = ["syntect-onig"] }
+pulldown-cmark = { version = "0.13.6", default-features = false }
+textwrap = { version = "0.16.4", default-features = false, features = ["unicode-width"] }
+unicode-linebreak = "0.1.5"
+devtabs-mermaid = { path = "crates/devtabs-mermaid" }
+unicode-width = "0.2.3"
+unicode-segmentation = "1.13.3"
+ratatui-textarea = { version = "0.9.4", features = ["search"] }
+regex = "1.13.1"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem", "Win32_Foundation", "Win32_System_JobObjects", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_Console", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_ProcessStatus", "Win32_UI_WindowsAndMessaging", "Win32_Security", "Win32_Security_Authorization"] }
+
+[profile.release]
+lto = "thin"
+strip = true

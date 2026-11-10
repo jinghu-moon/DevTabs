@@ -1,0 +1,96 @@
+{
+  "date": "2026-11-10",
+  "license": "Apache-2.0",
+  "files": [
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/draw.rs",
+      "local": "crates/devtabs-mermaid/src/draw.rs",
+      "upstream_sha256": "f2fcce613dffaff2ec92d90270c6810b8c4b48e30f7e21364d0a1cbb06bbd84c",
+      "local_sha256": "f2fcce613dffaff2ec92d90270c6810b8c4b48e30f7e21364d0a1cbb06bbd84c"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/families_tests.rs",
+      "local": "crates/devtabs-mermaid/src/families_tests.rs",
+      "upstream_sha256": "c8353ccdc370392bbd7acd6f07d7b86f2069df344c05a7e9cb13ea0d5d0e69fe",
+      "local_sha256": "c8353ccdc370392bbd7acd6f07d7b86f2069df344c05a7e9cb13ea0d5d0e69fe"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/lib.rs",
+      "local": "crates/devtabs-mermaid/src/lib.rs",
+      "upstream_sha256": "a4874182b28599ca3b2456594cf84999f69289c0d9829793d9322f4c01f36a44",
+      "local_sha256": "a4874182b28599ca3b2456594cf84999f69289c0d9829793d9322f4c01f36a44"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/output.rs",
+      "local": "crates/devtabs-mermaid/src/output.rs",
+      "upstream_sha256": "f19769bb1db608a6ef683971f01d4c9f9296aae27e3a5ed01a72536bc51ad182",
+      "local_sha256": "f19769bb1db608a6ef683971f01d4c9f9296aae27e3a5ed01a72536bc51ad182"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/parse.rs",
+      "local": "crates/devtabs-mermaid/src/parse.rs",
+      "upstream_sha256": "d3f020a5e14054517468216d443ca895d60ee6bb303a494ada389356cea1f2cc",
+      "local_sha256": "d3f020a5e14054517468216d443ca895d60ee6bb303a494ada389356cea1f2cc"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/relations.rs",
+      "local": "crates/devtabs-mermaid/src/relations.rs",
+      "upstream_sha256": "68b030f350f9d0d1b3a5e8e8e2936d026aa4b3fd5220a4e25e47c147a993dbc3",
+      "local_sha256": "68b030f350f9d0d1b3a5e8e8e2936d026aa4b3fd5220a4e25e47c147a993dbc3"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/sequence.rs",
+      "local": "crates/devtabs-mermaid/src/sequence.rs",
+      "upstream_sha256": "53dfbf095beb847f425a2de32fc4cc1c812882b9f1c0d411c49b59aabded466d",
+      "local_sha256": "53dfbf095beb847f425a2de32fc4cc1c812882b9f1c0d411c49b59aabded466d"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/state.rs",
+      "local": "crates/devtabs-mermaid/src/state.rs",
+      "upstream_sha256": "998e33be3009ef390fa034ec7f7bbb913ff8220bd5fbd97ecc9a6da2c01d7d22",
+      "local_sha256": "998e33be3009ef390fa034ec7f7bbb913ff8220bd5fbd97ecc9a6da2c01d7d22"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/syntax.rs",
+      "local": "crates/devtabs-mermaid/src/syntax.rs",
+      "upstream_sha256": "25b93ff985bfb537ee7a96e0d0c6484616b753d76e568c7f99bcf045ac8b3fd5",
+      "local_sha256": "25b93ff985bfb537ee7a96e0d0c6484616b753d76e568c7f99bcf045ac8b3fd5"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/mermaid/src/tests.rs",
+      "local": "crates/devtabs-mermaid/src/tests.rs",
+      "upstream_sha256": "1f9faba350f1862cab193d8db7f0cacc4bf790681f06c61aa8ae57a733c45e3b",
+      "local_sha256": "1f9faba350f1862cab193d8db7f0cacc4bf790681f06c61aa8ae57a733c45e3b"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/tui/src/markdown_render/math.rs",
+      "local": "src/preview/math.rs",
+      "upstream_sha256": "02952660ec03b9896723567f946bc0e364d113614fa9294cc615931fa64c0672",
+      "local_sha256": "61743cb0d067391ef04bc858e83887f2316da5bfd711166f0d7162ffc976b9e5"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/tui/src/markdown_render/math/render.rs",
+      "local": "src/preview/math/render.rs",
+      "upstream_sha256": "a8e1138c9d22c5b0e3952aa815f7c365cc759f8ac980f10e80a55084ae2d45b9",
+      "local_sha256": "98a0ae5b1a44ed95e6907b2e3e1a0494a5a66ee17afb269323032030a6f3ce76"
+    },
+    {
+      "upstream": "refer/codex-main/codex-rs/tui/src/markdown_render/math/render/structured.rs",
+      "local": "src/preview/math/render/structured.rs",
+      "upstream_sha256": "1c0eb71f64d072e8b1811113e45157488af1a8376c8cb686d9b06be063f4896a",
+      "local_sha256": "4f38fd213d24a1691660ae65e9db41280db993cee4ea76889e2065ef1bb6f331"
+    }
+  ],
+  "math_changes": [
+    "BlockQuote payload adaptation for pulldown-cmark 0.13",
+    "always enabled math feature",
+    "std iterator chain instead of itertools Either",
+    "upstream test modules omitted from adapted prepass",
+    "display_width import points at DevTabs layout helper",
+    "stage timing instrumentation in prepass",
+    "rustfmt formatting",
+    "prominent adaptation notice in modified source files"
+  ],
+  "snapshot_changes": "Mermaid snapshot filenames use devtabs_mermaid module prefix; expected diagram contents unchanged.",
+  "local_line_endings": "LF, normalized by repository .gitattributes; upstream hashes identify original reference bytes."
+}

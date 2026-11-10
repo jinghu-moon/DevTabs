@@ -1,0 +1,13 @@
+[package]
+name = "devtabs-mermaid"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+unicode-width = "0.2.3"
+
+[dev-dependencies]
+insta = "1.47"
+pretty_assertions = "1.4.1"

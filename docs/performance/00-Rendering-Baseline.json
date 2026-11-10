@@ -1,0 +1,248 @@
+{
+  "baseline": "DevTabs 0.4.0 before viewport/incremental rendering optimizations",
+  "measured_on": "2026-11-10",
+  "rendering_behavior": "full loaded content parsing/highlighting/layout; visible-row drawing",
+  "note": "Measurements from the previous verified implementation. Re-measure equivalent workloads for each optimization; process scale excludes shells, agents, Windows Terminal/OpenConsole, compilers and test runner. Raw logs remain local under artifacts/.",
+  "ordinary_tests_passed": 93,
+  "render_workload": [
+    {
+      "cold_ms": 2.5086,
+      "max_ms": 2.5086,
+      "name": "prose",
+      "rows": 1099,
+      "warm_mean_ms": 1.4668,
+      "width": 20
+    },
+    {
+      "cold_ms": 1.1792,
+      "max_ms": 1.5983,
+      "name": "prose",
+      "rows": 799,
+      "warm_mean_ms": 1.2272999999999998,
+      "width": 40
+    },
+    {
+      "cold_ms": 1.3448,
+      "max_ms": 1.3448,
+      "name": "prose",
+      "rows": 599,
+      "warm_mean_ms": 0.9441363636363636,
+      "width": 80
+    },
+    {
+      "cold_ms": 0.9177000000000001,
+      "max_ms": 1.2918999999999998,
+      "name": "prose",
+      "rows": 599,
+      "warm_mean_ms": 0.9837454545454546,
+      "width": 120
+    },
+    {
+      "cold_ms": 1.0002,
+      "max_ms": 1.2614,
+      "name": "table",
+      "rows": 599,
+      "warm_mean_ms": 0.9738818181818182,
+      "width": 20
+    },
+    {
+      "cold_ms": 1.276,
+      "max_ms": 1.5948,
+      "name": "table",
+      "rows": 402,
+      "warm_mean_ms": 1.3217818181818182,
+      "width": 40
+    },
+    {
+      "cold_ms": 0.6667,
+      "max_ms": 0.7771,
+      "name": "table",
+      "rows": 102,
+      "warm_mean_ms": 0.6998363636363636,
+      "width": 80
+    },
+    {
+      "cold_ms": 0.8258,
+      "max_ms": 1.1287999999999998,
+      "name": "table",
+      "rows": 102,
+      "warm_mean_ms": 0.6988181818181819,
+      "width": 120
+    },
+    {
+      "cold_ms": 18.086399999999998,
+      "max_ms": 18.086399999999998,
+      "name": "code",
+      "rows": 200,
+      "warm_mean_ms": 15.303490909090907,
+      "width": 20
+    },
+    {
+      "cold_ms": 14.5149,
+      "max_ms": 18.7894,
+      "name": "code",
+      "rows": 200,
+      "warm_mean_ms": 15.690927272727272,
+      "width": 40
+    },
+    {
+      "cold_ms": 14.638,
+      "max_ms": 18.9821,
+      "name": "code",
+      "rows": 200,
+      "warm_mean_ms": 15.187054545454545,
+      "width": 80
+    },
+    {
+      "cold_ms": 14.724599999999999,
+      "max_ms": 19.4301,
+      "name": "code",
+      "rows": 200,
+      "warm_mean_ms": 15.514936363636366,
+      "width": 120
+    }
+  ],
+  "scale": {
+    "discovery": {
+      "note": "Run the 100-project/8-session release integration benchmark for process CPU/memory; this command measures discovery/search only.",
+      "projects": 100,
+      "scan_ms": 2.8214,
+      "search_mean_ms": 0.0005833
+    },
+    "document_open_ms": [
+      91.72420000000001,
+      31.1615,
+      77.6033
+    ],
+    "edited_file_bytes": 508000,
+    "editor_input_ms": 10.918000000000001,
+    "editor_search_ms": 16.4971,
+    "editor_undo_ms": 15.1331,
+    "excludes": "PowerShell, Agents, Windows Terminal/OpenConsole, compilers and benchmark test runner",
+    "idle_cpu_machine_percent": 0.14061892807468573,
+    "idle_cpu_single_core_percent": 2.812378561493715,
+    "live_sessions": 8,
+    "logical_processors": 20,
+    "one_sidebar_closed_working_set_sum_mib": 96.328125,
+    "overview_first_project_frame_ms": 76.9445,
+    "overview_frontends": 1,
+    "own_process_count": 6,
+    "preview_editor_private_bytes_sum_mib": 35.1015625,
+    "preview_editor_working_set_sum_mib": 95.796875,
+    "private_bytes_sum_mib": 23.3203125,
+    "projects": 100,
+    "save_sampled_peak_working_set_sum_mib": 99.6328125,
+    "save_visible_ms": 33.1467,
+    "search_frame_ms": 16.905199999999997,
+    "visible_session_frontends": 4,
+    "warm_session_frame_ms": [
+      89.5885,
+      92.87389999999999,
+      95.11699999999999,
+      76.6713
+    ],
+    "working_set_sum_mib": 82.640625
+  },
+  "hotspot_cases": [
+    {
+      "iterations": 100,
+      "max_ms": 12.0688,
+      "mean_ms": 0.17786700000000003,
+      "name": "tree_10000_repaint",
+      "p50_ms": 0.0571,
+      "p95_ms": 0.0627
+    },
+    {
+      "iterations": 1,
+      "max_ms": 6.0224,
+      "mean_ms": 6.0224,
+      "name": "preview_find_80000_matches",
+      "p50_ms": 6.0224,
+      "p95_ms": 6.0224
+    },
+    {
+      "iterations": 10,
+      "max_ms": 0.37110000000000004,
+      "mean_ms": 0.26010000000000005,
+      "name": "preview_draw_dense_matches",
+      "p50_ms": 0.232,
+      "p95_ms": 0.37110000000000004
+    },
+    {
+      "iterations": 10,
+      "max_ms": 0.3715,
+      "mean_ms": 0.256,
+      "name": "preview_draw_dense_matches_near_end",
+      "p50_ms": 0.2293,
+      "p95_ms": 0.3715
+    },
+    {
+      "iterations": 50,
+      "max_ms": 0.22890000000000002,
+      "mean_ms": 0.175164,
+      "name": "preview_draw_no_matches",
+      "p50_ms": 0.1708,
+      "p95_ms": 0.202
+    },
+    {
+      "iterations": 200,
+      "max_ms": 0.0097,
+      "mean_ms": 0.0001299999999999998,
+      "name": "editor_navigation_508kb",
+      "p50_ms": 9.999999999999999e-05,
+      "p95_ms": 9.999999999999999e-05
+    },
+    {
+      "iterations": 200,
+      "max_ms": 0.1482,
+      "mean_ms": 0.0700435,
+      "name": "editor_dirty_508kb",
+      "p50_ms": 0.06889999999999999,
+      "p95_ms": 0.0761
+    },
+    {
+      "iterations": 40,
+      "max_ms": 3.4088,
+      "mean_ms": 2.5231424999999996,
+      "name": "editor_type_508kb",
+      "p50_ms": 2.4572000000000003,
+      "p95_ms": 2.9108
+    }
+  ],
+  "large_directory": {
+    "batch_ms": [
+      21.9545,
+      20.816100000000002,
+      21.168699999999998,
+      21.1339,
+      21.9498,
+      21.6387,
+      22.0878,
+      22.2805,
+      24.0928,
+      22.6933,
+      22.959500000000002,
+      23.4042,
+      23.1325,
+      23.7989,
+      23.9525,
+      24.2243,
+      27.3438,
+      25.4105,
+      25.9225,
+      26.0838,
+      26.2002,
+      26.1722,
+      22.766000000000002
+    ],
+    "code_cold_ms": 14.6191,
+    "code_lines": 900,
+    "directory_entries": 30000,
+    "load_total_ms": 579.3136,
+    "loaded_nodes": 10000,
+    "markdown_cold_ms": 6.6915000000000004,
+    "markdown_warm_ms": 4.8558,
+    "rendered_lines": 799,
+    "tree_draw_ms": 11.6741
+  }
+}

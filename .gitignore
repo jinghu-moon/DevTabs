@@ -1,0 +1,25 @@
+# Build outputs and local benchmark evidence
+**/target/
+/artifacts/
+/dist/
+*.log
+*.exe
+*.pdb
+
+# Reference repositories, raw interviews and local scratch samples
+/refer/
+/interviews/
+/测试文档.md
+
+# Agent/browser state and generated workflow templates
+/.serena/
+/.playwright-mcp/
+/.spec-workflow/
+
+# Local environment and editor/OS state
+.env
+.env.local
+.env.*.local
+/.idea/
+.DS_Store
+Thumbs.db
