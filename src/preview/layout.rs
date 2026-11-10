@@ -157,6 +157,8 @@ pub(super) fn row(pieces: Vec<Piece>, kind: RowKind, base: Style) -> Row {
             kind,
             segments,
             code_language: None,
+            code_copy: None,
+            table: None,
         },
     }
 }

@@ -81,6 +81,7 @@ pub enum Job {
         viewport: preview::CodeViewport,
         generation: Arc<std::sync::atomic::AtomicU64>,
         complete: bool,
+        reading: preview::reading::ReadingOptions,
     },
     Highlight {
         path: PathBuf,
@@ -218,9 +219,9 @@ impl Workers {
                         Some(Completed::Directory{path,generation,batch:result})
                     }
                     Job::Read{path,id}=>{let result=preview::read(&path);Some(Completed::Read{path,id,result})}
-                    Job::Render{path,id,source,markdown,width,light,editor,viewport,generation,complete}=>{
+                    Job::Render{path,id,source,markdown,width,light,editor,viewport,generation,complete,reading}=>{
                         let code=if markdown {None} else {code_cache.render(source.clone(),&path,viewport,light,&generation,id)};
-                        let mut result=if editor {preview::render_editor_plain(source,width,light)} else if markdown {markdown_cache.render(source,width,light,viewport,complete)} else {preview::render_plain(source,&path,false,width,light)};
+                        let mut result=if editor {preview::render_editor_plain(source,width,light)} else if markdown {markdown_cache.render_reading(source,width,light,viewport,complete,&reading)} else {preview::render_plain(source,&path,false,width,light)};
                         if !markdown {result.window=code;}
                         Some(Completed::Render{path,id,result,stats:(!markdown).then(||code_cache.stats()),markdown_stats:markdown.then(||markdown_cache.stats())})
                     }

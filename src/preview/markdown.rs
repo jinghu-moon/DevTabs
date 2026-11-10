@@ -4,7 +4,7 @@ use super::{
     layout::{self, Piece, Row},
     theme::Palette,
 };
-use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use std::{ops::Range, path::Path};
 
@@ -18,23 +18,35 @@ struct Margin {
     pending: bool,
 }
 struct Code {
+    copy: String,
     language: String,
     pieces: Vec<Piece>,
     range: Range<usize>,
     fenced: bool,
 }
 pub(super) struct Output {
+    pub reading: super::ReadingIndex,
     pub rows: Vec<Row>,
     pub notes: Vec<String>,
 }
 
 pub(super) fn render(source: &str, width: usize, light: bool) -> Output {
     let _perf = crate::perf::span(crate::perf::Metric::Markdown);
-    let options =
-        Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-    let math = super::math::MathMarkdown::new(source, options, Some(width));
-    let events = math.events(Parser::new_ext(&math.markdown, options).into_offset_iter());
-    render_events(source, width, light, events, &math.display_ranges, true)
+    let options = super::reading::options();
+    let mut prepared = super::reading::prepare(source, &Default::default());
+    let input = prepared.text.clone();
+    let math = super::math::MathMarkdown::new(&input, options, Some(width));
+    let events = math.events(prepared.events(&math.markdown).into_iter());
+    let mut output = render_events(
+        source,
+        width,
+        light,
+        super::reading::with_summaries(events, &prepared.summaries),
+        &math.display_ranges,
+        true,
+    );
+    output.reading = prepared.index;
+    output
 }
 fn render_events<'a>(
     source: &str,
@@ -59,6 +71,7 @@ fn render_events<'a>(
         notes: Vec::new(),
         spans: 0,
         images: Vec::new(),
+        quote_depth: 0,
     };
     for (event, range) in events {
         if w.rows.len() >= super::MAX_RENDER_ROWS || w.spans > super::MAX_SPANS {
@@ -97,6 +110,7 @@ fn render_events<'a>(
         w.push(layout::row(Vec::new(), RowKind::Prose, Style::default()));
     }
     Output {
+        reading: Default::default(),
         rows: w.rows,
         notes: w.notes,
     }
@@ -117,6 +131,7 @@ struct Writer<'a> {
     notes: Vec<String>,
     spans: usize,
     images: Vec<(String, Range<usize>)>,
+    quote_depth: usize,
 }
 impl Writer<'_> {
     fn style(&self) -> Style {
@@ -180,11 +195,21 @@ impl Writer<'_> {
                 .last()
                 .is_some_and(|r| !r.line.to_string().trim().is_empty())
         {
-            self.push(layout::row(
-                Vec::new(),
+            let prefix = if self.quote_depth > 0 {
+                self.prefixes().1
+            } else {
+                Vec::new()
+            };
+            for row in layout::wrap(
+                &[],
+                &prefix,
+                &prefix,
+                self.width,
                 RowKind::Decoration,
                 Style::default(),
-            ));
+            ) {
+                self.push(row);
+            }
         }
     }
     fn text(&mut self, text: &str, range: Range<usize>) {
@@ -199,6 +224,7 @@ impl Writer<'_> {
             )]
         };
         if let Some(code) = &mut self.code {
+            code.copy.push_str(text);
             code.pieces.extend(pieces);
         } else if let Some(table) = &mut self.table {
             table.cell.extend(pieces);
@@ -251,6 +277,14 @@ impl Writer<'_> {
         match event {
             Event::Start(tag) => match tag {
                 Tag::Paragraph => {}
+                Tag::FootnoteDefinition(id) => {
+                    self.flush();
+                    self.blank();
+                    self.inline(self.palette.link);
+                    let end = range.start + id.len() + 3;
+                    self.text(&format!("[^{id}] ↩ "), range.start..end.min(range.end));
+                    self.pop();
+                }
                 Tag::Heading { level, .. } => {
                     self.flush();
                     self.blank();
@@ -267,7 +301,13 @@ impl Writer<'_> {
                 Tag::BlockQuote(_) => {
                     self.flush();
                     self.blank();
-                    let p = vec![Piece::synthetic("│ ", self.palette.quote)];
+                    self.quote_depth += 1;
+                    let style = if self.quote_depth.is_multiple_of(2) {
+                        self.palette.rule
+                    } else {
+                        self.palette.quote
+                    };
+                    let p = vec![Piece::synthetic("│ ", style)];
                     self.margins.push(Margin {
                         first: p.clone(),
                         rest: p,
@@ -314,6 +354,7 @@ impl Writer<'_> {
                         CodeBlockKind::Indented => (String::new(), false),
                     };
                     self.code = Some(Code {
+                        copy: String::new(),
                         language,
                         pieces: Vec::new(),
                         range,
@@ -344,6 +385,10 @@ impl Writer<'_> {
                         self.blank();
                     }
                 }
+                TagEnd::FootnoteDefinition => {
+                    self.flush();
+                    self.blank();
+                }
                 TagEnd::Heading(_) => {
                     self.flush();
                     self.pop();
@@ -362,6 +407,7 @@ impl Writer<'_> {
                     self.flush();
                     self.pop();
                     self.margins.pop();
+                    self.quote_depth = self.quote_depth.saturating_sub(1);
                     self.blank();
                 }
                 TagEnd::Item => {
@@ -456,7 +502,11 @@ impl Writer<'_> {
                 }
                 self.blank();
             }
-            Event::FootnoteReference(text) => self.text(&format!("[^{text}]"), range),
+            Event::FootnoteReference(text) => {
+                self.inline(self.palette.link);
+                self.text(&format!("[^{text}]"), range);
+                self.pop();
+            }
             _ => {}
         }
     }
@@ -515,6 +565,7 @@ impl Writer<'_> {
                 self.palette.block.patch(self.palette.rule),
             );
             header.source.code_language = Some(super::safe_text(&code.language).into());
+            header.source.code_copy = Some(super::copy_text(&code.copy).into());
             self.push(header);
         }
         let highlighted = super::highlight(

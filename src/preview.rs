@@ -13,9 +13,11 @@ use syntect::parsing::SyntaxSet;
 mod layout;
 mod markdown;
 mod math;
+pub mod reading;
 mod theme;
 mod viewport;
 pub use markdown::{MarkdownCache, MarkdownStats};
+pub use reading::{ReadingAction, ReadingIndex};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 pub use viewport::{CodeHighlighter, CodeViewport, HighlightStats, HighlightWindow};
@@ -361,10 +363,18 @@ pub struct RowSource {
     pub segments: Vec<SourceSegment>,
     /// Fixed viewport decoration on a code header; excluded from text and source selection.
     pub code_language: Option<Arc<str>>,
+    pub code_copy: Option<Arc<str>>,
+    pub table: Option<TableRow>,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct TableRow {
+    pub offset: usize,
+    pub header_rows: usize,
 }
 
 #[derive(Debug)]
 pub struct Rendered {
+    pub reading: Arc<ReadingIndex>,
     pub text: Arc<Text<'static>>,
     pub window: Option<Arc<HighlightWindow>>,
     pub plain: Arc<Vec<String>>,
@@ -472,9 +482,11 @@ fn render_internal(
 ) -> Rendered {
     let _perf = crate::perf::span(crate::perf::Metric::Render);
     let mut note = String::new();
+    let mut reading = Arc::new(ReadingIndex::default());
     let (text, rows) = if markdown {
         let output = markdown::render(&source, width.max(1) as usize, light);
         let mut lines = Vec::with_capacity(output.rows.len());
+        reading = Arc::new(output.reading);
         let mut rows = Vec::with_capacity(output.rows.len());
         for row in output.rows {
             lines.push(row.line);
@@ -511,6 +523,8 @@ fn render_internal(
                 RowSource {
                     kind: RowKind::Code,
                     code_language: None,
+                    code_copy: None,
+                    table: None,
                     segments: vec![SourceSegment {
                         display: 0..display.chars().count(),
                         source: start..start + raw.len(),
@@ -523,6 +537,7 @@ fn render_internal(
     };
     let plain = text.lines.iter().map(ToString::to_string).collect();
     Rendered {
+        reading,
         text: Arc::new(text),
         window: None,
         plain: Arc::new(plain),
@@ -539,6 +554,7 @@ pub fn render_editor(source: &str, path: &Path, width: u16, light: bool) -> Rend
     let safe = display_text(source);
     Rendered {
         text: Arc::new(highlight(&safe, path, light)),
+        reading: Default::default(),
         window: None,
         plain: Default::default(),
         source: Arc::from(""),
@@ -558,6 +574,7 @@ pub fn render_editor(source: &str, path: &Path, width: u16, light: bool) -> Rend
 pub(crate) fn render_editor_plain(source: Arc<str>, width: u16, light: bool) -> Rendered {
     Rendered {
         text: Arc::new(Text::default()),
+        reading: Default::default(),
         window: None,
         plain: Default::default(),
         source,

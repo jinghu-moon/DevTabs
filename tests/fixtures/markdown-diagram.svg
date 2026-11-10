@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="140" viewBox="0 0 480 140">
+  <rect width="480" height="140" rx="12" fill="#232730"/>
+  <rect x="24" y="36" width="150" height="68" rx="8" fill="#89b4fa"/>
+  <rect x="306" y="36" width="150" height="68" rx="8" fill="#a6e3a1"/>
+  <path d="M184 70H294m-12-10 12 10-12 10" fill="none" stroke="#cdd6f4" stroke-width="3"/>
+  <g font-family="sans-serif" font-size="18" text-anchor="middle" fill="#232730">
+    <text x="99" y="77">DevTabs</text><text x="381" y="77">Image preview</text>
+  </g>
+</svg>

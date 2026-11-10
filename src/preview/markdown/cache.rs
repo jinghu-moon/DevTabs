@@ -1,5 +1,5 @@
 //! Parse references globally once; lay out complete top-level blocks only as requested.
-use super::{Event, Options, Parser, TagEnd, render_events};
+use super::{Event, TagEnd, render_events};
 use crate::preview::{CodeViewport, HighlightWindow, Rendered, RowSource, layout::Row};
 use ratatui::text::{Line, Text};
 use std::{collections::VecDeque, ops::Range, sync::Arc};
@@ -33,25 +33,40 @@ pub struct MarkdownCache {
     cached: VecDeque<(usize, Arc<Vec<Row>>)>,
     notes: Vec<String>,
     spans: usize,
+    covered_source: usize,
     done: bool,
     stats: MarkdownStats,
+    expanded: std::collections::BTreeSet<usize>,
+    prepared: String,
+    reading: Arc<crate::preview::ReadingIndex>,
 }
 impl MarkdownCache {
     pub fn stats(&self) -> MarkdownStats {
         self.stats
     }
-    fn reset(&mut self, source: Arc<str>, width: u16, light: bool) {
+    fn reset(
+        &mut self,
+        source: Arc<str>,
+        width: u16,
+        light: bool,
+        expanded: &std::collections::BTreeSet<usize>,
+    ) {
         *self = Self::default();
         self.width = width;
         self.light = light;
-        let options =
-            Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+        self.expanded = expanded.clone();
+        let mut prepared = crate::preview::reading::prepare(&source, expanded);
+        let input = prepared.text.clone();
+        let options = crate::preview::reading::options();
         let math = crate::preview::math::MathMarkdown::deferred(
-            &source,
+            &input,
             options,
             Some(width.max(1) as usize),
         );
-        let events = math.events(Parser::new_ext(&math.markdown, options).into_offset_iter());
+        let events = crate::preview::reading::with_summaries(
+            math.events(prepared.events(&math.markdown).into_iter()),
+            &prepared.summaries,
+        );
         let mut depth = 0usize;
         let mut block = Vec::new();
         for (event, range) in events {
@@ -71,6 +86,7 @@ impl MarkdownCache {
                             | TagEnd::BlockQuote(_)
                             | TagEnd::CodeBlock
                             | TagEnd::Table
+                            | TagEnd::FootnoteDefinition
                     ) | Event::Rule
                 );
             block.push((event.into_static(), range));
@@ -88,6 +104,8 @@ impl MarkdownCache {
             });
         }
         self.display_ranges = math.display_ranges.clone();
+        self.reading = Arc::new(prepared.index);
+        self.prepared = prepared.text;
         self.stats.indexed_blocks = self.blocks.len();
         self.source = Some(source);
     }
@@ -99,13 +117,12 @@ impl MarkdownCache {
             self.cached.push_back(pair);
             return rows;
         }
-        let source = self.source.as_ref().unwrap();
         let events = &self.blocks[index].events;
         let start = events.iter().map(|(_, r)| r.start).min().unwrap_or(0);
         let end = events.iter().map(|(_, r)| r.end).max().unwrap_or(start);
         let math = crate::preview::math::MathMarkdown::new(
-            &source[start..end],
-            Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
+            &self.prepared[start..end],
+            crate::preview::reading::options(),
             Some(self.width.max(1) as usize),
         );
         let events = events.iter().cloned().map(|(event, range)| {
@@ -152,6 +169,18 @@ impl MarkdownCache {
         viewport: CodeViewport,
         all: bool,
     ) -> Rendered {
+        self.render_reading(source, width, light, viewport, all, &Default::default())
+    }
+    pub fn render_reading(
+        &mut self,
+        source: Arc<str>,
+        width: u16,
+        light: bool,
+        viewport: CodeViewport,
+        all: bool,
+        reading: &crate::preview::reading::ReadingOptions,
+    ) -> Rendered {
+        let expanded = &reading.expanded;
         let _perf = crate::perf::span(crate::perf::Metric::MarkdownViewport);
         if self
             .source
@@ -159,10 +188,12 @@ impl MarkdownCache {
             .is_none_or(|s| !Arc::ptr_eq(s, &source))
             || self.width != width
             || self.light != light
+            || self.expanded != *expanded
         {
             let same_layout = self.source.is_some()
                 && self.width == width
                 && self.light == light
+                && self.expanded == *expanded
                 && self.notes.is_empty();
             let old_source = self.source.clone();
             let previous = if same_layout {
@@ -173,7 +204,7 @@ impl MarkdownCache {
             } else {
                 Vec::new()
             };
-            self.reset(source.clone(), width, light);
+            self.reset(source.clone(), width, light, expanded);
             for (events, rows) in previous {
                 // Compare globally resolved events, ranges and original source: reference changes
                 // and moved source coordinates must invalidate reuse.
@@ -195,7 +226,10 @@ impl MarkdownCache {
                 .saturating_add(viewport.rows)
                 .saturating_add(16)
         };
-        while !self.done && self.plain.len() < wanted {
+        while !self.done
+            && (self.plain.len() < wanted
+                || reading.seek.is_some_and(|byte| self.covered_source <= byte))
+        {
             if self.next == self.blocks.len() {
                 self.done = true;
                 break;
@@ -217,6 +251,14 @@ impl MarkdownCache {
                     .push(Line::raw(plain.clone()).style(row.line.style));
                 Arc::make_mut(&mut self.plain).push(plain);
                 Arc::make_mut(&mut self.rows).push(row.source.clone());
+                self.covered_source = self.covered_source.max(
+                    row.source
+                        .segments
+                        .iter()
+                        .map(|s| s.source.end)
+                        .max()
+                        .unwrap_or(0),
+                );
             }
             self.blocks[self.next].rows = start..self.plain.len();
             self.next += 1;
@@ -240,11 +282,21 @@ impl MarkdownCache {
                     kind: crate::preview::RowKind::Prose,
                     segments: Vec::new(),
                     code_language: None,
+                    code_copy: None,
+                    table: None,
                 });
                 Arc::make_mut(&mut self.neutral).lines.push(Line::default());
             }
         }
-        let top = viewport.top.min(self.plain.len().saturating_sub(1));
+        let top = reading
+            .seek
+            .map_or(viewport.top, |byte| {
+                self.rows
+                    .iter()
+                    .position(|r| r.segments.iter().any(|s| s.source.end > byte))
+                    .unwrap_or(self.rows.len().saturating_sub(1))
+            })
+            .min(self.plain.len().saturating_sub(1));
         let wanted = top.saturating_sub(16)
             ..top
                 .saturating_add(viewport.rows)
@@ -285,6 +337,7 @@ impl MarkdownCache {
         self.stats.known_rows = self.plain.len();
         self.stats.complete = self.done;
         Rendered {
+            reading: self.reading.clone(),
             text: self.neutral.clone(),
             window: Some(window),
             plain: self.plain.clone(),

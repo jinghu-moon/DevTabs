@@ -1,6 +1,6 @@
 # Markdown Renderer Implementation
 
-日期：2026-11-10。版本：**DevTabs 0.4.0**。实施依据：[11-Codex-Markdown-Rendering-Research.md](11-Codex-Markdown-Rendering-Research.md)。
+日期：2026-11-10。版本：**DevTabs 0.4.0**。实施依据：[11-Codex-Markdown-Rendering-Research.md](11-Codex-Markdown-Rendering-Research.md)。后续阅读交互、表格与滚动条实现见 [18-Markdown-Reading-Interactions.md](18-Markdown-Reading-Interactions.md)。
 
 ## 完成范围
 
@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 1. 共享主题 | 深色 Catppuccin Mocha / 浅色 Latte；Markdown、文件高亮、编辑器使用同一语法主题；标题、强调、链接、引用分层 | [theme.rs](../src/preview/theme.rs)、[preview.rs](../src/preview.rs) |
 | 2. 块级排版 | 正文按词换行；中文与字素簇按显示列计算；列表续行对齐；代码保留缩进和长行，使用已有左右键横向滚动 | [markdown.rs](../src/preview/markdown.rs)、[layout.rs](../src/preview/layout.rs) |
-| 3. 表格 | 按列内容分配宽度，优先收缩路径等长 token，保留短值；无法满足列宽时改为字段/值记录 | [table.rs](../src/preview/markdown/table.rs) |
+| 3. 表格 | 按列内容分配宽度；普通视口支持横向阅读及固定表头，极窄视口无法满足列宽时改为字段/值记录 | [table.rs](../src/preview/markdown/table.rs) |
 | 4. 来源与预算 | 显示行保存原文字节范围；复制源码可按选择取回公式、实体、图形等来源；高亮前检查预算；主题参与缓存失效；重排清除旧选择 | [preview.rs](../src/preview.rs)、[sidebar.rs](../src/sidebar.rs) |
 | 5. Mermaid | 已闭合围栏中的受支持图形转成带主题的 Unicode 图；不支持、超宽、超限时保留源码并提示原因 | [devtabs-mermaid](../crates/devtabs-mermaid/README.md) |
 | 6. 数学 | 支持美元及反斜线定界符的有限 TeX 子集；分数、上下标、矩阵等排版；代码/链接受保护；无法转换时恢复原文 | [math.rs](../src/preview/math.rs)、[math/render.rs](../src/preview/math/render.rs) |
@@ -24,7 +24,7 @@
 - 点击 `.md` 文件进入阅读模式；预览焦点下按 **m / M**，或点击 `[M]`，切换阅读/源码。
 - 阅读模式保留 DevTabs 隐藏标题标记的选择，通过字重、颜色和留白区分标题级别。字体大小由终端决定。
 - 代码块不按正文重排。长代码可用左右方向键横向阅读；围栏语言支持 `rust,no_run`、`rust title=demo` 等元数据。
-- 围栏代码块顶部保留一行背景，在右上角显示声明的语言（仅取元数据前的语言名）；未声明时留空。标签固定在视口右侧，不随代码横向滚动，不覆盖代码，也不进入搜索或源码复制。语言名过长无法完整放入时隐藏；缩进代码块和已转换的 Mermaid 图不添加语言标签。
+- 围栏代码块顶部保留一行背景，在右上角显示声明的语言（仅取元数据前的语言名）和 `[Copy]`；未声明时语言留空。标签固定在视口右侧，不随代码横向滚动，不覆盖代码，也不进入搜索或源码复制。语言名过长无法完整放入时隐藏；缩进代码块和已转换的 Mermaid 图不添加语言标签。
 - 任务框、无序项目符号和有序编号使用强调颜色，不带链接下划线；正文链接仍保留下划线。代码块背景铺满预览内容区的整行，包括代码空行和横向滚动后的空白；行内代码只在自身文本范围显示背景。绘制背景不添加源文本空格，选择与复制不受补齐空白影响。
 - Markdown 的字面代码示例保持代码；不会套用 Codex Agent 消息入口展开 Markdown 围栏的特殊处理。
 - **Ctrl+C** 复制当前显示选择；F2 菜单“Copy source”在有选择时使用来源映射，无选择时复制完整源码。公式或图形可取回原始表达式/围栏，合成列表缩进不混入来源。

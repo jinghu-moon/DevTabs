@@ -101,6 +101,18 @@ impl Table {
             }
             floors[i] = floors[i].max(layout::display_width(&plain(&self.header[i])).min(8));
         }
+        // Keep the record view on very narrow terminals; ordinary previews may pan tables.
+        let available = if available >= 40 {
+            available.max(
+                sizes
+                    .iter()
+                    .sum::<usize>()
+                    .saturating_add((columns - 1) * 3)
+                    .min(512),
+            )
+        } else {
+            available
+        };
         let content = available.saturating_sub((columns - 1) * 3);
         if floors.iter().sum::<usize>() > content {
             return self.records(width, first, rest, palette);
@@ -151,6 +163,7 @@ impl Table {
             amount -= remove;
         }
         let mut out = Vec::new();
+        let mut header_rows = 0;
         for (index, cells) in std::iter::once(&self.header).chain(&self.rows).enumerate() {
             if out.len() >= super::super::MAX_RENDER_ROWS {
                 break;
@@ -204,7 +217,15 @@ impl Table {
                         Style::default(),
                     ));
                 }
-                out.push(layout::row(pieces, RowKind::Table, Style::default()));
+                out.push(layout::row(
+                    pieces,
+                    RowKind::Table,
+                    if index == 0 {
+                        palette.strong
+                    } else {
+                        Style::default()
+                    },
+                ));
             }
             if index == 0 {
                 let mut pieces = rest.to_vec();
@@ -216,8 +237,15 @@ impl Table {
                         .join("━┿━"),
                     palette.rule,
                 ));
-                out.push(layout::row(pieces, RowKind::Decoration, Style::default()));
+                out.push(layout::row(pieces, RowKind::Decoration, palette.rule));
+                header_rows = out.len();
             }
+        }
+        for (offset, row) in out.iter_mut().enumerate() {
+            row.source.table = Some(super::super::TableRow {
+                offset,
+                header_rows,
+            });
         }
         out
     }

@@ -19,6 +19,8 @@ use std::{
 use tui_tree_widget::{Tree, TreeItem};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+mod reading;
+mod scroll;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Focus {
@@ -124,6 +126,8 @@ pub enum Command {
     Project,
     EndEdit,
     Mode,
+    Outline,
+    Back,
 }
 #[derive(Debug)]
 pub enum Action {
@@ -135,6 +139,7 @@ pub enum Action {
 }
 #[derive(Clone)]
 enum Pending {
+    Reading(preview::ReadingAction),
     Open(PathBuf, bool),
     Close,
     Manage(char),
@@ -148,6 +153,7 @@ enum Prompt {
 }
 
 pub struct Document {
+    reader: reading::DocumentReading,
     pub editor: Option<crate::editor::Editor>,
     pub editing: bool,
     edit_requested: Option<u64>,
@@ -181,6 +187,7 @@ pub struct Document {
 impl Document {
     fn new(path: PathBuf, id: u64) -> Self {
         Self {
+            reader: Default::default(),
             editor: None,
             editing: false,
             edit_requested: None,
@@ -284,6 +291,7 @@ impl Document {
 }
 
 pub struct Sidebar {
+    reader: reading::ReadingUi,
     tree_view: Option<TreeView>,
     prompt: Option<Prompt>,
     after_save: Option<Pending>,
@@ -322,6 +330,7 @@ struct TreeView {
     viewport: Option<TreeViewport>,
 }
 struct TreeViewport {
+    row_count: usize,
     rect: Rect,
     focused: bool,
     offset: usize,
@@ -337,7 +346,10 @@ impl Sidebar {
             .is_some_and(|e| e.dirty() || e.saving)
     }
     pub fn modal(&self) -> bool {
-        self.prompt.is_some() || self.menu.is_some() || self.query.is_some()
+        self.prompt.is_some()
+            || self.menu.is_some()
+            || self.query.is_some()
+            || self.reader.outline.is_some()
     }
     pub fn leave(&mut self, command: char) -> bool {
         if self.modal() {
@@ -353,6 +365,7 @@ impl Sidebar {
     fn discard(&mut self) {
         self.serial += 1;
         if let Some(d) = &mut self.document {
+            d.reader.seek = Some(d.reading_byte());
             d.editor = None;
             d.editing = false;
             d.rendered = None;
@@ -363,6 +376,7 @@ impl Sidebar {
     }
     fn perform(&mut self, pending: Pending) -> Result<()> {
         match pending {
+            Pending::Reading(action) => self.activate_reading(action)?,
             Pending::Open(path, focus) => self.open(path, focus)?,
             Pending::Close => self.close(),
             Pending::Manage(c) => self.ready_manage = Some(c),
@@ -427,6 +441,7 @@ impl Sidebar {
     }
     pub fn new(root: PathBuf) -> Self {
         Self {
+            reader: Default::default(),
             tree_view: None,
             prompt: None,
             after_save: None,
@@ -465,6 +480,13 @@ impl Sidebar {
         let next = panels(area, split, self.visible, self.showing());
         let changed = next != self.geometry;
         if changed {
+            if next.preview.map(|r| r.width) != self.geometry.preview.map(|r| r.width)
+                && let Some(d) = &mut self.document
+                && d.rendered.is_some()
+                && d.reader.seek.is_none()
+            {
+                d.reader.seek = Some(d.reading_byte());
+            }
             if next.agent.is_none() {
                 self.suspended.get_or_insert(self.focus);
             } else if let Some(f) = self.suspended.take() {
@@ -529,7 +551,9 @@ impl Sidebar {
             id: self.serial,
         })?;
         self.source_focus = self.focus;
+        self.remember_reading();
         self.document = Some(Document::new(path, self.serial));
+        self.restore_reading();
         self.preview_visible = true;
         if focus {
             self.focus = Focus::Preview;
@@ -541,6 +565,7 @@ impl Sidebar {
             self.prompt = Some(Prompt::Unsaved(Pending::Close));
             return;
         }
+        self.remember_reading();
         self.document = None;
         self.preview_visible = false;
         if matches!(self.focus, Focus::Preview | Focus::Editor) {
@@ -621,6 +646,10 @@ impl Sidebar {
             viewport,
             generation: d.code_generation.clone(),
             complete: !d.search.is_empty() || d.markdown_end || d.markdown_copy,
+            reading: preview::reading::ReadingOptions {
+                expanded: d.reader.expanded.clone(),
+                seek: d.reader.seek,
+            },
         })?;
         d.render_id = id;
         d.render_pending = true;
@@ -868,7 +897,7 @@ impl Sidebar {
                                     .loaded
                                     .as_ref()
                                     .is_none_or(|old| old.bytes != loaded.bytes);
-                                if first {
+                                if first && d.reader.seek.is_none() {
                                     d.markdown = loaded.markdown();
                                 }
                                 d.loaded = Some(loaded);
@@ -920,11 +949,22 @@ impl Sidebar {
                     stats,
                     markdown_stats,
                 } => {
+                    let expected_width = self
+                        .geometry
+                        .preview
+                        .map(crate::ui::content)
+                        .map_or(80, |r| r.width);
                     if let Some(d) = &mut self.document
                         && d.path == path
                         && d.render_id == id
                     {
                         d.render_pending = false;
+                        if result.width != expected_width
+                            || result.light != self.files.light
+                            || result.markdown != (d.markdown && !d.editing)
+                        {
+                            continue;
+                        }
                         if d.editor
                             .as_ref()
                             .is_some_and(|e| e.revision != d.render_revision)
@@ -952,6 +992,7 @@ impl Sidebar {
                             d.selection = None;
                         }
                         d.rendered = Some(result);
+                        d.restore_reading_position();
                         let len = d.rendered.as_ref().map_or(0, |r| r.plain.len());
                         if d.rendered.as_ref().is_some_and(|r| r.complete) {
                             if d.markdown_end {
@@ -985,10 +1026,11 @@ impl Sidebar {
                     r.width != width
                         || r.light != self.files.light
                         || r.markdown != (d.markdown && !d.editing)
-                }) || d
-                    .editor
-                    .as_ref()
-                    .is_some_and(|e| e.revision != d.render_revision)
+                }) || d.reader.seek.is_some()
+                    || d.reader.fragment.is_some()
+                    || d.editor
+                        .as_ref()
+                        .is_some_and(|e| e.revision != d.render_revision)
                     || d.rendered.as_ref().is_some_and(|r| {
                         r.markdown
                             && ((!r.complete
@@ -1171,6 +1213,8 @@ impl Sidebar {
                 ]);
             }
             items.extend([
+                ("Heading outline [T]", Command::Outline),
+                ("Reading back [Alt+Left]", Command::Back),
                 ("Locate in file tree", Command::Locate),
                 ("Copy content", Command::CopyContent),
                 ("Copy source", Command::CopySource),
@@ -1189,11 +1233,14 @@ impl Sidebar {
                 if let Some(d) = &mut self.document
                     && d.loaded.as_ref().is_some_and(|l| l.markdown())
                 {
+                    d.reader.seek = Some(d.reading_byte());
                     d.markdown = !d.markdown;
                     d.render_id = 0;
                     d.render_pending = false;
                 }
             }
+            Command::Outline => self.start_outline(),
+            Command::Back => self.reading_back()?,
             Command::Insert => return Ok(Action::Insert(target)),
             Command::CopyAbsolute => files::copy(target.to_string_lossy().into_owned())?,
             Command::CopyRelative => {
@@ -1215,6 +1262,7 @@ impl Sidebar {
             Command::Theme => {
                 self.files.light = !self.files.light;
                 if let Some(d) = &mut self.document {
+                    d.reader.seek = Some(d.reading_byte());
                     d.rendered = None;
                     d.selection = None;
                     d.render_pending = false;
@@ -1348,6 +1396,10 @@ impl Sidebar {
         }
     }
     pub fn paste(&mut self, text: &str) -> Result<()> {
+        if let Some(o) = &mut self.reader.outline {
+            o.paste(text);
+            return Ok(());
+        }
         if self.prompt.is_some() {
             return Ok(());
         }
@@ -1367,6 +1419,16 @@ impl Sidebar {
         Ok(())
     }
     pub fn key(&mut self, key: KeyEvent) -> Result<Action> {
+        if self.outline_key(key) {
+            return Ok(Action::None);
+        }
+        if self.focus == Focus::Preview
+            && key.code == KeyCode::Left
+            && key.modifiers.contains(KeyModifiers::ALT)
+        {
+            self.reading_back()?;
+            return Ok(Action::None);
+        }
         // Selecting an already selected node can request ensure-visible even
         // when the public TreeState values do not change.
         if self.focus == Focus::Tree
@@ -1568,6 +1630,15 @@ impl Sidebar {
                 _ => {}
             }
         } else if self.focus == Focus::Preview {
+            let page = self
+                .geometry
+                .preview
+                .map(crate::ui::content)
+                .map_or(10, |r| r.height.saturating_sub(1).max(1) as usize);
+            if matches!(key.code, KeyCode::Char('t' | 'T')) {
+                self.start_outline();
+                return Ok(Action::None);
+            }
             if matches!(key.code, KeyCode::Char('e' | 'E')) {
                 self.begin_edit()?;
                 return Ok(Action::None);
@@ -1599,6 +1670,7 @@ impl Sidebar {
                 }
                 KeyCode::Char('m' | 'M') => {
                     if d.loaded.as_ref().is_some_and(|l| l.markdown()) {
+                        d.reader.seek = Some(d.reading_byte());
                         d.markdown = !d.markdown;
                         d.selection = None;
                         d.render_pending = false;
@@ -1615,9 +1687,9 @@ impl Sidebar {
                     self.say("Copied selection", true);
                 }
                 KeyCode::Up => d.offset_mut().0 = d.offset().0.saturating_sub(1),
-                KeyCode::Down => d.offset_mut().0 += 1,
-                KeyCode::PageUp => d.offset_mut().0 = d.offset().0.saturating_sub(10),
-                KeyCode::PageDown => d.offset_mut().0 += 10,
+                KeyCode::Down => d.offset_mut().0 = d.offset().0.saturating_add(1),
+                KeyCode::PageUp => d.offset_mut().0 = d.offset().0.saturating_sub(page),
+                KeyCode::PageDown => d.offset_mut().0 = d.offset().0.saturating_add(page),
                 KeyCode::Left => d.offset_mut().1 = d.offset().1.saturating_sub(4),
                 KeyCode::Right => d.offset_mut().1 += 4,
                 KeyCode::Home => *d.offset_mut() = (0, 0),
@@ -1648,7 +1720,10 @@ impl Sidebar {
         }
     }
     pub fn mouse(&mut self, event: MouseEvent) -> Result<(bool, Action)> {
-        if self.prompt.is_some() || self.menu.is_some() || self.query.is_some() {
+        if self.modal() {
+            return Ok((true, Action::None));
+        }
+        if self.scrollbar_mouse(event) {
             return Ok((true, Action::None));
         }
         let point = (event.column, event.row);
@@ -1812,7 +1887,7 @@ impl Sidebar {
             if let Some(d) = &mut self.document {
                 match event.kind {
                     MouseEventKind::ScrollUp => d.offset_mut().0 = d.offset().0.saturating_sub(3),
-                    MouseEventKind::ScrollDown => d.offset_mut().0 += 3,
+                    MouseEventKind::ScrollDown => d.offset_mut().0 = d.offset().0.saturating_add(3),
                     MouseEventKind::Down(MouseButton::Left)
                     | MouseEventKind::Drag(MouseButton::Left)
                     | MouseEventKind::Up(MouseButton::Left)
@@ -1820,7 +1895,11 @@ impl Sidebar {
                     {
                         let (top, left) = d.offset();
                         let gutter = if d.markdown { 0 } else { 6 };
-                        let row = top + usize::from(event.row - inner.y);
+                        let row = d
+                            .screen_rows(inner.height as usize)
+                            .get(usize::from(event.row - inner.y))
+                            .copied()
+                            .unwrap_or(top);
                         let screen_col =
                             usize::from(event.column - inner.x).saturating_sub(gutter) + left;
                         let col = d
@@ -1830,9 +1909,22 @@ impl Sidebar {
                             .map_or(0, |line| char_at_cell(line, screen_col));
                         let p = (row, col);
                         if matches!(event.kind, MouseEventKind::Down(_)) {
+                            d.reader.pressed = Some((p, point));
                             d.selection = Some((p, p));
                         } else if let Some(s) = &mut d.selection {
                             s.1 = p;
+                        }
+                        if matches!(event.kind, MouseEventKind::Drag(_))
+                            && d.reader.pressed != Some((p, point))
+                        {
+                            d.reader.pressed = None;
+                        }
+                        if matches!(event.kind, MouseEventKind::Up(_)) {
+                            let clicked = d.reader.pressed.take() == Some((p, point))
+                                && d.selection.is_some_and(|(a, b)| a == b);
+                            if clicked && self.reading_click(row, col, point, inner)? {
+                                return Ok((true, Action::None));
+                            }
                         }
                     }
                     _ => {}
@@ -1847,6 +1939,14 @@ impl Sidebar {
     }
     pub fn draw(&mut self, frame: &mut Frame) {
         let _perf = crate::perf::span(crate::perf::Metric::SidebarDraw);
+        if let Some(d) = &mut self.document
+            && !d.editing
+            && let Some(r) = &d.rendered
+            && r.complete
+        {
+            let max = r.plain.len().saturating_sub(1);
+            d.offset_mut().0 = d.offset().0.min(max);
+        }
         if let Some(rect) = self.geometry.tree {
             let preview = self.document.as_ref().map(|d| d.path.as_path());
             let inner = crate::ui::content(rect);
@@ -1899,6 +1999,11 @@ impl Sidebar {
                         .render(rect, &mut buffer, &mut self.files.state);
                 }
                 view.viewport = Some(TreeViewport {
+                    row_count: scroll::tree_rows(
+                        &view.items,
+                        self.files.state.opened(),
+                        &mut Vec::new(),
+                    ),
                     rect,
                     focused,
                     offset: self.files.state.get_offset(),
@@ -1933,6 +2038,7 @@ impl Sidebar {
                     true,
                     d.loaded.as_ref().is_some_and(|l| l.markdown()),
                 );
+                self.draw_scrollbars(frame);
                 self.draw_overlay(frame);
                 return;
             }
@@ -1964,10 +2070,10 @@ impl Sidebar {
                 d.loaded.as_ref().is_some_and(|l| l.markdown()),
             );
             let inner = crate::ui::content(rect);
-            let (top, left) = d.offset();
+            let (_, left) = d.offset();
             if let Some(r) = &d.rendered {
-                for y in 0..inner.height {
-                    let row = top + y as usize;
+                for (y, row) in d.screen_rows(inner.height as usize).into_iter().enumerate() {
+                    let y = y as u16;
                     let Some(raw_line) = r.text.lines.get(row) else {
                         if r.markdown && !r.complete {
                             frame.render_widget(
@@ -1999,15 +2105,8 @@ impl Sidebar {
                             .scroll((0, left.min(u16::MAX as usize) as u16)),
                         content,
                     );
-                    if let Some(language) = r.rows.get(row).and_then(|r| r.code_language.as_ref()) {
-                        if language.width() <= content.width as usize {
-                            frame.render_widget(
-                                Paragraph::new(language.as_ref())
-                                    .style(line.style)
-                                    .alignment(ratatui::layout::Alignment::Right),
-                                content,
-                            );
-                        }
+                    if r.rows.get(row).is_some_and(|r| r.code_language.is_some()) {
+                        self.draw_reading_header(frame, row, content);
                         continue;
                     }
                     let plain = &r.plain[row];
@@ -2076,6 +2175,7 @@ impl Sidebar {
                 );
             }
         }
+        self.draw_scrollbars(frame);
         self.draw_overlay(frame);
     }
     pub fn draw_overlay(&self, frame: &mut Frame) {
@@ -2137,6 +2237,12 @@ impl Sidebar {
                 .collect::<Vec<_>>();
             frame.render_widget(
                 Paragraph::new(lines)
+                    .scroll((
+                        menu.selected
+                            .saturating_sub(popup.height.saturating_sub(3) as usize)
+                            .min(u16::MAX as usize) as u16,
+                        0,
+                    ))
                     .block(Block::bordered().title(format!(" {} ", menu.target.display()))),
                 popup,
             );
@@ -2171,6 +2277,7 @@ impl Sidebar {
                 Rect::new(area.x, area.bottom().saturating_sub(2), area.width, 1),
             );
         }
+        self.draw_outline(frame);
     }
     pub fn status(&self) -> String {
         if !self.notice.is_empty() {
@@ -2189,7 +2296,7 @@ impl Sidebar {
             ),
             Focus::Preview => self.document.as_ref().map_or(String::new(), |d| {
                 format!(
-                    "{} · / Find · M Mode · F2 Actions · Esc Close · {}/{} matches",
+                    "{} · / Find · M Mode · T Outline · Alt+← Back · F2 Actions · {}/{} matches",
                     d.path.display(),
                     if d.matches.is_empty() {
                         0

@@ -1,0 +1,196 @@
+{
+  "baseline": "a816ca2",
+  "change": "Markdown reading interactions and scrollbars",
+  "mode": "Release; five warmed opens per revision; TestBackend; no real UI",
+  "before": {
+    "blocks": 1501,
+    "cases": [
+      {
+        "iteration": 0,
+        "open_ms": 12.8851,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      },
+      {
+        "iteration": 1,
+        "open_ms": 9.707,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      },
+      {
+        "iteration": 2,
+        "open_ms": 8.6473,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      },
+      {
+        "iteration": 3,
+        "open_ms": 11.508,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      },
+      {
+        "iteration": 4,
+        "open_ms": 10.5989,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      }
+    ],
+    "source_bytes": 73406,
+    "terminal": [
+      100,
+      40
+    ]
+  },
+  "after": {
+    "blocks": 1501,
+    "cases": [
+      {
+        "iteration": 0,
+        "open_ms": 10.466,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      },
+      {
+        "iteration": 1,
+        "open_ms": 8.7501,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      },
+      {
+        "iteration": 2,
+        "open_ms": 10.7099,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      },
+      {
+        "iteration": 3,
+        "open_ms": 9.797500000000001,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      },
+      {
+        "iteration": 4,
+        "open_ms": 8.484300000000001,
+        "rows": 52,
+        "spans": 26,
+        "stats": {
+          "cache_hits": 20,
+          "cached_blocks": 20,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 52,
+          "laid_out_blocks": 20,
+          "reused_blocks": 0
+        },
+        "window_spans": 144
+      }
+    ],
+    "source_bytes": 73406,
+    "terminal": [
+      100,
+      40
+    ]
+  },
+  "note": "Timing samples do not establish a speed improvement; logical first-screen layout remains bounded."
+}

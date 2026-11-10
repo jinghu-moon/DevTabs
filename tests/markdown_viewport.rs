@@ -344,12 +344,19 @@ fn code_language_is_fixed_at_top_right_without_entering_code_or_source_selection
                             .collect();
                         // Hide a label that cannot fit; never truncate it into a misleading language.
                         assert_eq!(
-                            label.trim(),
+                            label
+                                .trim()
+                                .strip_suffix("[Copy]")
+                                .unwrap_or(label.trim())
+                                .trim_end(),
                             expected,
                             "info={info} light={light} width={width} left={left} fallback={fallback}"
                         );
                         if !expected.is_empty() {
-                            assert!(label.ends_with(expected), "language must be right aligned");
+                            assert!(
+                                label.ends_with(&format!("{expected} [Copy]")),
+                                "language must be right aligned"
+                            );
                         }
                         assert_eq!(
                             r.selected_source((header, 0), (code, 15)),
