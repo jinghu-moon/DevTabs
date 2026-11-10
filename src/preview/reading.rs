@@ -31,6 +31,7 @@ pub enum ReadingAction {
     Image(String),
     Footnote(String),
     Back,
+    Forward,
     Toggle(usize),
 }
 #[derive(Clone, Debug)]

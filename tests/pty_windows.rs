@@ -196,7 +196,7 @@ fn nested_sidebar_editor_saves_once_and_guards_detach_without_terminal_leaks() {
     press(&outer, KeyCode::Enter, KeyModifiers::NONE);
     press(&outer, KeyCode::Enter, KeyModifiers::NONE);
     until("read only preview", Duration::from_secs(10), || {
-        screen().contains("read-only") && screen().contains("Original")
+        screen().contains("[More]") && screen().contains("Original") && !screen().contains("· EDIT")
     });
     outer.send(b"e".to_vec()).unwrap();
     until("explicit editor", Duration::from_secs(10), || {

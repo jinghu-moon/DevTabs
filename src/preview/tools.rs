@@ -247,6 +247,8 @@ impl Rendered {
 
 #[derive(Debug)]
 pub struct Diff {
+    pub patch: String,
+    pub hunks: Vec<usize>,
     pub lines: Vec<Line<'static>>,
     pub added: usize,
     pub removed: usize,
@@ -290,7 +292,14 @@ pub fn diff(old: &str, new: &str) -> Diff {
             })
             .collect()
     };
+    let hunks = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, l)| l.to_string().starts_with("@@").then_some(i))
+        .collect();
     Diff {
+        patch,
+        hunks,
         lines,
         added,
         removed,

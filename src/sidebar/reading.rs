@@ -7,11 +7,12 @@ pub(super) struct DocumentReading {
     pub expanded: BTreeSet<usize>,
     pub seek: Option<usize>,
     pub fragment: Option<String>,
+    pub search_origin: Option<Bookmark>,
     pub copied: Option<(usize, Instant)>,
     pub pressed: Option<((usize, usize), (u16, u16))>,
 }
 #[derive(Clone)]
-struct Bookmark {
+pub(super) struct Bookmark {
     path: PathBuf,
     byte: usize,
     left: usize,
@@ -23,7 +24,18 @@ pub(super) struct ReadingUi {
     pub outline: Option<Outline>,
     memory: VecDeque<Bookmark>,
     back: VecDeque<Bookmark>,
+    forward: VecDeque<Bookmark>,
+    pub traversing: bool,
     pub drag: Option<super::scroll::Drag>,
+}
+impl ReadingUi {
+    pub(super) fn record(&mut self, bookmark: Bookmark) {
+        self.forward.clear();
+        self.back.push_back(bookmark);
+        while self.back.len() > 64 {
+            self.back.pop_front();
+        }
+    }
 }
 pub(super) struct Outline {
     filter: String,
@@ -69,7 +81,7 @@ impl Document {
             })
             .unwrap_or_else(|| self.reader.seek.unwrap_or(0))
     }
-    fn bookmark(&self) -> Bookmark {
+    pub(super) fn bookmark(&self) -> Bookmark {
         Bookmark {
             path: self.path.clone(),
             byte: self.reading_byte(),
@@ -172,50 +184,76 @@ impl Sidebar {
             d.reader.expanded = b.expanded.clone();
         }
     }
-    fn push_back(&mut self) {
+    pub(super) fn push_back(&mut self) {
         if let Some(d) = &self.document {
-            self.reader.back.push_back(d.bookmark());
-            while self.reader.back.len() > 64 {
-                self.reader.back.pop_front();
-            }
+            self.reader.record(d.bookmark());
         }
     }
     pub(super) fn seek_reading(&mut self, byte: usize) {
         if let Some(d) = &mut self.document {
+            d.markdown_search_jump = false;
+            d.reader.search_origin = None;
             d.reader.seek = Some(byte);
             d.selection = None;
             d.restore_reading_position();
         }
     }
+    pub(super) fn has_history(&self, forward: bool) -> bool {
+        if forward {
+            !self.reader.forward.is_empty()
+        } else {
+            !self.reader.back.is_empty()
+        }
+    }
     pub(super) fn reading_back(&mut self) -> Result<()> {
-        if self.dirty()
-            && self
-                .reader
-                .back
-                .back()
-                .is_some_and(|b| self.document.as_ref().is_some_and(|d| d.path != b.path))
-        {
-            self.prompt = Some(Prompt::Unsaved(Pending::Reading(
-                preview::ReadingAction::Back,
-            )));
+        self.reading_history(false)
+    }
+    pub(super) fn reading_history(&mut self, forward: bool) -> Result<()> {
+        let stack = if forward {
+            &self.reader.forward
+        } else {
+            &self.reader.back
+        };
+        let Some(b) = stack.back().cloned() else {
+            self.say("No reading history", true);
+            return Ok(());
+        };
+        if self.dirty() && self.document.as_ref().is_some_and(|d| d.path != b.path) {
+            self.prompt = Some(Prompt::Unsaved(Pending::Reading(if forward {
+                preview::ReadingAction::Forward
+            } else {
+                preview::ReadingAction::Back
+            })));
             return Ok(());
         }
-        if let Some(b) = self.reader.back.pop_back() {
-            self.open(b.path.clone(), true)?;
-            if let Some(d) = &mut self.document {
-                if d.markdown != b.markdown || d.reader.expanded != b.expanded {
-                    d.rendered = None;
-                    d.render_pending = false;
-                    d.render_id = 0;
-                }
-                d.reader.expanded = b.expanded;
-                d.markdown = b.markdown;
-                d.offset_mut().1 = b.left;
-            }
-            self.seek_reading(b.byte);
+        let current = self.document.as_ref().map(Document::bookmark);
+        self.reader.traversing = true;
+        let result = self.open(b.path.clone(), true);
+        self.reader.traversing = false;
+        result?;
+        let (from, to) = if forward {
+            (&mut self.reader.forward, &mut self.reader.back)
         } else {
-            self.say("No reading history", true);
+            (&mut self.reader.back, &mut self.reader.forward)
+        };
+        from.pop_back();
+        if let Some(current) = current {
+            to.push_back(current);
         }
+        while to.len() > 64 {
+            to.pop_front();
+        }
+        if let Some(d) = &mut self.document {
+            if d.markdown != b.markdown || d.reader.expanded != b.expanded {
+                d.rendered = None;
+                d.render_pending = false;
+                d.render_id = 0;
+            }
+            d.reader.expanded = b.expanded;
+            d.markdown = b.markdown;
+            d.offset_mut().1 = b.left;
+        }
+        self.seek_reading(b.byte);
         Ok(())
     }
     pub fn activate_reading(&mut self, action: preview::ReadingAction) -> Result<()> {
@@ -223,6 +261,7 @@ impl Sidebar {
         let image = matches!(&action, Image(_));
         match action {
             Back => self.reading_back()?,
+            Forward => self.reading_history(true)?,
             Toggle(id) => {
                 if let Some(d) = &mut self.document {
                     if !d.reader.expanded.remove(&id) {
@@ -293,7 +332,6 @@ impl Sidebar {
                                 self.prompt = Some(Prompt::Unsaved(Pending::Reading(Link(target))));
                                 return Ok(());
                             }
-                            self.push_back();
                             self.open(path, true)?;
                             if let Some(d) = &mut self.document {
                                 if fragment.is_some()

@@ -40,6 +40,8 @@ pub enum Encoding {
 #[derive(Clone, Debug)]
 pub struct Loaded {
     pub identity: Option<(u64, [u8; 16])>,
+    pub disk_bytes: u64,
+    pub modified: Option<std::time::SystemTime>,
     pub path: PathBuf,
     /// Decoded, bounded source; never replace this with the display's sanitized text.
     pub source: Arc<str>,
@@ -177,6 +179,8 @@ pub fn read(path: &Path) -> Result<Loaded> {
     };
     bytes.truncate(end);
     Ok(Loaded {
+        disk_bytes: meta.len(),
+        modified: meta.modified().ok(),
         identity: crate::editor::file_id(&file).ok(),
         path: path.into(),
         source: Arc::from(bounded),

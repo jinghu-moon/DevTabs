@@ -19,6 +19,7 @@ use std::{
 use tui_tree_widget::{Tree, TreeItem};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+mod controls;
 mod features;
 mod reading;
 mod scroll;
@@ -137,6 +138,13 @@ pub enum Command {
     Mode,
     Outline,
     Back,
+    Forward,
+    More,
+    CloseOthers,
+    CloseRight,
+    Bookmark,
+    Bookmarks,
+    Info,
 }
 #[derive(Debug)]
 pub enum Action {
@@ -149,6 +157,8 @@ pub enum Action {
 #[derive(Clone)]
 enum Pending {
     Reading(preview::ReadingAction),
+    Bookmark(crate::bookmarks::Entry),
+    CloseGroup(PathBuf, bool),
     Open(PathBuf, bool),
     Close,
     Manage(char),
@@ -307,6 +317,7 @@ impl Document {
 
 pub struct Sidebar {
     tools: features::Workspace,
+    controls: controls::Controls,
     reader: reading::ReadingUi,
     tree_view: Option<TreeView>,
     prompt: Option<Prompt>,
@@ -362,7 +373,8 @@ impl Sidebar {
             .is_some_and(|e| e.dirty() || e.saving)
     }
     pub fn modal(&self) -> bool {
-        self.tools.navigation.is_some()
+        self.controls.panel.is_some()
+            || self.tools.navigation.is_some()
             || self.tools.diff.is_some()
             || self.tools.diff_pending.is_some()
             || self.prompt.is_some()
@@ -396,6 +408,8 @@ impl Sidebar {
     fn perform(&mut self, pending: Pending) -> Result<()> {
         match pending {
             Pending::Reading(action) => self.activate_reading(action)?,
+            Pending::Bookmark(entry) => self.jump_bookmark(entry)?,
+            Pending::CloseGroup(target, right) => self.close_group(&target, right),
             Pending::Open(path, focus) => self.open(path, focus)?,
             Pending::Close => self.close(),
             Pending::Manage(c) => self.ready_manage = Some(c),
@@ -461,6 +475,7 @@ impl Sidebar {
     pub fn new(root: PathBuf) -> Self {
         Self {
             tools: Default::default(),
+            controls: Default::default(),
             reader: Default::default(),
             tree_view: None,
             prompt: None,
@@ -593,6 +608,10 @@ impl Sidebar {
                 id: self.serial,
             })?;
         }
+        if !self.reader.traversing {
+            self.push_back();
+        }
+        self.controls.hover = None;
         self.remember_reading();
         self.park_document();
         self.register_tab(&path);
@@ -613,6 +632,7 @@ impl Sidebar {
         Ok(())
     }
     pub fn close(&mut self) {
+        self.controls.hover = None;
         if self.dirty() {
             self.prompt = Some(Prompt::Unsaved(Pending::Close));
             return;
@@ -819,11 +839,16 @@ impl Sidebar {
         }
         for output in outputs {
             changed = true;
+            let Some(output) = self.control_completion(output) else {
+                continue;
+            };
             let Some(output) = self.feature_completion(output) else {
                 continue;
             };
             match output {
-                Completed::Companion { .. } | Completed::Diff { .. } => unreachable!(),
+                Completed::Bookmarks { .. }
+                | Completed::Companion { .. }
+                | Completed::Diff { .. } => unreachable!(),
                 Completed::Edit { id, result } => {
                     if let Some(d) = &mut self.document
                         && d.edit_requested == Some(id)
@@ -1077,6 +1102,11 @@ impl Sidebar {
                         if d.markdown_search_jump && d.rendered.as_ref().is_some_and(|r| r.complete)
                         {
                             if let Some(&(row, col, _)) = d.matches.first() {
+                                if d.offset() != (row, if d.view.wrap { 0 } else { col })
+                                    && let Some(origin) = d.reader.search_origin.take()
+                                {
+                                    self.reader.record(origin);
+                                }
                                 *d.offset_mut() = (row, if d.view.wrap { 0 } else { col });
                             }
                             d.markdown_search_jump = false;
@@ -1276,6 +1306,7 @@ impl Sidebar {
                 ("Maximize / restore [Z]", Command::Maximize),
                 ("Toggle code wrapping [W]", Command::Wrap),
                 ("Markdown source comparison [V]", Command::Compare),
+                ("Toggle Markdown/source [M]", Command::Mode),
                 ("File changes [D]", Command::Diff),
                 ("Go to source line / percent [G]", Command::Goto),
                 ("Search preview [/; Alt+C/W/R options]", Command::Search),
@@ -1283,6 +1314,12 @@ impl Sidebar {
                 ("Previous file [Alt+PageUp]", Command::PreviousTab),
                 ("Heading outline [T]", Command::Outline),
                 ("Reading back [Alt+Left]", Command::Back),
+                ("Reading forward [Alt+Right]", Command::Forward),
+                ("Close other tabs", Command::CloseOthers),
+                ("Close tabs to the right", Command::CloseRight),
+                ("Add reading bookmark [B]", Command::Bookmark),
+                ("Reading bookmarks [Ctrl+B]", Command::Bookmarks),
+                ("File information [I]", Command::Info),
                 ("Locate in file tree", Command::Locate),
                 ("Copy content", Command::CopyContent),
                 ("Copy source", Command::CopySource),
@@ -1296,7 +1333,22 @@ impl Sidebar {
         });
     }
     fn command(&mut self, command: Command, target: PathBuf) -> Result<Action> {
+        if !self.command_enabled(command) {
+            return Ok(Action::None);
+        }
         match command {
+            Command::More => {
+                self.menu();
+                return Ok(Action::None);
+            }
+            Command::Forward => self.reading_history(true)?,
+            Command::CloseOthers | Command::CloseRight => {
+                self.close_group(&target, matches!(command, Command::CloseRight))
+            }
+            Command::Bookmark | Command::Bookmarks | Command::Info => {
+                self.control_command(command)?;
+                return Ok(Action::None);
+            }
             Command::Maximize
             | Command::Wrap
             | Command::Compare
@@ -1387,7 +1439,7 @@ impl Sidebar {
                 };
                 files::copy(text)?;
             }
-            Command::Close => self.close(),
+            Command::Close => self.close_tab(&target),
             Command::Edit => self.begin_edit()?,
             Command::Save => self.save()?,
             Command::Undo | Command::Redo | Command::Cut | Command::Paste | Command::Find => {
@@ -1431,6 +1483,10 @@ impl Sidebar {
         Ok(Action::None)
     }
     fn start_query(&mut self, tree: bool) {
+        if !tree && let Some(d) = &mut self.document {
+            d.reader.search_origin = Some(d.bookmark());
+            d.markdown_search_jump = false;
+        }
         self.query = Some(Query {
             value: String::new(),
             tree,
@@ -1470,11 +1526,19 @@ impl Sidebar {
             d.markdown_search_jump = d.markdown && d.rendered.as_ref().is_some_and(|r| !r.complete);
             d.search();
             if let Some(&(row, col, _)) = d.matches.first() {
+                if d.offset() != (row, if d.view.wrap { 0 } else { col })
+                    && let Some(origin) = d.reader.search_origin.take()
+                {
+                    self.reader.record(origin);
+                }
                 *d.offset_mut() = (row, if d.view.wrap { 0 } else { col });
             }
         }
     }
     pub fn paste(&mut self, text: &str) -> Result<()> {
+        if self.control_paste(text) {
+            return Ok(());
+        }
         if self.feature_paste(text) {
             return Ok(());
         }
@@ -1501,13 +1565,17 @@ impl Sidebar {
         Ok(())
     }
     pub fn key(&mut self, key: KeyEvent) -> Result<Action> {
+        if self.control_key(key)? {
+            return Ok(Action::None);
+        }
         if self.feature_key(key)? {
             return Ok(Action::None);
         }
         if self.outline_key(key) {
             return Ok(Action::None);
         }
-        if self.focus == Focus::Preview
+        if !self.modal()
+            && self.focus == Focus::Preview
             && key.code == KeyCode::Left
             && key.modifiers.contains(KeyModifiers::ALT)
         {
@@ -1803,6 +1871,38 @@ impl Sidebar {
         }
     }
     pub fn mouse(&mut self, event: MouseEvent) -> Result<(bool, Action)> {
+        if let Some(menu) = &mut self.menu {
+            let popup = menu_popup(self.tools.area, menu.items.len());
+            match event.kind {
+                MouseEventKind::ScrollDown => {
+                    menu.selected = (menu.selected + 1).min(menu.items.len().saturating_sub(1))
+                }
+                MouseEventKind::ScrollUp => menu.selected = menu.selected.saturating_sub(1),
+                MouseEventKind::Down(MouseButton::Left) => {
+                    if popup.contains((event.column, event.row).into()) {
+                        if event.row > popup.y && event.row < popup.bottom().saturating_sub(1) {
+                            let first = menu
+                                .selected
+                                .saturating_sub(popup.height.saturating_sub(3) as usize);
+                            let index = first + (event.row - popup.y - 1) as usize;
+                            if index < menu.items.len() {
+                                let menu = self.menu.take().unwrap();
+                                let action = self.command(menu.items[index].1, menu.target)?;
+                                return Ok((true, action));
+                            }
+                        }
+                    } else {
+                        self.menu = None;
+                    }
+                }
+                _ => {}
+            }
+            return Ok((true, Action::None));
+        }
+
+        if self.control_mouse(event)? {
+            return Ok((true, Action::None));
+        }
         if self.outline_mouse(event) {
             return Ok((true, Action::None));
         }
@@ -2150,7 +2250,19 @@ impl Sidebar {
             );
             frame.render_widget(
                 Block::bordered()
-                    .title(title)
+                    .title(features::shortened(
+                        &title,
+                        header_buttons(
+                            rect,
+                            false,
+                            d.loaded.as_ref().is_some_and(|l| l.markdown()),
+                            d.markdown,
+                        )
+                        .iter()
+                        .map(|(r, _, _)| r.x.saturating_sub(rect.x + 2) as usize)
+                        .min()
+                        .unwrap_or(rect.width.saturating_sub(2) as usize),
+                    ))
                     .border_style(border(self.focus == Focus::Preview)),
                 rect,
             );
@@ -2281,6 +2393,7 @@ impl Sidebar {
     }
     pub fn draw_overlay(&self, frame: &mut Frame) {
         self.draw_features(frame);
+        self.draw_control_header(frame);
         let area = frame.area();
         if let Some(r) = self.geometry.toggle {
             frame.render_widget(
@@ -2315,21 +2428,24 @@ impl Sidebar {
             return;
         }
         if let Some(menu) = &self.menu {
-            let popup = Rect::new(
-                area.x + area.width.saturating_sub(64) / 2,
-                area.y + area.height.saturating_sub(menu.items.len() as u16 + 3) / 2,
-                area.width.min(64),
-                area.height.min(menu.items.len() as u16 + 3),
-            );
+            let popup = menu_popup(area, menu.items.len());
             frame.render_widget(Clear, popup);
             let lines = menu
                 .items
                 .iter()
                 .enumerate()
-                .map(|(i, (label, _))| {
+                .map(|(i, (label, command))| {
+                    let state = self
+                        .command_toggle(*command)
+                        .map_or("", |on| if on { "[x] " } else { "[ ] " });
                     Line::styled(
-                        format!("{} {label}", if i == menu.selected { ">" } else { " " }),
-                        if i == menu.selected {
+                        format!(
+                            "{} {state}{label}",
+                            if i == menu.selected { ">" } else { " " }
+                        ),
+                        if !self.command_enabled(*command) {
+                            Style::new().fg(Color::DarkGray)
+                        } else if i == menu.selected {
                             Style::new().fg(Color::Black).bg(Color::Cyan)
                         } else {
                             Style::new()
@@ -2382,6 +2498,7 @@ impl Sidebar {
         self.draw_feature_overlay(frame);
         self.draw_search_options(frame);
         self.draw_outline(frame);
+        self.draw_controls(frame);
     }
     pub fn status(&self) -> String {
         if !self.notice.is_empty() {
@@ -2400,7 +2517,7 @@ impl Sidebar {
             ),
             Focus::Preview => self.document.as_ref().map_or(String::new(), |d| {
                 format!(
-                    "{} · {} · / Find · M Mode · T Outline · Alt+← Back · F2 Actions",
+                    "{} · {} · / Find · M Mode · T Outline · Alt+←/→ History · B Bookmark · I Info · F2 Actions",
                     d.progress(),
                     d.path.display(),
                 )
@@ -2420,51 +2537,60 @@ impl Sidebar {
         }
     }
 }
+fn menu_popup(area: Rect, items: usize) -> Rect {
+    Rect::new(
+        area.x + area.width.saturating_sub(64) / 2,
+        area.y + area.height.saturating_sub(items as u16 + 3) / 2,
+        area.width.min(64),
+        area.height.min(items as u16 + 3),
+    )
+}
 fn header_buttons(
     rect: Rect,
     editing: bool,
     markdown: bool,
     reading: bool,
 ) -> Vec<(Rect, &'static str, Command)> {
-    let mut buttons = vec![
-        ("[X]", Command::Close),
-        (
-            if editing { "[S]" } else { "[E]" },
-            if editing {
-                Command::Save
-            } else {
-                Command::Edit
-            },
-        ),
-    ];
     if editing {
-        buttons.push(("[P]", Command::Project));
-    } else if markdown {
-        buttons.push(("[M]", Command::Mode));
-        if reading {
-            buttons.push(("[T]", Command::Outline));
-        }
-    }
-    if !editing {
-        buttons.extend([
-            ("[Z]", Command::Maximize),
-            ("[W]", Command::Wrap),
-            ("[D]", Command::Diff),
-        ]);
-        if markdown {
-            buttons.push(("[V]", Command::Compare));
-        }
-    }
-    buttons
+        return [
+            ("[X]", Command::Close),
+            ("[S]", Command::Save),
+            ("[P]", Command::Project),
+        ]
         .into_iter()
         .enumerate()
         .filter(|(i, _)| rect.width > 4 * (*i as u16 + 1))
-        .map(|(i, (label, command))| {
+        .map(|(i, (label, c))| {
             (
                 Rect::new(rect.right() - 4 * (i as u16 + 1), rect.y, 3, 1),
                 label,
-                command,
+                c,
             )
+        })
+        .collect();
+    }
+    let mut buttons = vec![("[X]Close", Command::Close), ("[More]", Command::More)];
+    if markdown && reading {
+        buttons.push(("[T]Headings", Command::Outline));
+    }
+    buttons.extend([
+        ("[E]Edit", Command::Edit),
+        ("[>]", Command::Forward),
+        ("[<]", Command::Back),
+        ("[Z]Expand", Command::Maximize),
+    ]);
+    let mut right = rect.right().saturating_sub(1);
+    buttons
+        .into_iter()
+        .filter_map(|(label, c)| {
+            let width = label.len() as u16;
+            if right.saturating_sub(rect.x) < width + 16 {
+                return None;
+            }
+            right -= width;
+            let r = Rect::new(right, rect.y, width, 1);
+            right = right.saturating_sub(1);
+            Some((r, label, c))
         })
         .collect()
 }

@@ -42,7 +42,7 @@ pub(super) struct DiffView {
 }
 
 impl Document {
-    fn source_snapshot(&self) -> Option<Arc<str>> {
+    pub(super) fn source_snapshot(&self) -> Option<Arc<str>> {
         self.rendered
             .as_ref()
             .map(|r| r.source.clone())
@@ -165,6 +165,8 @@ impl Sidebar {
         if let Some(mut d) = self.document.take() {
             d.invalidate_view();
             d.edit_requested = None;
+            d.reader.search_origin = None;
+            d.markdown_search_jump = false;
             if let Some(e) = &mut d.editor {
                 e.highlight = None;
             }
@@ -185,6 +187,7 @@ impl Sidebar {
         while self.tools.paths.len() > MAX_TABS {
             let removed = self.tools.paths.remove(0);
             self.tools.parked.retain(|d| d.path != removed);
+            self.say(format!("8-tab limit: closed {}", removed.display()), true);
         }
     }
     fn cycle_tab(&mut self, back: bool) -> Result<()> {
@@ -303,6 +306,7 @@ impl Sidebar {
                 .get(line.checked_sub(1).context("Line numbers start at 1")?)
                 .context("Line is outside this preview")?
         };
+        self.push_back();
         self.seek_reading(byte);
         Ok(())
     }
@@ -338,6 +342,19 @@ impl Sidebar {
                     .map_or(10, |r| r.height.saturating_sub(4) as usize)
                     .max(1);
                 match key.code {
+                    KeyCode::Char('n') | KeyCode::Char(']') => {
+                        if let Some(&at) = v.data.hunks.iter().find(|&&at| at > v.top) {
+                            v.top = at;
+                        }
+                    }
+                    KeyCode::Char('N') | KeyCode::Char('[') => {
+                        if let Some(&at) = v.data.hunks.iter().rev().find(|&&at| at < v.top) {
+                            v.top = at;
+                        }
+                    }
+                    KeyCode::Char('c' | 'C') => {
+                        files::copy(v.data.patch.clone())?;
+                    }
                     KeyCode::Down => v.top = v.top.saturating_add(1),
                     KeyCode::Up => v.top = v.top.saturating_sub(1),
                     KeyCode::PageDown => v.top = v.top.saturating_add(page),
@@ -413,6 +430,7 @@ impl Sidebar {
         }
     }
     pub(super) fn feature_tick(&mut self) -> bool {
+        self.control_tick();
         let panes = self.preview_panes();
         let Some(d) = &mut self.document else {
             return false;
@@ -494,7 +512,7 @@ impl Sidebar {
             other => Some(other),
         }
     }
-    fn tab_buttons(&self) -> Vec<(Rect, PathBuf)> {
+    pub(super) fn tab_buttons(&self) -> Vec<(Rect, PathBuf)> {
         if self.tools.paths.len() < 2 || self.document.as_ref().is_some_and(|d| d.editing) {
             return Vec::new();
         }
@@ -637,14 +655,31 @@ impl Sidebar {
                     .count()
                     > 1;
                 let label = if duplicate {
-                    format!(
-                        "{} · {}",
-                        name,
-                        path.parent()
-                            .and_then(|p| p.file_name())
+                    let parent = path.parent().unwrap_or(&path);
+                    let same_parent_name = self
+                        .tools
+                        .paths
+                        .iter()
+                        .filter(|p| {
+                            p.file_name() == path.file_name()
+                                && p.parent().and_then(|p| p.file_name()) == parent.file_name()
+                        })
+                        .count()
+                        > 1;
+                    let parent = if same_parent_name {
+                        parent
+                            .strip_prefix(&self.files.root)
+                            .unwrap_or(parent)
+                            .to_string_lossy()
+                            .into_owned()
+                    } else {
+                        parent
+                            .file_name()
                             .unwrap_or_default()
                             .to_string_lossy()
-                    )
+                            .into_owned()
+                    };
+                    format!("{name} · {parent}")
                 } else {
                     name.into_owned()
                 };
@@ -675,7 +710,7 @@ impl Sidebar {
                     Paragraph::new(format!(
                         "{} {}",
                         if current { "●" } else { " " },
-                        shortened(&label, r.width.saturating_sub(5) as usize)
+                        shortened(&label, r.width.saturating_sub(8) as usize)
                     ))
                     .style(if current {
                         style.add_modifier(Modifier::BOLD)
@@ -689,6 +724,12 @@ impl Sidebar {
                     ),
                     r,
                 );
+                if r.width >= 8 {
+                    frame.render_widget(
+                        Paragraph::new("×").style(style),
+                        Rect::new(r.right() - 3, r.y + 1, 1, 1),
+                    );
+                }
             }
             if let Some((_, Some(inner))) = self.preview_panes() {
                 let divider = Rect::new(inner.x - 1, inner.y, 1, inner.height);
@@ -780,7 +821,7 @@ impl Sidebar {
                     " Changes · Loading · Esc Close ".into(),
                     |v| {
                         format!(
-                            " Changes · +{} -{} · ↑↓ PgUp/PgDn · Esc Close ",
+                            " Changes · +{} -{} · N/n Hunk · C Copy · Esc Close ",
                             v.data.added, v.data.removed
                         )
                     },
