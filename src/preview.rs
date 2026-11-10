@@ -14,8 +14,10 @@ mod layout;
 mod markdown;
 mod math;
 mod theme;
+mod viewport;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+pub use viewport::{CodeHighlighter, CodeViewport, HighlightStats, HighlightWindow};
 
 pub const MAX_BYTES: usize = 1024 * 1024;
 pub const MAX_LINES: usize = 10_000;
@@ -265,14 +267,17 @@ pub fn highlight_allowed(source: &str) -> bool {
         && source.lines().all(|l| l.len() <= MAX_HIGHLIGHT_LINE_BYTES)
 }
 
-pub fn highlight(source: &str, path: &Path, light: bool) -> Text<'static> {
-    let _perf = crate::perf::span(crate::perf::Metric::Highlight);
-    if !highlight_allowed(source)
-        || path
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("txt") || e.eq_ignore_ascii_case("log"))
+fn syntax_for(
+    path: &Path,
+) -> Option<(
+    &'static SyntaxSet,
+    &'static syntect::parsing::SyntaxReference,
+)> {
+    if path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("txt") || e.eq_ignore_ascii_case("log"))
     {
-        return plain_text(source);
+        return None;
     }
     static SYNTAXES: OnceLock<SyntaxSet> = OnceLock::new();
     static EXTRA_SYNTAXES: OnceLock<SyntaxSet> = OnceLock::new();
@@ -296,7 +301,15 @@ pub fn highlight(source: &str, path: &Path, light: bool) -> Text<'static> {
     } else {
         EXTRA_SYNTAXES.get_or_init(two_face::syntax::extra_newlines)
     };
-    let Some(syntax) = find(set) else {
+    find(set).map(|syntax| (set, syntax))
+}
+
+pub fn highlight(source: &str, path: &Path, light: bool) -> Text<'static> {
+    let _perf = crate::perf::span(crate::perf::Metric::Highlight);
+    if !highlight_allowed(source) {
+        return plain_text(source);
+    }
+    let Some((set, syntax)) = syntax_for(path) else {
         return plain_text(source);
     };
     let mut h = syntect::easy::HighlightLines::new(syntax, theme::syntax(light));
@@ -350,6 +363,7 @@ pub struct RowSource {
 #[derive(Debug)]
 pub struct Rendered {
     pub text: Arc<Text<'static>>,
+    pub code: Option<Arc<HighlightWindow>>,
     pub plain: Vec<String>,
     pub source: Arc<str>,
     pub rows: Vec<RowSource>,
@@ -433,6 +447,25 @@ pub(crate) fn render_shared(
     width: u16,
     light: bool,
 ) -> Rendered {
+    render_internal(source, path, markdown, width, light, true)
+}
+pub(crate) fn render_plain(
+    source: Arc<str>,
+    path: &Path,
+    markdown: bool,
+    width: u16,
+    light: bool,
+) -> Rendered {
+    render_internal(source, path, markdown, width, light, false)
+}
+fn render_internal(
+    source: Arc<str>,
+    path: &Path,
+    markdown: bool,
+    width: u16,
+    light: bool,
+    full_highlight: bool,
+) -> Rendered {
     let _perf = crate::perf::span(crate::perf::Metric::Render);
     let mut note = String::new();
     let (text, rows) = if markdown {
@@ -450,7 +483,11 @@ pub(crate) fn render_shared(
         if !highlight_allowed(&safe) {
             note = "Highlight budget exceeded; plain text".into();
         }
-        let text = highlight(&safe, path, light);
+        let text = if full_highlight {
+            highlight(&safe, path, light)
+        } else {
+            plain_text(&safe)
+        };
         let mut offset = 0;
         let rows = source
             .split_inclusive('\n')
@@ -482,6 +519,7 @@ pub(crate) fn render_shared(
     let plain = text.lines.iter().map(ToString::to_string).collect();
     Rendered {
         text: Arc::new(text),
+        code: None,
         plain,
         source,
         rows,
@@ -495,6 +533,7 @@ pub fn render_editor(source: &str, path: &Path, width: u16, light: bool) -> Rend
     let safe = display_text(source);
     Rendered {
         text: Arc::new(highlight(&safe, path, light)),
+        code: None,
         plain: Vec::new(),
         source: Arc::from(""),
         rows: Vec::new(),
@@ -506,6 +545,20 @@ pub fn render_editor(source: &str, path: &Path, width: u16, light: bool) -> Rend
         } else {
             "Highlight budget exceeded; plain text".into()
         },
+    }
+}
+
+pub(crate) fn render_editor_plain(source: Arc<str>, width: u16, light: bool) -> Rendered {
+    Rendered {
+        text: Arc::new(Text::default()),
+        code: None,
+        plain: Vec::new(),
+        source,
+        rows: Vec::new(),
+        width,
+        markdown: false,
+        light,
+        note: String::new(),
     }
 }
 

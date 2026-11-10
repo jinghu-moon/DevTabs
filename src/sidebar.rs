@@ -166,6 +166,13 @@ pub struct Document {
     id: u64,
     render_id: u64,
     render_pending: bool,
+    code_stats: Option<preview::HighlightStats>,
+    code_generation: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    code_desired: Option<(preview::CodeViewport, u64, bool)>,
+    code_changed: Instant,
+    code_pending: bool,
+    code_id: u64,
+    code_revision: u64,
 }
 impl Document {
     fn new(path: PathBuf, id: u64) -> Self {
@@ -188,10 +195,20 @@ impl Document {
             id,
             render_id: 0,
             render_pending: false,
+            code_stats: None,
+            code_generation: Default::default(),
+            code_desired: None,
+            code_changed: Instant::now(),
+            code_pending: false,
+            code_id: 0,
+            code_revision: 0,
         }
     }
     pub fn offset(&self) -> (usize, usize) {
         self.scroll[usize::from(self.markdown)]
+    }
+    pub fn highlight_stats(&self) -> Option<preview::HighlightStats> {
+        self.code_stats
     }
     pub fn offset_mut(&mut self) -> &mut (usize, usize) {
         &mut self.scroll[usize::from(self.markdown)]
@@ -561,6 +578,22 @@ impl Sidebar {
             |e| std::sync::Arc::from(e.source()),
         );
         d.render_revision = d.editor.as_ref().map_or(0, |e| e.revision);
+        d.code_generation
+            .store(id, std::sync::atomic::Ordering::Relaxed);
+        let viewport = preview::CodeViewport {
+            top: if d.editing {
+                d.editor
+                    .as_ref()
+                    .map_or(0, |e| e.area.scroll_offset().0 as usize)
+            } else {
+                d.offset().0
+            },
+            rows: self
+                .geometry
+                .preview
+                .map(crate::ui::content)
+                .map_or(40, |r| r.height.max(1)) as usize,
+        };
         self.io.send(Job::Render {
             editor: d.editing,
             path: d.path.clone(),
@@ -569,10 +602,89 @@ impl Sidebar {
             markdown: d.markdown && !d.editing,
             width,
             light: self.files.light,
+            viewport,
+            generation: d.code_generation.clone(),
         })?;
         d.render_id = id;
         d.render_pending = true;
         Ok(())
+    }
+    fn highlight_document(&mut self) {
+        let Some(rect) = self.geometry.preview.map(crate::ui::content) else {
+            return;
+        };
+        let Some(d) = &mut self.document else {
+            return;
+        };
+        let Some(r) = &d.rendered else {
+            return;
+        };
+        if r.markdown {
+            return;
+        }
+        let revision = d.editor.as_ref().map_or(0, |e| e.revision);
+        let top = if d.editing {
+            d.editor
+                .as_ref()
+                .map_or(0, |e| e.area.scroll_offset().0 as usize)
+        } else {
+            d.offset().0
+        };
+        let viewport = preview::CodeViewport {
+            top,
+            rows: rect.height.max(1) as usize,
+        };
+        let desired = (viewport, revision, self.files.light);
+        if d.code_desired != Some(desired) {
+            let first = d.code_desired.is_none();
+            d.code_desired = Some(desired);
+            d.code_changed = Instant::now()
+                - if first {
+                    Duration::from_millis(80)
+                } else {
+                    Duration::ZERO
+                };
+            d.code_generation
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Some(e) = &mut d.editor
+                && e.highlight
+                    .as_ref()
+                    .is_some_and(|(_, w)| w.light != self.files.light)
+            {
+                e.highlight = None;
+            }
+        }
+        if d.render_pending
+            || revision != d.render_revision
+            || d.code_pending
+            || d.code_changed.elapsed() < Duration::from_millis(80)
+            || r.code
+                .as_ref()
+                .is_some_and(|w| w.covers(viewport, self.files.light))
+        {
+            return;
+        }
+        self.serial += 1;
+        let id = self.serial;
+        d.code_generation
+            .store(id, std::sync::atomic::Ordering::Relaxed);
+        let result = self.io.send(Job::Highlight {
+            path: d.path.clone(),
+            id,
+            source: r.source.clone(),
+            viewport,
+            light: self.files.light,
+            generation: d.code_generation.clone(),
+            expected: id,
+        });
+        match result {
+            Ok(()) => {
+                d.code_id = id;
+                d.code_revision = revision;
+                d.code_pending = true;
+            }
+            Err(e) => self.say(e.to_string(), false),
+        }
     }
     pub fn tick(&mut self, active: bool) -> bool {
         let _perf = crate::perf::span(crate::perf::Metric::Tick);
@@ -757,7 +869,39 @@ impl Sidebar {
                         }
                     }
                 }
-                Completed::Render { path, id, result } => {
+                Completed::Highlight {
+                    path,
+                    id,
+                    window,
+                    stats,
+                } => {
+                    if let Some(d) = &mut self.document
+                        && d.path == path
+                        && d.code_id == id
+                    {
+                        d.code_pending = false;
+                        d.code_stats = Some(stats);
+                        if d.code_generation.load(std::sync::atomic::Ordering::Relaxed) != id {
+                            continue;
+                        }
+                        if let Some(window) = window
+                            && let Some(r) = &mut d.rendered
+                        {
+                            if let Some(e) = &mut d.editor
+                                && e.revision == d.code_revision
+                            {
+                                e.highlight = Some((e.revision, window.clone()));
+                            }
+                            r.code = Some(window);
+                        }
+                    }
+                }
+                Completed::Render {
+                    path,
+                    id,
+                    result,
+                    stats,
+                } => {
                     if let Some(d) = &mut self.document
                         && d.path == path
                         && d.render_id == id
@@ -769,12 +913,14 @@ impl Sidebar {
                         {
                             continue;
                         }
-                        if let Some(e) = &mut d.editor
-                            && d.render_revision == e.revision
-                            && !result.markdown
-                        {
-                            e.highlight = Some((e.revision, result.text.clone()));
+                        d.code_stats = stats;
+                        // A new snapshot invalidates colors; viewport highlighting is separate.
+                        if let Some(e) = &mut d.editor {
+                            e.highlight = result.code.as_ref().map(|w| (e.revision, w.clone()));
                         }
+                        d.code_desired = None;
+                        d.code_generation
+                            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         if d.rendered.as_ref().is_some_and(|previous| {
                             previous.width != result.width
                                 || previous.markdown != result.markdown
@@ -810,6 +956,9 @@ impl Sidebar {
             {
                 self.say(e.to_string(), false);
             }
+        }
+        if active && self.showing() {
+            self.highlight_document();
         }
         self.files.pinned = self.document.as_ref().map(|d| d.path.clone());
         let watching = active && (self.geometry.tree.is_some() || self.showing());
@@ -1730,9 +1879,15 @@ impl Sidebar {
             if let Some(r) = &d.rendered {
                 for y in 0..inner.height {
                     let row = top + y as usize;
-                    let Some(line) = r.text.lines.get(row) else {
+                    let Some(raw_line) = r.text.lines.get(row) else {
                         break;
                     };
+                    let line = r
+                        .code
+                        .as_ref()
+                        .filter(|w| w.light == self.files.light)
+                        .and_then(|w| w.line(row))
+                        .unwrap_or(raw_line);
                     let gutter = if d.markdown { 0 } else { 6.min(inner.width) };
                     if gutter > 0 {
                         frame.render_widget(

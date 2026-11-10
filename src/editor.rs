@@ -7,7 +7,6 @@ use ratatui::{
     Frame,
     layout::Rect,
     style::{Color, Style},
-    text::Text,
     widgets::Block,
 };
 use ratatui_textarea::{CursorMove, TextArea};
@@ -30,7 +29,7 @@ pub struct Editor {
     pub conflict: bool,
     pub status: String,
     pub search_input: Option<String>,
-    pub highlight: Option<(u64, Arc<Text<'static>>)>,
+    pub highlight: Option<(u64, Arc<preview::HighlightWindow>)>,
     pub highlight_requested: u64,
     baseline: String,
     histories: usize,
@@ -373,8 +372,8 @@ impl Editor {
             let (top, left) = self.area.scroll_offset();
             let gutter = self.area.line_number_width() as usize;
             for y in 0..inner.height {
-                let Some(line) = syntax.lines.get(top as usize + y as usize) else {
-                    break;
+                let Some(line) = syntax.line(top as usize + y as usize) else {
+                    continue;
                 };
                 let mut col = 0;
                 for span in &line.spans {

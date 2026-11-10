@@ -1,0 +1,242 @@
+{
+  "stage": 1,
+  "date": "2026-11-10",
+  "baseline_commit": "78e2b15756c2e56f9ecc7352bf125891d347a464",
+  "fixture": {
+    "description": "7000 Rust let statements with Chinese comments",
+    "bytes": 182000,
+    "lines": 7000,
+    "terminal_columns": 100,
+    "terminal_rows": 40,
+    "sha256": "f1597bacf45d09588e3caa0fbb952166f92308d88fb9533b0a51744c3614af99"
+  },
+  "conditions": "Windows; cargo test --release --locked; shared Rust grammar/theme warmed equally; five document opens; TestBackend drawing includes buffer allocation; workload runs serially",
+  "before": {
+    "cases": [
+      {
+        "full_text_colored_rows": 7000,
+        "full_text_spans": 63000,
+        "iteration": 0,
+        "memory": {
+          "peak_working_set_bytes": 23093248,
+          "private_bytes": 12754944,
+          "working_set_bytes": 22257664
+        },
+        "open_ms": 177.6915,
+        "repaint_mean_ms": 0.40723333333333334
+      },
+      {
+        "full_text_colored_rows": 7000,
+        "full_text_spans": 63000,
+        "iteration": 1,
+        "memory": {
+          "peak_working_set_bytes": 23298048,
+          "private_bytes": 12935168,
+          "working_set_bytes": 22511616
+        },
+        "open_ms": 159.37879999999998,
+        "repaint_mean_ms": 0.39908333333333335
+      },
+      {
+        "full_text_colored_rows": 7000,
+        "full_text_spans": 63000,
+        "iteration": 2,
+        "memory": {
+          "peak_working_set_bytes": 23486464,
+          "private_bytes": 13926400,
+          "working_set_bytes": 23486464
+        },
+        "open_ms": 166.4067,
+        "repaint_mean_ms": 0.25893
+      },
+      {
+        "full_text_colored_rows": 7000,
+        "full_text_spans": 63000,
+        "iteration": 3,
+        "memory": {
+          "peak_working_set_bytes": 23486464,
+          "private_bytes": 13922304,
+          "working_set_bytes": 23326720
+        },
+        "open_ms": 172.81740000000002,
+        "repaint_mean_ms": 0.26214
+      },
+      {
+        "full_text_colored_rows": 7000,
+        "full_text_spans": 63000,
+        "iteration": 4,
+        "memory": {
+          "peak_working_set_bytes": 23670784,
+          "private_bytes": 14110720,
+          "working_set_bytes": 23670784
+        },
+        "open_ms": 160.28629999999998,
+        "repaint_mean_ms": 0.27310000000000006
+      }
+    ],
+    "source_bytes": 182000,
+    "source_lines": 7000,
+    "viewport_rows": 40
+  },
+  "after": {
+    "cases": [
+      {
+        "full_text_colored_rows": 0,
+        "full_text_spans": 7000,
+        "iteration": 0,
+        "memory": {
+          "peak_working_set_bytes": 18890752,
+          "private_bytes": 8220672,
+          "working_set_bytes": 17977344
+        },
+        "open_ms": 12.1444,
+        "repaint_mean_ms": 0.35135666666666665,
+        "window_rows": 52,
+        "window_spans": 468
+      },
+      {
+        "full_text_colored_rows": 0,
+        "full_text_spans": 7000,
+        "iteration": 1,
+        "memory": {
+          "peak_working_set_bytes": 18952192,
+          "private_bytes": 9060352,
+          "working_set_bytes": 18296832
+        },
+        "open_ms": 9.4986,
+        "repaint_mean_ms": 0.32849,
+        "window_rows": 52,
+        "window_spans": 468
+      },
+      {
+        "full_text_colored_rows": 0,
+        "full_text_spans": 7000,
+        "iteration": 2,
+        "memory": {
+          "peak_working_set_bytes": 19087360,
+          "private_bytes": 8298496,
+          "working_set_bytes": 18137088
+        },
+        "open_ms": 11.7781,
+        "repaint_mean_ms": 0.37664666666666663,
+        "window_rows": 52,
+        "window_spans": 468
+      },
+      {
+        "full_text_colored_rows": 0,
+        "full_text_spans": 7000,
+        "iteration": 3,
+        "memory": {
+          "peak_working_set_bytes": 19304448,
+          "private_bytes": 8646656,
+          "working_set_bytes": 18362368
+        },
+        "open_ms": 9.9158,
+        "repaint_mean_ms": 0.40782999999999997,
+        "window_rows": 52,
+        "window_spans": 468
+      },
+      {
+        "full_text_colored_rows": 0,
+        "full_text_spans": 7000,
+        "iteration": 4,
+        "memory": {
+          "peak_working_set_bytes": 19304448,
+          "private_bytes": 8679424,
+          "working_set_bytes": 18366464
+        },
+        "open_ms": 9.447799999999999,
+        "repaint_mean_ms": 0.3645333333333333,
+        "window_rows": 52,
+        "window_spans": 468
+      }
+    ],
+    "source_bytes": 182000,
+    "source_lines": 7000,
+    "viewport_rows": 40
+  },
+  "rapid_scroll_after": {
+    "debounce_ms": 80,
+    "last_move_to_color_ms": 207.4437,
+    "note": "Synthetic real Sidebar/TestBackend workload; final color delay includes debounce and first prefix parse. No terminal flush or human visual assessment.",
+    "raw_visible_ms": 0.3092,
+    "scroll_updates": 60,
+    "stats": {
+      "cache_hits": 0,
+      "cancelled": 0,
+      "checkpoints": 55,
+      "colored_lines": 69,
+      "parsed_lines": 7053,
+      "requests": 2,
+      "retained_lines": 17
+    },
+    "tick_and_draw_max_ms": 0.6875,
+    "tick_and_draw_p50_ms": 0.3597
+  },
+  "resource_scale_after": {
+    "discovery": {
+      "note": "Run the 100-project/8-session release integration benchmark for process CPU/memory; this command measures discovery/search only.",
+      "projects": 100,
+      "scan_ms": 3.5943,
+      "search_mean_ms": 0.0005831
+    },
+    "document_open_ms": [
+      68.6956,
+      30.5427,
+      62.374199999999995
+    ],
+    "edited_file_bytes": 508000,
+    "editor_input_ms": 12.071399999999999,
+    "editor_search_ms": 16.205000000000002,
+    "editor_undo_ms": 14.504299999999999,
+    "excludes": "PowerShell, Agents, Windows Terminal/OpenConsole, compilers and benchmark test runner",
+    "idle_cpu_machine_percent": 0.22655468159793807,
+    "idle_cpu_single_core_percent": 4.531093631958761,
+    "live_sessions": 8,
+    "logical_processors": 20,
+    "one_sidebar_closed_working_set_sum_mib": 93.48046875,
+    "overview_first_project_frame_ms": 108.8383,
+    "overview_frontends": 1,
+    "own_process_count": 6,
+    "pids": [
+      10960,
+      29948,
+      30900,
+      33204,
+      34016,
+      42636
+    ],
+    "preview_editor_private_bytes_sum_mib": 33.03125,
+    "preview_editor_working_set_sum_mib": 93.79296875,
+    "private_bytes_sum_mib": 23.41796875,
+    "projects": 100,
+    "save_sampled_peak_working_set_sum_mib": 96.5078125,
+    "save_visible_ms": 34.4161,
+    "search_frame_ms": 14.1361,
+    "visible_session_frontends": 4,
+    "warm_session_frame_ms": [
+      87.905,
+      92.77340000000001,
+      93.10740000000001,
+      77.9346
+    ],
+    "working_set_sum_mib": 82.765625
+  },
+  "verification": {
+    "ordinary_tests_passed": 97,
+    "viewport_regressions_passed": 4,
+    "fmt": "passed",
+    "clippy_warnings_denied": "passed",
+    "release_hotspots": "passed",
+    "release_large_directory": "passed",
+    "release_scale": "passed",
+    "before_regression": "expected failure: 7000 retained colored rows; after: <=100 and >=4 actual UI foreground colors"
+  },
+  "limits": [
+    "First jump to an unparsed deep region still parses prefix lexical state.",
+    "Markdown is unchanged in this stage.",
+    "Whole-file logical plain text/search/source mappings remain retained.",
+    "Rapid-scroll report is a single synthetic release run, not a percentile claim about physical terminal latency.",
+    "Initial fixture exceeding the old 100000 span budget was rejected; the recorded comparison has 63000 colored baseline spans."
+  ]
+}

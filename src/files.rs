@@ -78,6 +78,17 @@ pub enum Job {
         markdown: bool,
         width: u16,
         light: bool,
+        viewport: preview::CodeViewport,
+        generation: Arc<std::sync::atomic::AtomicU64>,
+    },
+    Highlight {
+        path: PathBuf,
+        id: u64,
+        source: Arc<str>,
+        viewport: preview::CodeViewport,
+        light: bool,
+        generation: Arc<std::sync::atomic::AtomicU64>,
+        expected: u64,
     },
     Close(PathBuf),
     ValidateInput(PathBuf),
@@ -108,6 +119,13 @@ pub enum Completed {
         path: PathBuf,
         id: u64,
         result: preview::Rendered,
+        stats: Option<preview::HighlightStats>,
+    },
+    Highlight {
+        path: PathBuf,
+        id: u64,
+        window: Option<Arc<preview::HighlightWindow>>,
+        stats: preview::HighlightStats,
     },
 }
 struct Cursor {
@@ -122,6 +140,7 @@ struct Queued {
 }
 pub struct Workers {
     tx: SyncSender<Queued>,
+    render_tx: SyncSender<Queued>,
     pub rx: Receiver<Completed>,
 }
 impl Default for Workers {
@@ -132,14 +151,23 @@ impl Default for Workers {
 impl Workers {
     pub fn new() -> Self {
         let (tx, jobs) = mpsc::sync_channel::<Queued>(16);
+        let (render_tx, render_jobs) = mpsc::sync_channel::<Queued>(2);
         let (done, rx) = mpsc::sync_channel(8);
         let jobs = Arc::new(Mutex::new(jobs));
+        let render_jobs = Arc::new(Mutex::new(render_jobs));
         let cursors = Arc::new(Mutex::new(HashMap::<PathBuf, Cursor>::new()));
         for index in 0..2 {
-            let jobs = jobs.clone();
+            let jobs = if index == 0 {
+                jobs.clone()
+            } else {
+                render_jobs.clone()
+            };
             let done = done.clone();
             let cursors = cursors.clone();
-            thread::Builder::new().name(format!("files-{index}")).spawn(move||loop{
+            thread::Builder::new().name(format!("files-{index}")).spawn(move||{
+                // Oniguruma's ParseState is not Send. Own it on the render worker.
+                let mut code_cache = preview::CodeHighlighter::default();
+                loop{
                 // Acquire cursor ownership in receive order: Close/reset must not
                 // overtake a newer enumeration on the second worker.
                 let (job,mut cursor_guard)={
@@ -187,7 +215,16 @@ impl Workers {
                         Some(Completed::Directory{path,generation,batch:result})
                     }
                     Job::Read{path,id}=>{let result=preview::read(&path);Some(Completed::Read{path,id,result})}
-                    Job::Render{path,id,source,markdown,width,light,editor}=>{let result=if editor {preview::render_editor(&source,&path,width,light)} else {preview::render_shared(source,&path,markdown,width,light)};Some(Completed::Render{path,id,result})}
+                    Job::Render{path,id,source,markdown,width,light,editor,viewport,generation}=>{
+                        let code=if markdown {None} else {code_cache.render(source.clone(),&path,viewport,light,&generation,id)};
+                        let mut result=if editor {preview::render_editor_plain(source,width,light)} else {preview::render_plain(source,&path,markdown,width,light)};
+                        result.code=code;
+                        Some(Completed::Render{path,id,result,stats:(!markdown).then(||code_cache.stats())})
+                    }
+                    Job::Highlight{path,id,source,viewport,light,generation,expected}=>{
+                        let window=code_cache.render(source,&path,viewport,light,&generation,expected);
+                        Some(Completed::Highlight{path,id,window,stats:code_cache.stats()})
+                    }
                     Job::Close(path)=>{cursor_guard.take().expect("ordered cursor ownership").remove(&path);None}
                     Job::ValidateInput(path)=>{let result=(||->Result<PathBuf>{ensure!(fs::metadata(&path)?.is_file(),"Drop target is not a file");path_input(&path)?;Ok(path)})();Some(Completed::Input(result))}
                 };
@@ -195,20 +232,24 @@ impl Workers {
                     let _perf=crate::perf::span(crate::perf::Metric::ResultWait);
                     if done.send(completion).is_err(){break;}
                 }
-            }).expect("filesystem worker");
+            }}).expect("filesystem worker");
         }
-        Self { tx, rx }
+        Self { tx, render_tx, rx }
     }
     pub fn send(&self, job: Job) -> Result<()> {
-        self.tx
-            .try_send(Queued {
-                job,
-                at: crate::perf::enabled().then(Instant::now),
-            })
-            .map_err(|_| {
-                crate::perf::record(crate::perf::Metric::QueueFull, Duration::ZERO);
-                anyhow::anyhow!("File work queue full; retry")
-            })
+        let tx = if matches!(job, Job::Render { .. } | Job::Highlight { .. }) {
+            &self.render_tx
+        } else {
+            &self.tx
+        };
+        tx.try_send(Queued {
+            job,
+            at: crate::perf::enabled().then(Instant::now),
+        })
+        .map_err(|_| {
+            crate::perf::record(crate::perf::Metric::QueueFull, Duration::ZERO);
+            anyhow::anyhow!("File work queue full; retry")
+        })
     }
 }
 
