@@ -279,6 +279,157 @@ fn reading_fixture_keeps_code_diagrams_math_and_quotes_in_the_actual_sidebar() {
 }
 
 #[test]
+fn list_markers_have_no_underline_but_links_still_do() {
+    use ratatui::style::Modifier;
+    let root = Fixture::new();
+    let path = root.0.join("lists.md");
+    fs::write(&path,"- [x] done\n- [ ] pending\n  1. ordered\n  2. second\n\n- bullet\n\n[link](https://example.com)\n").unwrap();
+    for light in [false, true] {
+        let mut s = Sidebar::new(root.0.clone());
+        s.visible = false;
+        s.files.light = light;
+        s.open(path.clone(), true).unwrap();
+        s.update_layout(Rect::new(0, 0, 80, 30), false);
+        ready(&mut s);
+        let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
+        terminal.draw(|f| s.draw(f)).unwrap();
+        let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+        let buffer = terminal.backend().buffer();
+        for marker in ["☑", "☐", "1.", "2.", "•"] {
+            let row = r
+                .plain
+                .iter()
+                .position(|s| s.trim_start().starts_with(marker))
+                .unwrap();
+            let col = r.plain[row]
+                .chars()
+                .take_while(|c| c.is_whitespace())
+                .count();
+            for x in col..col + marker.chars().count() {
+                let cell = &buffer[(1 + x as u16, 1 + row as u16)];
+                assert!(
+                    !cell.modifier.contains(Modifier::UNDERLINED),
+                    "marker {marker} light={light} is underlined"
+                );
+            }
+        }
+        let row = r.plain.iter().position(|s| s == "link").unwrap();
+        assert!(
+            buffer[(1, 1 + row as u16)]
+                .modifier
+                .contains(Modifier::UNDERLINED),
+            "link underline was lost"
+        );
+    }
+}
+
+#[test]
+fn code_background_fills_sidebar_width_for_short_empty_and_scrolled_rows() {
+    use ratatui::{
+        style::{Color, Style},
+        widgets::Block,
+    };
+    let root = Fixture::new();
+    let path = root.0.join("code.md");
+    fs::write(
+        &path,
+        "```rust\nfn main() {}\n\nlet value = 42;\n```\n\ninline `code` ends here\n",
+    )
+    .unwrap();
+    for light in [false, true] {
+        for width in [64, 100] {
+            let mut s = Sidebar::new(root.0.clone());
+            s.visible = false;
+            s.files.light = light;
+            s.open(path.clone(), true).unwrap();
+            s.update_layout(Rect::new(0, 0, width, 30), false);
+            ready(&mut s);
+            let cached = s
+                .document
+                .as_ref()
+                .unwrap()
+                .rendered
+                .as_ref()
+                .unwrap()
+                .window
+                .clone();
+            for left in [0, 8, 100] {
+                s.document.as_mut().unwrap().scroll[1].1 = left;
+                for fallback in [false, true] {
+                    // The same base style must work before the viewport's colored window arrives.
+                    s.document
+                        .as_mut()
+                        .unwrap()
+                        .rendered
+                        .as_mut()
+                        .unwrap()
+                        .window = if fallback { None } else { cached.clone() };
+                    let background = if light {
+                        Color::White
+                    } else {
+                        Color::Rgb(46, 52, 64)
+                    };
+                    let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+                    terminal
+                        .draw(|f| {
+                            f.render_widget(
+                                Block::default().style(Style::new().bg(background)),
+                                f.area(),
+                            );
+                            s.draw(f);
+                        })
+                        .unwrap();
+                    let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+                    let buffer = terminal.backend().buffer();
+                    let mut checked = 0;
+                    for (row, mapping) in r
+                        .rows
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, r)| r.kind == preview::RowKind::Code)
+                    {
+                        let line = r
+                            .window
+                            .as_ref()
+                            .and_then(|w| w.line(row))
+                            .unwrap_or(&r.text.lines[row]);
+                        let expected = line
+                            .style
+                            .bg
+                            .expect("code row must retain a block background");
+                        for x in 1..width - 1 {
+                            assert_eq!(
+                                buffer[(x, 1 + row as u16)].bg,
+                                expected,
+                                "code row {row} col {x} width={width} light={light} left={left} fallback={fallback} kind={:?}",
+                                mapping.kind
+                            );
+                        }
+                        assert_eq!(
+                            buffer[(0, 1 + row as u16)].bg,
+                            Color::Reset,
+                            "code background leaked into the border"
+                        );
+                        checked += 1;
+                    }
+                    assert!(checked >= 3, "must cover short code and an empty code row");
+                    let row = r
+                        .plain
+                        .iter()
+                        .position(|s| s.starts_with("inline "))
+                        .unwrap();
+                    assert_eq!(
+                        buffer[(width - 2, 1 + row as u16)].bg,
+                        Color::Reset,
+                        "inline code must not fill the entire row"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "isolated Release Markdown viewport comparison"]
 fn markdown_viewport_workload() {
     if cfg!(debug_assertions) {

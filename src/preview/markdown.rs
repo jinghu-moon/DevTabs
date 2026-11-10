@@ -289,7 +289,10 @@ impl Writer<'_> {
                     };
                     let rest = " ".repeat(layout::display_width(&marker));
                     self.margins.push(Margin {
-                        first: vec![Piece::synthetic(marker, self.palette.link)],
+                        first: vec![Piece::synthetic(
+                            marker,
+                            self.palette.link.remove_modifier(Modifier::UNDERLINED),
+                        )],
                         rest: vec![Piece::synthetic(rest, Style::default())],
                         pending: true,
                     });
@@ -416,7 +419,12 @@ impl Writer<'_> {
                         " ".repeat(layout::display_width(&marker)),
                         Style::default(),
                     )];
-                    m.first = vec![Piece::new(marker, self.palette.link, Some(range), false)];
+                    m.first = vec![Piece::new(
+                        marker,
+                        self.palette.link.remove_modifier(Modifier::UNDERLINED),
+                        Some(range),
+                        false,
+                    )];
                 }
             }
             Event::Rule => {

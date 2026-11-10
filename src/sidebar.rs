@@ -1995,6 +1995,7 @@ impl Sidebar {
                     let content = Rect::new(inner.x + gutter, inner.y + y, inner.width - gutter, 1);
                     frame.render_widget(
                         Paragraph::new(line.clone())
+                            .style(line.style)
                             .scroll((0, left.min(u16::MAX as usize) as u16)),
                         content,
                     );

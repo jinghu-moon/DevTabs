@@ -214,7 +214,7 @@ impl MarkdownCache {
                 let plain = row.line.to_string();
                 Arc::make_mut(&mut self.neutral)
                     .lines
-                    .push(Line::raw(plain.clone()));
+                    .push(Line::raw(plain.clone()).style(row.line.style));
                 Arc::make_mut(&mut self.plain).push(plain);
                 Arc::make_mut(&mut self.rows).push(row.source.clone());
             }
