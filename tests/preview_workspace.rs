@@ -499,14 +499,14 @@ fn tabs_are_bounded_and_header_click_switches_the_selected_file() {
     let b = draw(&mut s);
     let rect = s.geometry.preview.unwrap();
     let row = (rect.x + 1..rect.right() - 1)
-        .map(|x| b[(x, rect.y + 1)].symbol())
+        .map(|x| b[(x, rect.y + 3)].symbol())
         .collect::<String>();
     assert!(!row.contains("file-0") && !row.contains("file-1"));
     assert!(row.contains("file-2"));
     mouse(
         &mut s,
         rect.x + 2,
-        rect.y + 1,
+        rect.y + 3,
         MouseEventKind::Down(MouseButton::Left),
     );
     ready(&mut s);
@@ -537,7 +537,7 @@ fn file_tabs_have_boundaries_filename_labels_and_distinct_active_state() {
         let mut row = String::new();
         let mut x = rect.x + 1;
         while x < rect.right() - 1 {
-            let symbol = b[(x, rect.y + 1)].symbol();
+            let symbol = b[(x, rect.y + 3)].symbol();
             row.push_str(symbol);
             x += unicode_width::UnicodeWidthStr::width(symbol).max(1) as u16;
         }
@@ -547,18 +547,27 @@ fn file_tabs_have_boundaries_filename_labels_and_distinct_active_state() {
             "show the filename before its directory"
         );
         let starts = (rect.x + 1..rect.right() - 1)
-            .filter(|&x| b[(x, rect.y + 1)].symbol() == "│")
+            .filter(|&x| b[(x, rect.y + 3)].symbol() == "│")
             .collect::<Vec<_>>();
         assert_eq!(starts.len(), 4, "each tab has two side borders");
-        let inactive = &b[(starts[0] + 1, rect.y + 1)];
-        let active = &b[(starts[2] + 1, rect.y + 1)];
+        for x in rect.x + 1..rect.right() - 1 {
+            assert_eq!(
+                b[(x, rect.y + 1)].symbol(),
+                " ",
+                "separate tabs from outer border"
+            );
+        }
+        assert_eq!(b[(starts[0], rect.y + 2)].symbol(), "┌");
+        assert_eq!(b[(starts[2], rect.y + 2)].symbol(), "┌");
+        let inactive = &b[(starts[0] + 1, rect.y + 3)];
+        let active = &b[(starts[2] + 1, rect.y + 3)];
         assert_ne!(active.bg, inactive.bg);
         assert!(active.modifier.contains(Modifier::BOLD));
-        assert_eq!(b[(starts[0], rect.y + 2)].symbol(), "└");
-        assert_eq!(b[(starts[2], rect.y + 2)].symbol(), "└");
-        assert_ne!(b[(starts[0], rect.y + 2)].fg, b[(starts[2], rect.y + 2)].fg);
+        assert_eq!(b[(starts[0], rect.y + 4)].symbol(), "└");
+        assert_eq!(b[(starts[2], rect.y + 4)].symbol(), "└");
+        assert_ne!(b[(starts[0], rect.y + 4)].fg, b[(starts[2], rect.y + 4)].fg);
         assert_eq!(
-            b[(rect.x + 2, rect.y + 3)].symbol(),
+            b[(rect.x + 2, rect.y + 5)].symbol(),
             " ",
             "keep padding beneath tabs"
         );
@@ -566,7 +575,7 @@ fn file_tabs_have_boundaries_filename_labels_and_distinct_active_state() {
         mouse(
             &mut s,
             starts[0] + 2,
-            rect.y + 2,
+            rect.y + 4,
             MouseEventKind::Down(MouseButton::Left),
         );
         ready(&mut s);
