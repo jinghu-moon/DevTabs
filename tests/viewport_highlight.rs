@@ -59,7 +59,7 @@ fn source_preview_does_not_keep_whole_file_colored_spans() {
         .iter()
         .filter(|l| l.spans.iter().any(|s| s.style.fg.is_some()))
         .count()
-        + r.code.as_ref().map_or(0, |w| w.text.lines.len());
+        + r.window.as_ref().map_or(0, |w| w.text.lines.len());
     assert!(
         colored_rows <= 100,
         "retained {colored_rows} colored rows for a 40-row viewport"
@@ -213,7 +213,7 @@ fn fast_scrolling_draws_current_text_and_only_highlights_after_settling() {
                 .rendered
                 .as_ref()
                 .unwrap()
-                .code
+                .window
                 .as_ref()
                 .unwrap()
                 .first
@@ -251,7 +251,7 @@ fn fast_scrolling_draws_current_text_and_only_highlights_after_settling() {
         if d.rendered
             .as_ref()
             .unwrap()
-            .code
+            .window
             .as_ref()
             .unwrap()
             .line(7000)
@@ -265,7 +265,7 @@ fn fast_scrolling_draws_current_text_and_only_highlights_after_settling() {
     let d = s.document.as_ref().unwrap();
     let settled_color_ms = last_move.elapsed().as_secs_f64() * 1000.0;
     assert_eq!(d.highlight_stats().unwrap().requests, requests + 1);
-    let window = d.rendered.as_ref().unwrap().code.as_ref().unwrap();
+    let window = d.rendered.as_ref().unwrap().window.as_ref().unwrap();
     assert!(
         window
             .line(7000)
@@ -325,10 +325,10 @@ fn source_viewport_workload() {
             .iter()
             .filter(|l| l.spans.iter().any(|s| s.style.fg.is_some()))
             .count();
-        let window_spans = r.code.as_ref().map_or(0, |w| {
+        let window_spans = r.window.as_ref().map_or(0, |w| {
             w.text.lines.iter().map(|l| l.spans.len()).sum::<usize>()
         });
-        let window_rows = r.code.as_ref().map_or(0, |w| w.text.lines.len());
+        let window_rows = r.window.as_ref().map_or(0, |w| w.text.lines.len());
         let start = Instant::now();
         for _ in 0..30 {
             std::hint::black_box(draw(&mut s));

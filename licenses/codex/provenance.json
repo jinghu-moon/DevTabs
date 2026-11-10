@@ -66,7 +66,7 @@
       "upstream": "refer/codex-main/codex-rs/tui/src/markdown_render/math.rs",
       "local": "src/preview/math.rs",
       "upstream_sha256": "02952660ec03b9896723567f946bc0e364d113614fa9294cc615931fa64c0672",
-      "local_sha256": "61743cb0d067391ef04bc858e83887f2316da5bfd711166f0d7162ffc976b9e5"
+      "local_sha256": "97ba13591d9f287c302ac074941b942e24ed8f269d51b97b1406fb3bf861e801"
     },
     {
       "upstream": "refer/codex-main/codex-rs/tui/src/markdown_render/math/render.rs",
@@ -89,7 +89,8 @@
     "display_width import points at DevTabs layout helper",
     "stage timing instrumentation in prepass",
     "rustfmt formatting",
-    "prominent adaptation notice in modified source files"
+    "prominent adaptation notice in modified source files",
+    "deferred TeX conversion during viewport block indexing; formula conversion happens only when laying out its complete block, with regression coverage"
   ],
   "snapshot_changes": "Mermaid snapshot filenames use devtabs_mermaid module prefix; expected diagram contents unchanged.",
   "local_line_endings": "LF, normalized by repository .gitattributes; upstream hashes identify original reference bytes."

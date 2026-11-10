@@ -23,7 +23,7 @@ metrics! {
     TreeItems => "tree.build_items", TreeRender => "tree.widget_render", TreeBlit => "tree.copy_viewport", TreeMerge => "tree.merge_batch",
     SidebarDraw => "sidebar.draw", PreviewDraw => "preview.draw", PreviewSearch => "preview.search", Highlight => "preview.highlight",
     Render => "preview.render", ViewportHighlight => "preview.viewport_highlight", Read => "files.read_decode", Directory => "files.directory_batch",
-    Markdown => "markdown.parse_layout", TableLayout => "markdown.table_layout", CodeLayout => "markdown.code_layout", Mermaid => "markdown.mermaid", Math => "markdown.math",
+    Markdown => "markdown.parse_layout", MarkdownViewport => "markdown.viewport_layout", TableLayout => "markdown.table_layout", CodeLayout => "markdown.code_layout", Mermaid => "markdown.mermaid", Math => "markdown.math",
     QueueWait => "files.queue_wait", ResultWait => "files.result_backpressure", QueueFull => "files.queue_rejected",
     EditorEdit => "editor.edit", EditorClone => "editor.clone_candidate", EditorValidate => "editor.validate",
     EditorDirty => "editor.dirty_compare", EditorDraw => "editor.draw", Save => "editor.save",

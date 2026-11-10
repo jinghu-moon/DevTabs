@@ -15,6 +15,7 @@ mod markdown;
 mod math;
 mod theme;
 mod viewport;
+pub use markdown::{MarkdownCache, MarkdownStats};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 pub use viewport::{CodeHighlighter, CodeViewport, HighlightStats, HighlightWindow};
@@ -363,10 +364,11 @@ pub struct RowSource {
 #[derive(Debug)]
 pub struct Rendered {
     pub text: Arc<Text<'static>>,
-    pub code: Option<Arc<HighlightWindow>>,
-    pub plain: Vec<String>,
+    pub window: Option<Arc<HighlightWindow>>,
+    pub plain: Arc<Vec<String>>,
     pub source: Arc<str>,
-    pub rows: Vec<RowSource>,
+    pub rows: Arc<Vec<RowSource>>,
+    pub complete: bool,
     pub width: u16,
     pub markdown: bool,
     pub light: bool,
@@ -519,10 +521,11 @@ fn render_internal(
     let plain = text.lines.iter().map(ToString::to_string).collect();
     Rendered {
         text: Arc::new(text),
-        code: None,
-        plain,
+        window: None,
+        plain: Arc::new(plain),
         source,
-        rows,
+        rows: Arc::new(rows),
+        complete: true,
         width,
         markdown,
         light,
@@ -533,10 +536,11 @@ pub fn render_editor(source: &str, path: &Path, width: u16, light: bool) -> Rend
     let safe = display_text(source);
     Rendered {
         text: Arc::new(highlight(&safe, path, light)),
-        code: None,
-        plain: Vec::new(),
+        window: None,
+        plain: Default::default(),
         source: Arc::from(""),
-        rows: Vec::new(),
+        rows: Default::default(),
+        complete: true,
         width,
         markdown: false,
         light,
@@ -551,10 +555,11 @@ pub fn render_editor(source: &str, path: &Path, width: u16, light: bool) -> Rend
 pub(crate) fn render_editor_plain(source: Arc<str>, width: u16, light: bool) -> Rendered {
     Rendered {
         text: Arc::new(Text::default()),
-        code: None,
-        plain: Vec::new(),
+        window: None,
+        plain: Default::default(),
         source,
-        rows: Vec::new(),
+        rows: Default::default(),
+        complete: true,
         width,
         markdown: false,
         light,

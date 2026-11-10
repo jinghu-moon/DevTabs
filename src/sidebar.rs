@@ -173,6 +173,10 @@ pub struct Document {
     code_pending: bool,
     code_id: u64,
     code_revision: u64,
+    markdown_stats: Option<preview::MarkdownStats>,
+    markdown_end: bool,
+    markdown_copy: bool,
+    markdown_search_jump: bool,
 }
 impl Document {
     fn new(path: PathBuf, id: u64) -> Self {
@@ -202,6 +206,10 @@ impl Document {
             code_pending: false,
             code_id: 0,
             code_revision: 0,
+            markdown_stats: None,
+            markdown_end: false,
+            markdown_copy: false,
+            markdown_search_jump: false,
         }
     }
     pub fn offset(&self) -> (usize, usize) {
@@ -209,6 +217,9 @@ impl Document {
     }
     pub fn highlight_stats(&self) -> Option<preview::HighlightStats> {
         self.code_stats
+    }
+    pub fn markdown_stats(&self) -> Option<preview::MarkdownStats> {
+        self.markdown_stats
     }
     pub fn offset_mut(&mut self) -> &mut (usize, usize) {
         &mut self.scroll[usize::from(self.markdown)]
@@ -604,6 +615,7 @@ impl Sidebar {
             light: self.files.light,
             viewport,
             generation: d.code_generation.clone(),
+            complete: !d.search.is_empty() || d.markdown_end || d.markdown_copy,
         })?;
         d.render_id = id;
         d.render_pending = true;
@@ -658,7 +670,7 @@ impl Sidebar {
             || revision != d.render_revision
             || d.code_pending
             || d.code_changed.elapsed() < Duration::from_millis(80)
-            || r.code
+            || r.window
                 .as_ref()
                 .is_some_and(|w| w.covers(viewport, self.files.light))
         {
@@ -892,7 +904,7 @@ impl Sidebar {
                             {
                                 e.highlight = Some((e.revision, window.clone()));
                             }
-                            r.code = Some(window);
+                            r.window = Some(window);
                         }
                     }
                 }
@@ -901,6 +913,7 @@ impl Sidebar {
                     id,
                     result,
                     stats,
+                    markdown_stats,
                 } => {
                     if let Some(d) = &mut self.document
                         && d.path == path
@@ -914,9 +927,10 @@ impl Sidebar {
                             continue;
                         }
                         d.code_stats = stats;
+                        d.markdown_stats = markdown_stats;
                         // A new snapshot invalidates colors; viewport highlighting is separate.
                         if let Some(e) = &mut d.editor {
-                            e.highlight = result.code.as_ref().map(|w| (e.revision, w.clone()));
+                            e.highlight = result.window.as_ref().map(|w| (e.revision, w.clone()));
                         }
                         d.code_desired = None;
                         d.code_generation
@@ -930,8 +944,22 @@ impl Sidebar {
                         }
                         d.rendered = Some(result);
                         let len = d.rendered.as_ref().map_or(0, |r| r.plain.len());
-                        d.offset_mut().0 = d.offset().0.min(len.saturating_sub(1));
+                        if d.rendered.as_ref().is_some_and(|r| r.complete) {
+                            if d.markdown_end {
+                                d.offset_mut().0 = len.saturating_sub(1);
+                                d.markdown_end = false;
+                            } else {
+                                d.offset_mut().0 = d.offset().0.min(len.saturating_sub(1));
+                            }
+                        }
                         d.search();
+                        if d.markdown_search_jump && d.rendered.as_ref().is_some_and(|r| r.complete)
+                        {
+                            if let Some(&(row, col, _)) = d.matches.first() {
+                                *d.offset_mut() = (row, col);
+                            }
+                            d.markdown_search_jump = false;
+                        }
                     }
                 }
             }
@@ -951,7 +979,35 @@ impl Sidebar {
                 }) || d
                     .editor
                     .as_ref()
-                    .is_some_and(|e| e.revision != d.render_revision))
+                    .is_some_and(|e| e.revision != d.render_revision)
+                    || d.rendered.as_ref().is_some_and(|r| {
+                        r.markdown
+                            && ((!r.complete
+                                && (!d.search.is_empty()
+                                    || d.markdown_end
+                                    || d.markdown_copy
+                                    || d.offset().0.saturating_add(
+                                        self.geometry
+                                            .preview
+                                            .map(crate::ui::content)
+                                            .map_or(40, |r| r.height)
+                                            as usize,
+                                    ) > r.plain.len()))
+                                || r.window.as_ref().is_none_or(|w| {
+                                    !w.covers(
+                                        preview::CodeViewport {
+                                            top: d.offset().0,
+                                            rows: self
+                                                .geometry
+                                                .preview
+                                                .map(crate::ui::content)
+                                                .map_or(40, |r| r.height)
+                                                as usize,
+                                        },
+                                        self.files.light,
+                                    )
+                                }))
+                    }))
                 && let Err(e) = self.render_document()
             {
                 self.say(e.to_string(), false);
@@ -959,6 +1015,17 @@ impl Sidebar {
         }
         if active && self.showing() {
             self.highlight_document();
+        }
+        if let Some(d) = &mut self.document
+            && d.markdown_copy
+            && let Some(r) = &d.rendered
+            && r.complete
+        {
+            let text = r.plain.join("\n");
+            d.markdown_copy = false;
+            if let Err(e) = files::copy(text) {
+                self.say(e.to_string(), false);
+            }
         }
         self.files.pinned = self.document.as_ref().map(|d| d.path.clone());
         let watching = active && (self.geometry.tree.is_some() || self.showing());
@@ -1151,6 +1218,15 @@ impl Sidebar {
                 self.focus = Focus::Tree;
             }
             Command::CopyContent | Command::CopySource => {
+                if matches!(command, Command::CopyContent)
+                    && let Some(d) = &mut self.document
+                    && d.markdown
+                    && !d.editing
+                    && d.rendered.as_ref().is_some_and(|r| !r.complete)
+                {
+                    d.markdown_copy = true;
+                    return Ok(Action::None);
+                }
                 let d = self.document.as_ref().context("No document")?;
                 let source_selection = if matches!(command, Command::CopySource) && !d.editing {
                     d.selection
@@ -1255,6 +1331,7 @@ impl Sidebar {
             }
         } else if let Some(d) = &mut self.document {
             d.search = q.value.clone();
+            d.markdown_search_jump = d.markdown && d.rendered.as_ref().is_some_and(|r| !r.complete);
             d.search();
             if let Some(&(row, col, _)) = d.matches.first() {
                 *d.offset_mut() = (row, col);
@@ -1536,6 +1613,9 @@ impl Sidebar {
                 KeyCode::Right => d.offset_mut().1 += 4,
                 KeyCode::Home => *d.offset_mut() = (0, 0),
                 KeyCode::End => {
+                    if d.markdown && d.rendered.as_ref().is_some_and(|r| !r.complete) {
+                        d.markdown_end = true;
+                    }
                     d.offset_mut().0 = d
                         .rendered
                         .as_ref()
@@ -1880,10 +1960,17 @@ impl Sidebar {
                 for y in 0..inner.height {
                     let row = top + y as usize;
                     let Some(raw_line) = r.text.lines.get(row) else {
+                        if r.markdown && !r.complete {
+                            frame.render_widget(
+                                Paragraph::new("Loading preview…")
+                                    .style(Style::new().fg(Color::DarkGray)),
+                                Rect::new(inner.x, inner.y + y, inner.width, 1),
+                            );
+                        }
                         break;
                     };
                     let line = r
-                        .code
+                        .window
                         .as_ref()
                         .filter(|w| w.light == self.files.light)
                         .and_then(|w| w.line(row))

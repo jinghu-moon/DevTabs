@@ -8,7 +8,9 @@ use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 use ratatui::style::{Modifier, Style};
 use std::{ops::Range, path::Path};
 
+mod cache;
 mod table;
+pub use cache::{MarkdownCache, MarkdownStats};
 
 struct Margin {
     first: Vec<Piece>,
@@ -32,6 +34,16 @@ pub(super) fn render(source: &str, width: usize, light: bool) -> Output {
         Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let math = super::math::MathMarkdown::new(source, options, Some(width));
     let events = math.events(Parser::new_ext(&math.markdown, options).into_offset_iter());
+    render_events(source, width, light, events, &math.display_ranges, true)
+}
+fn render_events<'a>(
+    source: &str,
+    width: usize,
+    light: bool,
+    events: impl IntoIterator<Item = (Event<'a>, Range<usize>)>,
+    display_ranges: &[Range<usize>],
+    trim: bool,
+) -> Output {
     let mut w = Writer {
         source,
         width,
@@ -56,7 +68,7 @@ pub(super) fn render(source: &str, width: usize, light: bool) -> Output {
             );
             break;
         }
-        if matches!(&event, Event::Text(_)) && math.display_ranges.contains(&range) {
+        if matches!(&event, Event::Text(_)) && display_ranges.contains(&range) {
             if let Event::Text(text) = event {
                 w.flush();
                 w.blank();
@@ -74,10 +86,10 @@ pub(super) fn render(source: &str, width: usize, light: bool) -> Output {
             "Markdown layout budget exceeded; remaining content available in source mode".into(),
         );
     }
-    while w.rows.last().is_some_and(|r| r.line.to_string().is_empty()) {
+    while trim && w.rows.last().is_some_and(|r| r.line.to_string().is_empty()) {
         w.rows.pop();
     }
-    if w.rows.is_empty() {
+    if trim && w.rows.is_empty() {
         w.push(layout::row(Vec::new(), RowKind::Prose, Style::default()));
     }
     Output {

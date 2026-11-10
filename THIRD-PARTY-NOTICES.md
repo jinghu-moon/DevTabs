@@ -5,3 +5,5 @@ The bounded Mermaid renderer in `crates/devtabs-mermaid/src/` and Unicode math r
 Copyright 2025 OpenAI. Licensed under Apache License 2.0. The original license and notice are preserved in `licenses/codex/` and, for the standalone Mermaid crate, in its directory. The upstream NOTICE also credits Ratatui-derived code under MIT. File hashes and adaptation notes are recorded in `licenses/codex/provenance.json`.
 
 The math prepass was adapted for pulldown-cmark 0.13, standard iterator chains, and the DevTabs width helper. Integration, themes, source mapping and the Markdown layout are maintained in DevTabs. Production builds do not require `refer/`.
+
+Viewport indexing defers Unicode TeX conversion until the containing block is laid out. The adapted prepass retains delimiter recognition and source offsets; deferred conversion and complete-block equivalence have local regression coverage.

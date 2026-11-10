@@ -22,11 +22,18 @@ pub(super) struct MathMarkdown<'a> {
     pub(super) markdown: Cow<'a, str>,
     pub(super) pending_start: Option<usize>,
     pub(super) display_ranges: Vec<Range<usize>>,
-    replacements: Vec<(Range<usize>, String)>,
+    pub(super) replacements: Vec<(Range<usize>, String)>,
 }
 
 impl<'a> MathMarkdown<'a> {
     pub(super) fn new(input: &'a str, options: Options, width: Option<usize>) -> Self {
+        Self::build(input, options, width, true)
+    }
+    /// Index delimiters and protect Markdown syntax without converting offscreen TeX.
+    pub(super) fn deferred(input: &'a str, options: Options, width: Option<usize>) -> Self {
+        Self::build(input, options, width, false)
+    }
+    fn build(input: &'a str, options: Options, width: Option<usize>, convert: bool) -> Self {
         let _perf = crate::perf::span(crate::perf::Metric::Math);
         let mut result = Self {
             markdown: Cow::Borrowed(input),
@@ -225,7 +232,7 @@ impl<'a> MathMarkdown<'a> {
                     continue;
                 }
             }
-            let rendered = if formula.len() < MAX_MATH_BYTES {
+            let rendered = if convert && formula.len() < MAX_MATH_BYTES {
                 let mode = if !display {
                     MathMode::Inline
                 } else if containers
@@ -314,4 +321,29 @@ fn escaped(input: &str, offset: usize) -> bool {
         .count()
         % 2
         == 1
+}
+
+#[cfg(test)]
+mod viewport_tests {
+    use super::*;
+    #[test]
+    fn deferred_index_keeps_tex_unconverted_until_layout() {
+        let source = "Before $x^2$.\n\n$$\\frac{a}{b}$$\n";
+        let index = MathMarkdown::deferred(source, Options::empty(), Some(80));
+        let rendered = MathMarkdown::new(source, Options::empty(), Some(80));
+        assert_eq!(index.display_ranges, rendered.display_ranges);
+        assert!(
+            index
+                .replacements
+                .iter()
+                .all(|(range, text)| &source[range.clone()] == text)
+        );
+        assert!(
+            rendered
+                .replacements
+                .iter()
+                .any(|(range, text)| &source[range.clone()] != text)
+        );
+        assert_eq!(index.markdown, rendered.markdown);
+    }
 }

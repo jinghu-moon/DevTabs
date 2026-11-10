@@ -80,6 +80,7 @@ pub enum Job {
         light: bool,
         viewport: preview::CodeViewport,
         generation: Arc<std::sync::atomic::AtomicU64>,
+        complete: bool,
     },
     Highlight {
         path: PathBuf,
@@ -120,6 +121,7 @@ pub enum Completed {
         id: u64,
         result: preview::Rendered,
         stats: Option<preview::HighlightStats>,
+        markdown_stats: Option<preview::MarkdownStats>,
     },
     Highlight {
         path: PathBuf,
@@ -167,6 +169,7 @@ impl Workers {
             thread::Builder::new().name(format!("files-{index}")).spawn(move||{
                 // Oniguruma's ParseState is not Send. Own it on the render worker.
                 let mut code_cache = preview::CodeHighlighter::default();
+                let mut markdown_cache = preview::MarkdownCache::default();
                 loop{
                 // Acquire cursor ownership in receive order: Close/reset must not
                 // overtake a newer enumeration on the second worker.
@@ -215,11 +218,11 @@ impl Workers {
                         Some(Completed::Directory{path,generation,batch:result})
                     }
                     Job::Read{path,id}=>{let result=preview::read(&path);Some(Completed::Read{path,id,result})}
-                    Job::Render{path,id,source,markdown,width,light,editor,viewport,generation}=>{
+                    Job::Render{path,id,source,markdown,width,light,editor,viewport,generation,complete}=>{
                         let code=if markdown {None} else {code_cache.render(source.clone(),&path,viewport,light,&generation,id)};
-                        let mut result=if editor {preview::render_editor_plain(source,width,light)} else {preview::render_plain(source,&path,markdown,width,light)};
-                        result.code=code;
-                        Some(Completed::Render{path,id,result,stats:(!markdown).then(||code_cache.stats())})
+                        let mut result=if editor {preview::render_editor_plain(source,width,light)} else if markdown {markdown_cache.render(source,width,light,viewport,complete)} else {preview::render_plain(source,&path,false,width,light)};
+                        if !markdown {result.window=code;}
+                        Some(Completed::Render{path,id,result,stats:(!markdown).then(||code_cache.stats()),markdown_stats:markdown.then(||markdown_cache.stats())})
                     }
                     Job::Highlight{path,id,source,viewport,light,generation,expected}=>{
                         let window=code_cache.render(source,&path,viewport,light,&generation,expected);

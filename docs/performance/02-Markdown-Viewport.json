@@ -1,0 +1,323 @@
+{
+  "stage": 2,
+  "date": "2026-11-10",
+  "baseline_commit": "b65e7a2",
+  "conditions": "Windows Release; 73406-byte Markdown, 1501 top-level blocks, 100x40 TestBackend; five opens; latency without external sampling; shared Rust grammar/theme warmed equally; serialized workloads",
+  "before": {
+    "blocks": 1501,
+    "cases": [
+      {
+        "iteration": 0,
+        "open_ms": 39.0172,
+        "rows": 3501,
+        "spans": 11501
+      },
+      {
+        "iteration": 1,
+        "open_ms": 38.3035,
+        "rows": 3501,
+        "spans": 11501
+      },
+      {
+        "iteration": 2,
+        "open_ms": 35.6545,
+        "rows": 3501,
+        "spans": 11501
+      },
+      {
+        "iteration": 3,
+        "open_ms": 36.5081,
+        "rows": 3501,
+        "spans": 11501
+      },
+      {
+        "iteration": 4,
+        "open_ms": 40.060900000000004,
+        "rows": 3501,
+        "spans": 11501
+      }
+    ],
+    "source_bytes": 73406,
+    "terminal": [
+      100,
+      40
+    ]
+  },
+  "after": {
+    "blocks": 1501,
+    "cases": [
+      {
+        "iteration": 0,
+        "open_ms": 9.7804,
+        "rows": 53,
+        "spans": 30,
+        "stats": {
+          "cache_hits": 23,
+          "cached_blocks": 23,
+          "cached_rows": 53,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 53,
+          "laid_out_blocks": 23
+        },
+        "window_spans": 167
+      },
+      {
+        "iteration": 1,
+        "open_ms": 5.8321,
+        "rows": 53,
+        "spans": 30,
+        "stats": {
+          "cache_hits": 23,
+          "cached_blocks": 23,
+          "cached_rows": 53,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 53,
+          "laid_out_blocks": 23
+        },
+        "window_spans": 167
+      },
+      {
+        "iteration": 2,
+        "open_ms": 6.9056,
+        "rows": 53,
+        "spans": 30,
+        "stats": {
+          "cache_hits": 23,
+          "cached_blocks": 23,
+          "cached_rows": 53,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 53,
+          "laid_out_blocks": 23
+        },
+        "window_spans": 167
+      },
+      {
+        "iteration": 3,
+        "open_ms": 6.9851,
+        "rows": 53,
+        "spans": 30,
+        "stats": {
+          "cache_hits": 23,
+          "cached_blocks": 23,
+          "cached_rows": 53,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 53,
+          "laid_out_blocks": 23
+        },
+        "window_spans": 167
+      },
+      {
+        "iteration": 4,
+        "open_ms": 6.754,
+        "rows": 53,
+        "spans": 30,
+        "stats": {
+          "cache_hits": 23,
+          "cached_blocks": 23,
+          "cached_rows": 53,
+          "complete": false,
+          "indexed_blocks": 1501,
+          "known_rows": 53,
+          "laid_out_blocks": 23
+        },
+        "window_spans": 167
+      }
+    ],
+    "source_bytes": 73406,
+    "terminal": [
+      100,
+      40
+    ]
+  },
+  "memory_before": {
+    "sampled_peak_private_bytes": 8880128.0,
+    "samples": 10,
+    "peak_working_set_bytes": 18952192.0,
+    "note": "External process sampling every nominal 5 ms; peak working set is kernel peak through last live sample, private peak is sampled."
+  },
+  "memory_after": {
+    "samples": 14,
+    "note": "External process sampling every nominal 5 ms; peak working set is kernel peak through last live sample, private peak is sampled.",
+    "sampled_peak_private_bytes": 7208960.0,
+    "peak_working_set_bytes": 17469440.0
+  },
+  "scale_attempts": [
+    {
+      "outcome": "failed editor feedback threshold",
+      "data": {
+        "discovery": {
+          "note": "Run the 100-project/8-session release integration benchmark for process CPU/memory; this command measures discovery/search only.",
+          "projects": 100,
+          "scan_ms": 5.2425,
+          "search_mean_ms": 0.0005912
+        },
+        "document_open_ms": [
+          982.8516000000001,
+          279.59929999999997,
+          55.8043
+        ],
+        "edited_file_bytes": 508000,
+        "editor_input_ms": 81.3386,
+        "editor_search_ms": 414.6609,
+        "editor_undo_ms": 118.1442,
+        "excludes": "PowerShell, Agents, Windows Terminal/OpenConsole, compilers and benchmark test runner",
+        "idle_cpu_machine_percent": 0.33591866168145285,
+        "idle_cpu_single_core_percent": 6.718373233629057,
+        "live_sessions": 8,
+        "logical_processors": 20,
+        "one_sidebar_closed_working_set_sum_mib": 94.33984375,
+        "overview_first_project_frame_ms": 93.9998,
+        "overview_frontends": 1,
+        "own_process_count": 6,
+        "pids": [
+          3360,
+          26932,
+          27736,
+          29924,
+          32228,
+          42432
+        ],
+        "preview_editor_private_bytes_sum_mib": 32.77734375,
+        "preview_editor_working_set_sum_mib": 93.94140625,
+        "private_bytes_sum_mib": 23.5625,
+        "projects": 100,
+        "save_sampled_peak_working_set_sum_mib": 96.40625,
+        "save_visible_ms": 106.4931,
+        "search_frame_ms": 15.681400000000002,
+        "visible_session_frontends": 4,
+        "warm_session_frame_ms": [
+          97.2617,
+          107.9536,
+          109.5305,
+          95.4756
+        ],
+        "working_set_sum_mib": 82.90625
+      }
+    },
+    {
+      "outcome": "passed unchanged thresholds",
+      "data": {
+        "discovery": {
+          "note": "Run the 100-project/8-session release integration benchmark for process CPU/memory; this command measures discovery/search only.",
+          "projects": 100,
+          "scan_ms": 6.184399999999999,
+          "search_mean_ms": 0.0009628
+        },
+        "document_open_ms": [
+          77.6387,
+          31.397799999999997,
+          93.5253
+        ],
+        "edited_file_bytes": 508000,
+        "editor_input_ms": 10.0842,
+        "editor_search_ms": 15.696399999999999,
+        "editor_undo_ms": 15.135900000000001,
+        "excludes": "PowerShell, Agents, Windows Terminal/OpenConsole, compilers and benchmark test runner",
+        "idle_cpu_machine_percent": 0.29687004523894495,
+        "idle_cpu_single_core_percent": 5.937400904778899,
+        "live_sessions": 8,
+        "logical_processors": 20,
+        "one_sidebar_closed_working_set_sum_mib": 94.0390625,
+        "overview_first_project_frame_ms": 76.0979,
+        "overview_frontends": 1,
+        "own_process_count": 6,
+        "pids": [
+          9508,
+          10392,
+          25436,
+          25852,
+          28640,
+          40964
+        ],
+        "preview_editor_private_bytes_sum_mib": 32.09375,
+        "preview_editor_working_set_sum_mib": 93.71875,
+        "private_bytes_sum_mib": 23.25,
+        "projects": 100,
+        "save_sampled_peak_working_set_sum_mib": 97.18359375,
+        "save_visible_ms": 33.9953,
+        "search_frame_ms": 16.6018,
+        "visible_session_frontends": 4,
+        "warm_session_frame_ms": [
+          87.6874,
+          93.4659,
+          92.6136,
+          107.6383
+        ],
+        "working_set_sum_mib": 82.765625
+      }
+    },
+    {
+      "outcome": "passed unchanged thresholds after deferred math implementation",
+      "data": {
+        "discovery": {
+          "note": "Run the 100-project/8-session release integration benchmark for process CPU/memory; this command measures discovery/search only.",
+          "projects": 100,
+          "scan_ms": 2.8351,
+          "search_mean_ms": 0.0005973
+        },
+        "document_open_ms": [
+          63.0126,
+          62.3953,
+          92.8428
+        ],
+        "edited_file_bytes": 508000,
+        "editor_input_ms": 10.6365,
+        "editor_search_ms": 15.1599,
+        "editor_undo_ms": 16.4587,
+        "excludes": "PowerShell, Agents, Windows Terminal/OpenConsole, compilers and benchmark test runner",
+        "idle_cpu_machine_percent": 0.4452807292199702,
+        "idle_cpu_single_core_percent": 8.905614584399403,
+        "live_sessions": 8,
+        "logical_processors": 20,
+        "one_sidebar_closed_working_set_sum_mib": 93.75390625,
+        "overview_first_project_frame_ms": 77.04310000000001,
+        "overview_frontends": 1,
+        "own_process_count": 6,
+        "pids": [
+          24992,
+          25132,
+          28560,
+          33356,
+          33968,
+          35876
+        ],
+        "preview_editor_private_bytes_sum_mib": 32.1875,
+        "preview_editor_working_set_sum_mib": 93.5859375,
+        "private_bytes_sum_mib": 23.6171875,
+        "projects": 100,
+        "save_sampled_peak_working_set_sum_mib": 97.04296875,
+        "save_visible_ms": 63.74249999999999,
+        "search_frame_ms": 15.4269,
+        "visible_session_frontends": 4,
+        "warm_session_frame_ms": [
+          90.78450000000001,
+          94.3538,
+          93.4164,
+          110.3483
+        ],
+        "working_set_sum_mib": 82.85546875
+      }
+    }
+  ],
+  "verification": {
+    "ordinary_tests_passed": 102,
+    "new_tests": 5,
+    "clippy_warnings_denied": "passed",
+    "fmt": "passed",
+    "release_hotspots": "passed",
+    "release_large_directory": "passed",
+    "release_scale_final": "passed"
+  },
+  "limits": [
+    "Global Markdown/reference indexing still scans the loaded source.",
+    "First jump deep into unknown geometry lays out preceding blocks to determine exact row positions.",
+    "Search, copy-all and End explicitly complete layout in the worker.",
+    "Styled LRU has 64-block/512-row target; one oversized atomic block may exceed 512 rows within existing document row/span limits.",
+    "Known plain logical rows/source mappings remain retained; styling cache is bounded.",
+    "The first scale timing failure was not reproduced in two subsequent attempts; cause is undetermined. Original failed data retained, thresholds unchanged."
+  ]
+}
