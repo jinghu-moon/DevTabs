@@ -86,7 +86,11 @@ fn render_events<'a>(
             "Markdown layout budget exceeded; remaining content available in source mode".into(),
         );
     }
-    while trim && w.rows.last().is_some_and(|r| r.line.to_string().is_empty()) {
+    while trim
+        && w.rows.last().is_some_and(|r| {
+            r.line.spans.iter().all(|span| span.content.is_empty()) && r.line.style.bg.is_none()
+        })
+    {
         w.rows.pop();
     }
     if trim && w.rows.is_empty() {
@@ -503,6 +507,15 @@ impl Writer<'_> {
                 }
                 Err(e) => self.notes.push(format!("Mermaid: {e}; showing source")),
             }
+        }
+        if code.fenced {
+            let mut header = layout::row(
+                Vec::new(),
+                RowKind::Decoration,
+                self.palette.block.patch(self.palette.rule),
+            );
+            header.source.code_language = Some(super::safe_text(&code.language).into());
+            self.push(header);
         }
         let highlighted = super::highlight(
             &body,

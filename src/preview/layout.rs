@@ -153,7 +153,11 @@ pub(super) fn row(pieces: Vec<Piece>, kind: RowKind, base: Style) -> Row {
         .collect::<Vec<_>>();
     Row {
         line: Line::from(spans).style(base),
-        source: RowSource { kind, segments },
+        source: RowSource {
+            kind,
+            segments,
+            code_language: None,
+        },
     }
 }
 

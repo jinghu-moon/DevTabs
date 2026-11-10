@@ -359,6 +359,8 @@ pub struct SourceSegment {
 pub struct RowSource {
     pub kind: RowKind,
     pub segments: Vec<SourceSegment>,
+    /// Fixed viewport decoration on a code header; excluded from text and source selection.
+    pub code_language: Option<Arc<str>>,
 }
 
 #[derive(Debug)]
@@ -508,6 +510,7 @@ fn render_internal(
                 let display = safe_text(raw);
                 RowSource {
                     kind: RowKind::Code,
+                    code_language: None,
                     segments: vec![SourceSegment {
                         display: 0..display.chars().count(),
                         source: start..start + raw.len(),

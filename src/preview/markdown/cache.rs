@@ -223,7 +223,13 @@ impl MarkdownCache {
             self.done |= self.next == self.blocks.len();
         }
         if self.done {
-            while self.plain.last().is_some_and(|s| s.is_empty()) {
+            while self.plain.last().is_some_and(|s| s.is_empty())
+                && self
+                    .neutral
+                    .lines
+                    .last()
+                    .is_some_and(|line| line.style.bg.is_none())
+            {
                 Arc::make_mut(&mut self.plain).pop();
                 Arc::make_mut(&mut self.rows).pop();
                 Arc::make_mut(&mut self.neutral).lines.pop();
@@ -233,6 +239,7 @@ impl MarkdownCache {
                 Arc::make_mut(&mut self.rows).push(RowSource {
                     kind: crate::preview::RowKind::Prose,
                     segments: Vec::new(),
+                    code_language: None,
                 });
                 Arc::make_mut(&mut self.neutral).lines.push(Line::default());
             }

@@ -1999,6 +1999,17 @@ impl Sidebar {
                             .scroll((0, left.min(u16::MAX as usize) as u16)),
                         content,
                     );
+                    if let Some(language) = r.rows.get(row).and_then(|r| r.code_language.as_ref()) {
+                        if language.width() <= content.width as usize {
+                            frame.render_widget(
+                                Paragraph::new(language.as_ref())
+                                    .style(line.style)
+                                    .alignment(ratatui::layout::Alignment::Right),
+                                content,
+                            );
+                        }
+                        continue;
+                    }
                     let plain = &r.plain[row];
                     // Search results are sorted by (row, character). Locate this
                     // row once, then advance through overlapping matches with

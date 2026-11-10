@@ -70,6 +70,8 @@ fn indexed_blocks_match_complete_renderer_and_preserve_source_coordinates() {
     let samples = [
         "> - inline $x^2$ and $$\\frac{a}{b}$$\n> - [reference][global]\n\n[global]: https://example.com/$x$\n",
         "",
+        "```rust\n```\n",
+        "```\n```\n",
         "#\n\ntext\n\n##\n",
         "before\n\n<div>raw</div>\n\nafter\n",
         "# Heading\n\n[reference][global]\n\n> quoted **text**\n>\n> - nested\n> - item\n\n1. one\n2. two\n\n[global]: https://example.com\n",
@@ -96,6 +98,14 @@ fn indexed_blocks_match_complete_renderer_and_preserve_source_coordinates() {
                     true,
                 );
                 assert_eq!(r.plain, full.plain, "sample={sample} width={width}");
+                assert_eq!(
+                    r.rows.iter().map(|r| &r.code_language).collect::<Vec<_>>(),
+                    full.rows
+                        .iter()
+                        .map(|r| &r.code_language)
+                        .collect::<Vec<_>>(),
+                    "code headers differ sample={sample} width={width}"
+                );
                 assert_eq!(
                     r.window.as_ref().unwrap().text,
                     *full.text,
@@ -275,6 +285,109 @@ fn reading_fixture_keeps_code_diagrams_math_and_quotes_in_the_actual_sidebar() {
                 fs::write(directory.join(format!("reading-{}-{}.json",if light{"light"}else{"dark"},if crlf{"crlf"}else{"lf"})),serde_json::to_vec_pretty(&serde_json::json!({"columns":100,"rows":120,"plain":plain,"note":note,"cells":cells})).unwrap()).unwrap();
             }
         }
+    }
+}
+
+#[test]
+fn code_language_is_fixed_at_top_right_without_entering_code_or_source_selection() {
+    let root = Fixture::new();
+    let path = root.0.join("languages.md");
+    for (info, expected) in [
+        ("rust,no_run", "rust"),
+        ("json title=example", "json"),
+        ("unknown-language", "unknown-language"),
+        ("", ""),
+        ("很长的语言标签".repeat(20).as_str(), ""),
+    ] {
+        let source = format!("```{info}\nlet value = 42;\n```\n");
+        fs::write(&path, &source).unwrap();
+        for light in [false, true] {
+            for width in [64, 100] {
+                let mut s = Sidebar::new(root.0.clone());
+                s.visible = false;
+                s.files.light = light;
+                s.open(path.clone(), true).unwrap();
+                s.update_layout(Rect::new(0, 0, width, 12), false);
+                ready(&mut s);
+                let cached = s
+                    .document
+                    .as_ref()
+                    .unwrap()
+                    .rendered
+                    .as_ref()
+                    .unwrap()
+                    .window
+                    .clone();
+                for left in [0, 8, 100] {
+                    s.document.as_mut().unwrap().scroll[1].1 = left;
+                    for fallback in [false, true] {
+                        s.document
+                            .as_mut()
+                            .unwrap()
+                            .rendered
+                            .as_mut()
+                            .unwrap()
+                            .window = if fallback { None } else { cached.clone() };
+                        let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
+                        terminal.draw(|f| s.draw(f)).unwrap();
+                        let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+                        let code = r.plain.iter().position(|s| s == "let value = 42;").unwrap();
+                        assert!(code > 0, "language header must not overlap code");
+                        let header = code - 1;
+                        assert_eq!(
+                            r.plain[header], "",
+                            "label must stay out of searchable text"
+                        );
+                        let buffer = terminal.backend().buffer();
+                        let label: String = (1..width - 1)
+                            .map(|x| buffer[(x, 1 + header as u16)].symbol())
+                            .collect();
+                        // Hide a label that cannot fit; never truncate it into a misleading language.
+                        assert_eq!(
+                            label.trim(),
+                            expected,
+                            "info={info} light={light} width={width} left={left} fallback={fallback}"
+                        );
+                        if !expected.is_empty() {
+                            assert!(label.ends_with(expected), "language must be right aligned");
+                        }
+                        assert_eq!(
+                            r.selected_source((header, 0), (code, 15)),
+                            "let value = 42;"
+                        );
+                        let bg = buffer[(1, 1 + code as u16)].bg;
+                        for x in 1..width - 1 {
+                            assert_eq!(buffer[(x, 1 + header as u16)].bg, bg);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_fences_keep_their_headers_and_other_block_types_stay_unlabelled() {
+    use std::path::Path;
+    for info in ["rust", ""] {
+        let r = preview::render(
+            &format!("```{info}\n```"),
+            Path::new("test.md"),
+            true,
+            80,
+            false,
+        );
+        assert_eq!(r.rows[0].code_language.as_deref(), Some(info));
+        assert!(r.rows.iter().any(|r| r.kind == preview::RowKind::Code));
+        assert!(r.plain.iter().all(|s| s.is_empty()));
+    }
+    for (source, markdown) in [
+        ("    indented code\n", true),
+        ("```mermaid\ngraph LR\nA-->B\n```", true),
+        ("```rust\nlet x = 1;\n```", false),
+    ] {
+        let r = preview::render(source, Path::new("test.md"), markdown, 80, false);
+        assert!(r.rows.iter().all(|r| r.code_language.is_none()));
     }
 }
 
