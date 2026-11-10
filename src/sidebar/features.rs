@@ -139,8 +139,8 @@ impl Sidebar {
         let rect = self.geometry.preview?;
         let mut inner = crate::ui::preview_content(rect);
         if self.tools.paths.len() > 1 {
-            inner.y += 4;
-            inner.height = inner.height.saturating_sub(4);
+            inner.y += 3;
+            inner.height = inner.height.saturating_sub(3);
         }
         let compare = self
             .document
@@ -520,7 +520,7 @@ impl Sidebar {
                 (
                     Rect::new(
                         rect.x + 1 + i as u16 * width,
-                        rect.y + 2,
+                        rect.y + 1,
                         width.saturating_sub(1),
                         3,
                     ),
@@ -546,7 +546,7 @@ impl Sidebar {
             return Ok(false);
         }
         if self.geometry.preview.is_some_and(|r| {
-            (r.y + 2..=r.y + 4).contains(&event.row)
+            (r.y + 1..=r.y + 3).contains(&event.row)
                 && event.column > r.x
                 && event.column < r.right() - 1
         }) && self.tools.paths.len() > 1
@@ -623,7 +623,7 @@ impl Sidebar {
                 };
                 frame.render_widget(
                     Block::default().style(Style::new().bg(background)),
-                    Rect::new(rect.x + 1, rect.y + 2, rect.width - 2, 3),
+                    Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, 3),
                 );
             }
             for (r, path) in tabs {
