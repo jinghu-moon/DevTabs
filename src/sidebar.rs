@@ -935,7 +935,11 @@ impl Sidebar {
                         d.markdown_stats = markdown_stats;
                         // A new snapshot invalidates colors; viewport highlighting is separate.
                         if let Some(e) = &mut d.editor {
-                            e.highlight = result.window.as_ref().map(|w| (e.revision, w.clone()));
+                            e.highlight = result
+                                .window
+                                .as_ref()
+                                .filter(|_| !result.markdown)
+                                .map(|w| (e.revision, w.clone()));
                         }
                         d.code_desired = None;
                         d.code_generation

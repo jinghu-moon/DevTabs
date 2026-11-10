@@ -76,7 +76,7 @@ impl Editor {
         self.area.lines().join("\n")
     }
     pub fn source(&self) -> String {
-        self.text().replace('\n', self.loaded.newline)
+        self.area.lines().join(self.loaded.newline)
     }
     pub fn dirty(&self) -> bool {
         let _perf = crate::perf::span(crate::perf::Metric::EditorDirty);
@@ -472,6 +472,93 @@ pub fn encode(text: &str, encoding: Encoding) -> Vec<u8> {
     }
 }
 
+/// Encode directly to a sink using at most 8 KiB of stack scratch space.
+/// Short writes and errors follow std::io::Write::write_all semantics.
+pub fn write_encoded(
+    text: &str,
+    encoding: Encoding,
+    output: &mut impl Write,
+) -> std::io::Result<usize> {
+    let _perf = crate::perf::span(crate::perf::Metric::SaveEncode);
+    let mut count = 0;
+    let bom: &[u8] = match encoding {
+        Encoding::Utf8 => &[],
+        Encoding::Utf8Bom => &[0xef, 0xbb, 0xbf],
+        Encoding::Utf16Le => &[0xff, 0xfe],
+        Encoding::Utf16Be => &[0xfe, 0xff],
+    };
+    output.write_all(bom)?;
+    count += bom.len();
+    if matches!(encoding, Encoding::Utf8 | Encoding::Utf8Bom) {
+        for chunk in text.as_bytes().chunks(8192) {
+            output.write_all(chunk)?;
+            count += chunk.len();
+        }
+    } else {
+        let mut buffer = [0u8; 8192];
+        let mut filled = 0;
+        for unit in text.encode_utf16() {
+            let bytes = if encoding == Encoding::Utf16Le {
+                unit.to_le_bytes()
+            } else {
+                unit.to_be_bytes()
+            };
+            buffer[filled..filled + 2].copy_from_slice(&bytes);
+            filled += 2;
+            if filled == buffer.len() {
+                output.write_all(&buffer)?;
+                count += filled;
+                filled = 0;
+            }
+        }
+        output.write_all(&buffer[..filled])?;
+        count += filled;
+    }
+    Ok(count)
+}
+
+fn file_matches(file: &mut File, expected: &[u8]) -> std::io::Result<bool> {
+    let _perf = crate::perf::span(crate::perf::Metric::SaveVerify);
+    let mut buffer = [0u8; 8192];
+    let mut offset = 0;
+    loop {
+        let read = match file.read(&mut buffer) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            result => result?,
+        };
+        if read == 0 {
+            return Ok(offset == expected.len());
+        }
+        if expected.get(offset..offset + read) != Some(&buffer[..read]) {
+            return Ok(false);
+        }
+        offset += read;
+    }
+}
+fn encoded_matches(text: &str, encoding: Encoding, expected: &[u8]) -> bool {
+    struct Compare<'a> {
+        bytes: &'a [u8],
+        offset: usize,
+    }
+    impl Write for Compare<'_> {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.bytes.get(self.offset..self.offset + bytes.len()) != Some(bytes) {
+                return Err(std::io::Error::from(std::io::ErrorKind::InvalidData));
+            }
+            self.offset += bytes.len();
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut compare = Compare {
+        bytes: expected,
+        offset: 0,
+    };
+    write_encoded(text, encoding, &mut compare).is_ok() && compare.offset == expected.len()
+}
+
 pub fn eligible(path: &Path) -> Result<()> {
     ensure!(
         !path.to_string_lossy().starts_with("\\\\"),
@@ -514,16 +601,13 @@ pub struct Save {
 }
 pub fn save(request: &Save) -> Result<Loaded> {
     let _perf = crate::perf::span(crate::perf::Metric::Save);
-    save_staged(request, |output, bytes| {
-        output.write_all(bytes)?;
+    save_staged(request, |output| {
+        write_encoded(&request.source, request.snapshot.encoding, output)?;
         output.sync_all()?;
         Ok(())
     })
 }
-fn save_staged(
-    request: &Save,
-    write: impl FnOnce(&mut File, &[u8]) -> Result<()>,
-) -> Result<Loaded> {
+fn save_staged(request: &Save, write: impl FnOnce(&mut File) -> Result<()>) -> Result<Loaded> {
     eligible(&request.snapshot.path)?;
     let _lock = SaveLock::acquire(&request.snapshot.path)?;
     let mut options = OpenOptions::new();
@@ -536,12 +620,8 @@ fn save_staged(
     let mut held = options
         .open(&request.snapshot.path)
         .context("Cannot exclude concurrent direct writers; buffer retained")?;
-    let mut current = Vec::new();
-    Read::by_ref(&mut held)
-        .take((preview::MAX_BYTES + 1) as u64)
-        .read_to_end(&mut current)?;
     ensure!(
-        current == request.snapshot.bytes,
+        file_matches(&mut held, &request.snapshot.bytes)?,
         "Disk content changed; reload or copy edits for external resolution"
     );
     let identity = file_id(&held)?;
@@ -549,7 +629,6 @@ fn save_staged(
         request.snapshot.identity == Some(identity),
         "File identity changed since opening; save refused"
     );
-    let bytes = encode(&request.source, request.snapshot.encoding);
     let temp = request
         .snapshot
         .path
@@ -559,7 +638,7 @@ fn save_staged(
             .write(true)
             .create_new(true)
             .open(&temp)?;
-        write(&mut output, &bytes)?;
+        write(&mut output)?;
         drop(output);
         ensure!(
             file_id(&File::open(&request.snapshot.path)?)? == identity,
@@ -573,7 +652,7 @@ fn save_staged(
         }
         let loaded = preview::read(&request.snapshot.path)?;
         ensure!(
-            loaded.bytes == bytes,
+            encoded_matches(&request.source, request.snapshot.encoding, &loaded.bytes),
             "Disk changed immediately after save; delivery state unknown, buffer retained"
         );
         Ok(loaded)
@@ -614,17 +693,19 @@ fn replace_checked(request: &Save, temp: &Path) -> Result<()> {
     // Capture the file actually replaced, not only an earlier snapshot. An
     // uncooperative rename can race the preflight check. Never delete its data
     // or report success; preserve both local buffer and displaced disk version.
-    let previous = preview::read(&backup).with_context(|| {
+    let mut previous = File::open(&backup).with_context(|| {
         format!(
             "Cannot verify replaced file; recovery retained: {}",
             backup.display()
         )
     })?;
     ensure!(
-        previous.bytes == request.snapshot.bytes && previous.identity == request.snapshot.identity,
+        file_matches(&mut previous, &request.snapshot.bytes)?
+            && Some(file_id(&previous)?) == request.snapshot.identity,
         "External replacement raced save; disk may contain this edit. Replaced version retained at {}; buffer retained; resolve externally",
         backup.display()
     );
+    drop(previous);
     fs::remove_file(&backup)
         .with_context(|| format!("Saved, but recovery cleanup failed: {}", backup.display()))?;
     Ok(())
@@ -741,8 +822,8 @@ mod tests {
             source: "replacement".into(),
             revision: 1,
         };
-        let result = save_staged(&request, |file, bytes| {
-            file.write_all(&bytes[..3])?;
+        let result = save_staged(&request, |file| {
+            file.write_all(b"rep")?;
             Err(std::io::Error::from_raw_os_error(112).into())
         });
         assert!(result.is_err());

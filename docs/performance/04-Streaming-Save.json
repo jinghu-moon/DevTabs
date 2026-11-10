@@ -1,0 +1,442 @@
+{
+  "stage": 4,
+  "date": "2026-11-10",
+  "baseline_commit": "98a3207",
+  "before": {
+    "cases": [
+      {
+        "allocated_bytes": 3962813,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 0,
+        "peak_additional_live_bytes": 1296560,
+        "save_ms": 11.7506,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 3962813,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 1,
+        "peak_additional_live_bytes": 1296560,
+        "save_ms": 8.296100000000001,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 3962813,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 2,
+        "peak_additional_live_bytes": 1296560,
+        "save_ms": 7.770499999999999,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 3962813,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 3,
+        "peak_additional_live_bytes": 1296560,
+        "save_ms": 7.9220999999999995,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 3962813,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 4,
+        "peak_additional_live_bytes": 1296560,
+        "save_ms": 7.9098,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 3962816,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 0,
+        "peak_additional_live_bytes": 1296563,
+        "save_ms": 8.2784,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 3962816,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 1,
+        "peak_additional_live_bytes": 1296563,
+        "save_ms": 7.4948999999999995,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 3962816,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 2,
+        "peak_additional_live_bytes": 1296563,
+        "save_ms": 7.6028,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 3962816,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 3,
+        "peak_additional_live_bytes": 1296563,
+        "save_ms": 7.845,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 3962816,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 4,
+        "peak_additional_live_bytes": 1296563,
+        "save_ms": 7.693700000000001,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 0,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 9.2876,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 1,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 9.1538,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 2,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 9.0894,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 3,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 9.668,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 4,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 9.2374,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 0,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 9.074499999999999,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 1,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 8.4254,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 2,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 7.8463,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 3,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 9.155999999999999,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 7862247,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 4,
+        "peak_additional_live_bytes": 2366032,
+        "save_ms": 8.916699999999999,
+        "source_bytes": 234000
+      }
+    ],
+    "scope": "Actual editor::save, including conflict check, atomic replacement, backup verification and reload; request source/snapshot allocations precede measurement; global System allocation counts, serial process"
+  },
+  "after": {
+    "cases": [
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 0,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 9.2868,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 1,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 6.766,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 2,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 6.2934,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 3,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 6.3987,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234000,
+        "encoding": "Utf8",
+        "iteration": 4,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 6.6831,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 0,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 6.4725,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 1,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 6.7522,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 2,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 7.0055,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 3,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 6.6463,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 1604684,
+        "encoded_bytes": 234003,
+        "encoding": "Utf8Bom",
+        "iteration": 4,
+        "peak_additional_live_bytes": 799450,
+        "save_ms": 6.522799999999999,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 0,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 8.3463,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 1,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 7.5452,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 2,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 8.1862,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 3,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 8.2281,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Le",
+        "iteration": 4,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 7.7583,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 0,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 7.813000000000001,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 1,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 6.8281,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 2,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 7.794899999999999,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 3,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 7.0704,
+        "source_bytes": 234000
+      },
+      {
+        "allocated_bytes": 2884972,
+        "encoded_bytes": 396002,
+        "encoding": "Utf16Be",
+        "iteration": 4,
+        "peak_additional_live_bytes": 1316490,
+        "save_ms": 7.4308000000000005,
+        "source_bytes": 234000
+      }
+    ],
+    "scope": "Actual editor::save, including conflict check, atomic replacement, backup verification and reload; request source/snapshot allocations precede measurement; global System allocation counts, serial process"
+  },
+  "scale_after": {
+    "discovery": {
+      "note": "Run the 100-project/8-session release integration benchmark for process CPU/memory; this command measures discovery/search only.",
+      "projects": 100,
+      "scan_ms": 3.3444,
+      "search_mean_ms": 0.0006456
+    },
+    "document_open_ms": [
+      63.679700000000004,
+      60.9523,
+      76.9589
+    ],
+    "edited_file_bytes": 508000,
+    "editor_input_ms": 9.854800000000001,
+    "editor_search_ms": 15.2704,
+    "editor_undo_ms": 16.800900000000002,
+    "excludes": "PowerShell, Agents, Windows Terminal/OpenConsole, compilers and benchmark test runner",
+    "idle_cpu_machine_percent": 0.1406197084803699,
+    "idle_cpu_single_core_percent": 2.8123941696073977,
+    "live_sessions": 8,
+    "logical_processors": 20,
+    "one_sidebar_closed_working_set_sum_mib": 95.03515625,
+    "overview_first_project_frame_ms": 63.2066,
+    "overview_frontends": 1,
+    "own_process_count": 6,
+    "pids": [
+      8836,
+      9628,
+      22672,
+      23884,
+      27592,
+      36860
+    ],
+    "preview_editor_private_bytes_sum_mib": 32.6953125,
+    "preview_editor_working_set_sum_mib": 94.5703125,
+    "private_bytes_sum_mib": 24.2890625,
+    "projects": 100,
+    "save_sampled_peak_working_set_sum_mib": 97.2734375,
+    "save_visible_ms": 63.467,
+    "search_frame_ms": 15.364299999999998,
+    "visible_session_frontends": 4,
+    "warm_session_frame_ms": [
+      88.5293,
+      94.44959999999999,
+      91.68990000000001,
+      107.0512
+    ],
+    "working_set_sum_mib": 83.87109375
+  },
+  "verification": {
+    "ordinary_tests_passed": 110,
+    "new_tests": 2,
+    "before_allocation_regression": "failed: exceeded 2000000 additional live heap bytes",
+    "after_allocation_regression": "passed",
+    "clippy_warnings_denied": "passed",
+    "fmt": "passed",
+    "existing_save_conflict_atomicity_fault_tests": "passed",
+    "release_scale": "passed",
+    "markdown_to_editor_color_regression": "passed"
+  },
+  "limits": [
+    "Allocation counters observe Rust System heap allocation, not native allocations or OS working set.",
+    "Save request already owns a full source string and Loaded snapshot before measurement; final Loaded/source/editor state still retains full buffers.",
+    "Whole-file atomic replacement remains; streaming reduces staging and verification copies, not the bytes that must be written.",
+    "Snapshot preflight, destination identity checks, backup verification and immediate delivery verification remain; arbitrary uncooperative external rename races still require external resolution.",
+    "Five-sample timings include actual filesystem operations and can vary with storage/antivirus."
+  ]
+}

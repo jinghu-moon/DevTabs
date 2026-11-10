@@ -26,7 +26,7 @@ metrics! {
     Markdown => "markdown.parse_layout", MarkdownViewport => "markdown.viewport_layout", TableLayout => "markdown.table_layout", CodeLayout => "markdown.code_layout", Mermaid => "markdown.mermaid", Math => "markdown.math",
     QueueWait => "files.queue_wait", ResultWait => "files.result_backpressure", QueueFull => "files.queue_rejected",
     EditorEdit => "editor.edit", EditorClone => "editor.clone_candidate", EditorValidate => "editor.validate",
-    EditorDirty => "editor.dirty_compare", EditorDraw => "editor.draw", Save => "editor.save",
+    EditorDirty => "editor.dirty_compare", EditorDraw => "editor.draw", Save => "editor.save", SaveEncode => "editor.stream_encode", SaveVerify => "editor.stream_verify",
     Rpc => "ipc.rpc", RpcPoll => "ipc.poll", RemoteApply => "terminal.apply_snapshot",
     HostRequest => "host.request", HostSnapshot => "host.snapshot", TerminalParse => "terminal.parse",
     OverviewFilter => "overview.filter", OverviewFrame => "overview.frame_and_flush", Discovery => "overview.discovery_benchmark",

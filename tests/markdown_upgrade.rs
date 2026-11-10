@@ -373,6 +373,10 @@ fn sidebar_resize_theme_and_unsaved_preview_use_current_render_state() {
     let r = d.rendered.as_ref().unwrap();
     assert!(r.source.contains("UNSAVED"));
     assert!(r.plain.join("\n").contains("UNSAVED"));
+    assert!(
+        d.editor.as_ref().unwrap().highlight.is_none(),
+        "Markdown display rows must never become editor source colors"
+    );
     assert!(!std::fs::read_to_string(path).unwrap().contains("UNSAVED"));
     drop(s);
     std::fs::remove_dir_all(root).unwrap();
