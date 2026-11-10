@@ -337,6 +337,7 @@ impl MarkdownCache {
         self.stats.known_rows = self.plain.len();
         self.stats.complete = self.done;
         Rendered {
+            projection: None,
             reading: self.reading.clone(),
             text: self.neutral.clone(),
             window: Some(window),

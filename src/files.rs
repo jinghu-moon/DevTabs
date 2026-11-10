@@ -72,6 +72,7 @@ pub enum Job {
     },
     Render {
         editor: bool,
+        wrap: bool,
         path: PathBuf,
         id: u64,
         source: Arc<str>,
@@ -92,10 +93,34 @@ pub enum Job {
         generation: Arc<std::sync::atomic::AtomicU64>,
         expected: u64,
     },
+    Companion {
+        path: PathBuf,
+        id: u64,
+        source: Arc<str>,
+        width: u16,
+        light: bool,
+        viewport: preview::CodeViewport,
+    },
+    Diff {
+        path: PathBuf,
+        id: u64,
+        old: Arc<str>,
+        new: Arc<str>,
+    },
     Close(PathBuf),
     ValidateInput(PathBuf),
 }
 pub enum Completed {
+    Companion {
+        path: PathBuf,
+        id: u64,
+        result: preview::Rendered,
+    },
+    Diff {
+        path: PathBuf,
+        id: u64,
+        result: preview::tools::Diff,
+    },
     Edit {
         id: u64,
         result: Result<Box<crate::editor::Editor>>,
@@ -219,16 +244,24 @@ impl Workers {
                         Some(Completed::Directory{path,generation,batch:result})
                     }
                     Job::Read{path,id}=>{let result=preview::read(&path);Some(Completed::Read{path,id,result})}
-                    Job::Render{path,id,source,markdown,width,light,editor,viewport,generation,complete,reading}=>{
+                    Job::Render{path,id,source,markdown,width,light,editor,viewport,generation,complete,reading,wrap}=>{
                         let code=if markdown {None} else {code_cache.render(source.clone(),&path,viewport,light,&generation,id)};
                         let mut result=if editor {preview::render_editor_plain(source,width,light)} else if markdown {markdown_cache.render_reading(source,width,light,viewport,complete,&reading)} else {preview::render_plain(source,&path,false,width,light)};
                         if !markdown {result.window=code;}
+                        if wrap && !editor { result.wrap_code(width.saturating_sub(if markdown {0} else {6}) as usize); }
                         Some(Completed::Render{path,id,result,stats:(!markdown).then(||code_cache.stats()),markdown_stats:markdown.then(||markdown_cache.stats())})
                     }
                     Job::Highlight{path,id,source,viewport,light,generation,expected}=>{
                         let window=code_cache.render(source,&path,viewport,light,&generation,expected);
                         Some(Completed::Highlight{path,id,window,stats:code_cache.stats()})
                     }
+                    Job::Companion{path,id,source,width,light,viewport}=>{
+                        let mut result=preview::render_plain(source.clone(),&path,false,width,light);
+                        let generation=std::sync::atomic::AtomicU64::new(id);
+                        result.window=code_cache.render(source,&path,viewport,light,&generation,id);
+                        Some(Completed::Companion{path,id,result})
+                    },
+                    Job::Diff{path,id,old,new}=>Some(Completed::Diff{path,id,result:preview::tools::diff(&old,&new)}),
                     Job::Close(path)=>{cursor_guard.take().expect("ordered cursor ownership").remove(&path);None}
                     Job::ValidateInput(path)=>{let result=(||->Result<PathBuf>{ensure!(fs::metadata(&path)?.is_file(),"Drop target is not a file");path_input(&path)?;Ok(path)})();Some(Completed::Input(result))}
                 };
@@ -241,7 +274,10 @@ impl Workers {
         Self { tx, render_tx, rx }
     }
     pub fn send(&self, job: Job) -> Result<()> {
-        let tx = if matches!(job, Job::Render { .. } | Job::Highlight { .. }) {
+        let tx = if matches!(
+            job,
+            Job::Render { .. } | Job::Highlight { .. } | Job::Companion { .. } | Job::Diff { .. }
+        ) {
             &self.render_tx
         } else {
             &self.tx

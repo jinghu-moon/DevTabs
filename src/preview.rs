@@ -15,6 +15,7 @@ mod markdown;
 mod math;
 pub mod reading;
 mod theme;
+pub mod tools;
 mod viewport;
 pub use markdown::{MarkdownCache, MarkdownStats};
 pub use reading::{ReadingAction, ReadingIndex};
@@ -374,6 +375,7 @@ pub struct TableRow {
 
 #[derive(Debug)]
 pub struct Rendered {
+    pub projection: Option<Arc<Vec<tools::VisualRow>>>,
     pub reading: Arc<ReadingIndex>,
     pub text: Arc<Text<'static>>,
     pub window: Option<Arc<HighlightWindow>>,
@@ -537,6 +539,7 @@ fn render_internal(
     };
     let plain = text.lines.iter().map(ToString::to_string).collect();
     Rendered {
+        projection: None,
         reading,
         text: Arc::new(text),
         window: None,
@@ -553,6 +556,7 @@ fn render_internal(
 pub fn render_editor(source: &str, path: &Path, width: u16, light: bool) -> Rendered {
     let safe = display_text(source);
     Rendered {
+        projection: None,
         text: Arc::new(highlight(&safe, path, light)),
         reading: Default::default(),
         window: None,
@@ -573,6 +577,7 @@ pub fn render_editor(source: &str, path: &Path, width: u16, light: bool) -> Rend
 
 pub(crate) fn render_editor_plain(source: Arc<str>, width: u16, light: bool) -> Rendered {
     Rendered {
+        projection: None,
         text: Arc::new(Text::default()),
         reading: Default::default(),
         window: None,

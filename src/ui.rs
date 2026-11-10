@@ -41,6 +41,21 @@ pub fn preview_content(rect: Rect) -> Rect {
     })
 }
 
+/// Erase glyphs straddling the left edge before clearing a popup's cells.
+pub fn clear_popup(frame: &mut Frame, rect: Rect) {
+    use unicode_width::UnicodeWidthStr;
+    let rect = rect.intersection(frame.area());
+    if rect.x > frame.area().x {
+        for y in rect.y..rect.bottom() {
+            let cell = &mut frame.buffer_mut()[(rect.x - 1, y)];
+            if cell.symbol().width() > 1 {
+                cell.set_symbol(" ");
+            }
+        }
+    }
+    frame.render_widget(Clear, rect);
+}
+
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let _perf = crate::perf::span(crate::perf::Metric::Ui);
     let area = frame.area();

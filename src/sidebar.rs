@@ -19,6 +19,7 @@ use std::{
 use tui_tree_widget::{Tree, TreeItem};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
+mod features;
 mod reading;
 mod scroll;
 
@@ -103,6 +104,14 @@ pub struct Menu {
 }
 #[derive(Clone, Copy, Debug)]
 pub enum Command {
+    Maximize,
+    Wrap,
+    Compare,
+    Diff,
+    Goto,
+    Search,
+    NextTab,
+    PreviousTab,
     Insert,
     CopyAbsolute,
     CopyRelative,
@@ -153,6 +162,7 @@ enum Prompt {
 }
 
 pub struct Document {
+    view: features::DocumentView,
     reader: reading::DocumentReading,
     pub editor: Option<crate::editor::Editor>,
     pub editing: bool,
@@ -187,6 +197,7 @@ pub struct Document {
 impl Document {
     fn new(path: PathBuf, id: u64) -> Self {
         Self {
+            view: Default::default(),
             reader: Default::default(),
             editor: None,
             editing: false,
@@ -234,37 +245,34 @@ impl Document {
     fn search(&mut self) {
         let _perf = crate::perf::span(crate::perf::Metric::PreviewSearch);
         self.matches.clear();
+        self.view.search_targets.clear();
         self.match_index = 0;
+        self.view.search_error.clear();
         if self.search.is_empty() {
             return;
         }
         if let Some(r) = &self.rendered {
-            for (row, line) in r.plain.iter().enumerate() {
-                // Preserve original character positions even when Unicode case folding changes byte lengths.
-                let chars: Vec<char> = line.chars().collect();
-                let needle = self.search.to_lowercase();
-                let count = self.search.chars().count();
-                for col in 0..chars.len() {
-                    let part: String = chars[col..chars.len().min(col + count)].iter().collect();
-                    if part.to_lowercase() == needle {
-                        self.matches.push((row, col, col + count));
-                    }
+            match r.find(&self.search, self.view.search_options) {
+                Ok((matches, targets)) => {
+                    self.matches = matches;
+                    self.view.search_targets = targets;
                 }
+                Err(e) => self.view.search_error = format!("Invalid pattern: {e}"),
             }
         }
     }
     fn jump_match(&mut self, back: bool) {
-        if self.matches.is_empty() {
+        if self.view.search_targets.is_empty() {
             return;
         }
-        let n = self.matches.len();
+        let n = self.view.search_targets.len();
         self.match_index = if back {
             (self.match_index + n - 1) % n
         } else {
             (self.match_index + 1) % n
         };
-        let (row, col, _) = self.matches[self.match_index];
-        *self.offset_mut() = (row, col);
+        let (row, col) = self.view.search_targets[self.match_index];
+        *self.offset_mut() = (row, if self.view.wrap { 0 } else { col });
     }
     pub fn selected_text(&self) -> Option<String> {
         let (mut start, mut end) = self.selection?;
@@ -275,7 +283,14 @@ impl Document {
         let mut out = String::new();
         for row in start.0..=end.0.min(r.plain.len().saturating_sub(1)) {
             if row > start.0 {
-                out.push('\n');
+                let continuation = r.projection.as_ref().is_some_and(|p| {
+                    p.get(row)
+                        .zip(p.get(row - 1))
+                        .is_some_and(|(a, b)| a.original == b.original)
+                });
+                if !continuation {
+                    out.push('\n');
+                }
             }
             let line = &r.plain[row];
             let a = if row == start.0 { start.1 } else { 0 };
@@ -291,6 +306,7 @@ impl Document {
 }
 
 pub struct Sidebar {
+    tools: features::Workspace,
     reader: reading::ReadingUi,
     tree_view: Option<TreeView>,
     prompt: Option<Prompt>,
@@ -346,7 +362,10 @@ impl Sidebar {
             .is_some_and(|e| e.dirty() || e.saving)
     }
     pub fn modal(&self) -> bool {
-        self.prompt.is_some()
+        self.tools.navigation.is_some()
+            || self.tools.diff.is_some()
+            || self.tools.diff_pending.is_some()
+            || self.prompt.is_some()
             || self.menu.is_some()
             || self.query.is_some()
             || self.reader.outline.is_some()
@@ -441,6 +460,7 @@ impl Sidebar {
     }
     pub fn new(root: PathBuf) -> Self {
         Self {
+            tools: Default::default(),
             reader: Default::default(),
             tree_view: None,
             prompt: None,
@@ -481,12 +501,21 @@ impl Sidebar {
             if self.document.as_ref().is_some_and(|d| d.editing) {
                 crate::ui::content(rect)
             } else {
-                crate::ui::preview_content(rect)
+                self.preview_panes()
+                    .map_or_else(|| crate::ui::preview_content(rect), |(r, _)| r)
             }
         })
     }
     pub fn update_layout(&mut self, area: Rect, split: bool) -> bool {
-        let next = panels(area, split, self.visible, self.showing());
+        self.tools.area = area;
+        self.tools.split = split;
+        let mut next = panels(area, split, self.visible, self.showing());
+        if self.tools.maximized && self.showing() && area.width >= 40 && area.height >= 12 {
+            next.tree = None;
+            next.debug = None;
+            next.overlay = true;
+            next.preview = Some(Rect::new(area.x, area.y, area.width, area.height - 2));
+        }
         let changed = next != self.geometry;
         if changed {
             if next.preview.map(|r| r.width) != self.geometry.preview.map(|r| r.width)
@@ -558,12 +587,23 @@ impl Sidebar {
             return Ok(());
         }
         self.serial += 1;
-        self.io.send(Job::Read {
-            path: path.clone(),
-            id: self.serial,
-        })?;
-        self.source_focus = self.focus;
+        if !self.tools.parked.iter().any(|d| d.path == path) {
+            self.io.send(Job::Read {
+                path: path.clone(),
+                id: self.serial,
+            })?;
+        }
         self.remember_reading();
+        self.park_document();
+        self.register_tab(&path);
+        if let Some(index) = self.tools.parked.iter().position(|d| d.path == path) {
+            self.document = Some(self.tools.parked.remove(index));
+            self.preview_visible = true;
+            self.focus = Focus::Preview;
+            self.refresh_document()?;
+            return Ok(());
+        }
+        self.source_focus = self.focus;
         self.document = Some(Document::new(path, self.serial));
         self.restore_reading();
         self.preview_visible = true;
@@ -578,7 +618,17 @@ impl Sidebar {
             return;
         }
         self.remember_reading();
+        if let Some(d) = &self.document {
+            self.tools.paths.retain(|p| p != &d.path);
+        }
         self.document = None;
+        if let Some(path) = self.tools.paths.last().cloned() {
+            if let Err(e) = self.open(path, true) {
+                self.say(e.to_string(), false);
+            }
+            return;
+        }
+        self.tools.maximized = false;
         self.preview_visible = false;
         if matches!(self.focus, Focus::Preview | Focus::Editor) {
             self.focus = if self.source_focus == Focus::Tree && self.geometry.tree.is_some() {
@@ -641,6 +691,7 @@ impl Sidebar {
             rows: viewport_area.map_or(40, |r| r.height.max(1)) as usize,
         };
         self.io.send(Job::Render {
+            wrap: d.view.wrap,
             editor: d.editing,
             path: d.path.clone(),
             id,
@@ -648,7 +699,10 @@ impl Sidebar {
             markdown: d.markdown && !d.editing,
             width,
             light: self.files.light,
-            viewport,
+            viewport: d
+                .rendered
+                .as_ref()
+                .map_or(viewport, |r| r.worker_viewport(viewport)),
             generation: d.code_generation.clone(),
             complete: !d.search.is_empty() || d.markdown_end || d.markdown_copy,
             reading: preview::reading::ReadingOptions {
@@ -723,7 +777,7 @@ impl Sidebar {
             path: d.path.clone(),
             id,
             source: r.source.clone(),
-            viewport,
+            viewport: r.worker_viewport(viewport),
             light: self.files.light,
             generation: d.code_generation.clone(),
             expected: id,
@@ -765,7 +819,11 @@ impl Sidebar {
         }
         for output in outputs {
             changed = true;
+            let Some(output) = self.feature_completion(output) else {
+                continue;
+            };
             match output {
+                Completed::Companion { .. } | Completed::Diff { .. } => unreachable!(),
                 Completed::Edit { id, result } => {
                     if let Some(d) = &mut self.document
                         && d.edit_requested == Some(id)
@@ -804,6 +862,12 @@ impl Sidebar {
                             Ok(loaded) => {
                                 let loaded = std::sync::Arc::new(loaded);
                                 editor.mark_saved(loaded.clone(), source.replace("\r\n", "\n"));
+                                if let Some(old) = &d.loaded
+                                    && old.bytes != loaded.bytes
+                                {
+                                    d.view.previous = Some(old.clone());
+                                }
+                                d.view.disk = None;
                                 d.loaded = Some(loaded);
                                 d.stale.clear();
                                 self.say("Saved", true);
@@ -864,6 +928,12 @@ impl Sidebar {
                         match result {
                             Ok(loaded) => {
                                 let loaded = std::sync::Arc::new(loaded);
+                                if let Some(old) = &d.loaded
+                                    && old.bytes != loaded.bytes
+                                {
+                                    d.view.previous = Some(old.clone());
+                                    d.view.disk = Some(loaded.clone());
+                                }
                                 if let Some(editor) = &mut d.editor {
                                     if loaded.bytes != editor.loaded.bytes
                                         || loaded.identity != editor.loaded.identity
@@ -943,7 +1013,7 @@ impl Sidebar {
                             {
                                 e.highlight = Some((e.revision, window.clone()));
                             }
-                            r.window = Some(window);
+                            r.attach_window(Some(window));
                         }
                     }
                 }
@@ -1007,7 +1077,7 @@ impl Sidebar {
                         if d.markdown_search_jump && d.rendered.as_ref().is_some_and(|r| r.complete)
                         {
                             if let Some(&(row, col, _)) = d.matches.first() {
-                                *d.offset_mut() = (row, col);
+                                *d.offset_mut() = (row, if d.view.wrap { 0 } else { col });
                             }
                             d.markdown_search_jump = false;
                         }
@@ -1055,6 +1125,7 @@ impl Sidebar {
         }
         if active && self.showing() {
             self.highlight_document();
+            changed |= self.feature_tick();
         }
         if let Some(d) = &mut self.document
             && d.markdown_copy
@@ -1202,6 +1273,14 @@ impl Sidebar {
                 ]);
             }
             items.extend([
+                ("Maximize / restore [Z]", Command::Maximize),
+                ("Toggle code wrapping [W]", Command::Wrap),
+                ("Markdown source comparison [V]", Command::Compare),
+                ("File changes [D]", Command::Diff),
+                ("Go to source line / percent [G]", Command::Goto),
+                ("Search preview [/; Alt+C/W/R options]", Command::Search),
+                ("Next file [Alt+PageDown]", Command::NextTab),
+                ("Previous file [Alt+PageUp]", Command::PreviousTab),
                 ("Heading outline [T]", Command::Outline),
                 ("Reading back [Alt+Left]", Command::Back),
                 ("Locate in file tree", Command::Locate),
@@ -1218,6 +1297,17 @@ impl Sidebar {
     }
     fn command(&mut self, command: Command, target: PathBuf) -> Result<Action> {
         match command {
+            Command::Maximize
+            | Command::Wrap
+            | Command::Compare
+            | Command::Diff
+            | Command::Goto
+            | Command::Search
+            | Command::NextTab
+            | Command::PreviousTab => {
+                self.preview_command(command)?;
+                return Ok(Action::None);
+            }
             Command::Mode => {
                 if let Some(d) = &mut self.document
                     && d.loaded.as_ref().is_some_and(|l| l.markdown())
@@ -1380,11 +1470,14 @@ impl Sidebar {
             d.markdown_search_jump = d.markdown && d.rendered.as_ref().is_some_and(|r| !r.complete);
             d.search();
             if let Some(&(row, col, _)) = d.matches.first() {
-                *d.offset_mut() = (row, col);
+                *d.offset_mut() = (row, if d.view.wrap { 0 } else { col });
             }
         }
     }
     pub fn paste(&mut self, text: &str) -> Result<()> {
+        if self.feature_paste(text) {
+            return Ok(());
+        }
         if let Some(o) = &mut self.reader.outline {
             o.paste(text);
             return Ok(());
@@ -1408,6 +1501,9 @@ impl Sidebar {
         Ok(())
     }
     pub fn key(&mut self, key: KeyEvent) -> Result<Action> {
+        if self.feature_key(key)? {
+            return Ok(Action::None);
+        }
         if self.outline_key(key) {
             return Ok(Action::None);
         }
@@ -1649,7 +1745,7 @@ impl Sidebar {
                     if d.selection.take().is_none() {
                         if !d.search.is_empty() {
                             d.search.clear();
-                            d.matches.clear();
+                            d.search();
                         } else {
                             self.close();
                         }
@@ -1708,6 +1804,9 @@ impl Sidebar {
     }
     pub fn mouse(&mut self, event: MouseEvent) -> Result<(bool, Action)> {
         if self.outline_mouse(event) {
+            return Ok((true, Action::None));
+        }
+        if self.feature_mouse(event)? {
             return Ok((true, Action::None));
         }
         if self.modal() {
@@ -1869,7 +1968,7 @@ impl Sidebar {
                 return Ok((true, Action::None));
             }
             self.focus = Focus::Preview;
-            let inner = crate::ui::preview_content(rect);
+            let inner = self.document_area().expect("preview area");
             if event.row == rect.y && matches!(event.kind, MouseEventKind::Down(MouseButton::Left))
             {
                 self.menu();
@@ -2062,7 +2161,7 @@ impl Sidebar {
                 d.loaded.as_ref().is_some_and(|l| l.markdown()),
                 d.markdown,
             );
-            let inner = crate::ui::preview_content(rect);
+            let inner = self.document_area().expect("preview area");
             let (_, left) = d.offset();
             if let Some(r) = &d.rendered {
                 for (y, row) in d.screen_rows(inner.height as usize).into_iter().enumerate() {
@@ -2086,8 +2185,17 @@ impl Sidebar {
                     let gutter = if d.markdown { 0 } else { 6.min(inner.width) };
                     if gutter > 0 {
                         frame.render_widget(
-                            Paragraph::new(format!("{:>4} │", row + 1))
-                                .style(Style::new().fg(Color::DarkGray)),
+                            Paragraph::new(r.projection.as_ref().map_or_else(
+                                || format!("{:>4} │", row + 1),
+                                |p| {
+                                    if row > 0 && p[row].original == p[row - 1].original {
+                                        "     │".into()
+                                    } else {
+                                        format!("{:>4} │", p[row].original + 1)
+                                    }
+                                },
+                            ))
+                            .style(Style::new().fg(Color::DarkGray)),
                             Rect::new(inner.x, inner.y + y, gutter, 1),
                         );
                     }
@@ -2172,6 +2280,7 @@ impl Sidebar {
         self.draw_overlay(frame);
     }
     pub fn draw_overlay(&self, frame: &mut Frame) {
+        self.draw_features(frame);
         let area = frame.area();
         if let Some(r) = self.geometry.toggle {
             frame.render_widget(
@@ -2255,7 +2364,7 @@ impl Sidebar {
                     self.document.as_ref().map_or(String::new(), |d| {
                         format!(
                             "{} matches{}",
-                            d.matches.len(),
+                            d.view.search_targets.len(),
                             if d.loaded.as_ref().is_some_and(|l| l.truncated) {
                                 " (loaded text only)"
                             } else {
@@ -2270,6 +2379,8 @@ impl Sidebar {
                 Rect::new(area.x, area.bottom().saturating_sub(2), area.width, 1),
             );
         }
+        self.draw_feature_overlay(frame);
+        self.draw_search_options(frame);
         self.draw_outline(frame);
     }
     pub fn status(&self) -> String {
@@ -2289,14 +2400,9 @@ impl Sidebar {
             ),
             Focus::Preview => self.document.as_ref().map_or(String::new(), |d| {
                 format!(
-                    "{} · / Find · M Mode · T Outline · Alt+← Back · F2 Actions · {}/{} matches",
+                    "{} · {} · / Find · M Mode · T Outline · Alt+← Back · F2 Actions",
+                    d.progress(),
                     d.path.display(),
-                    if d.matches.is_empty() {
-                        0
-                    } else {
-                        d.match_index + 1
-                    },
-                    d.matches.len()
                 )
             }),
             Focus::Editor => self
@@ -2339,9 +2445,20 @@ fn header_buttons(
             buttons.push(("[T]", Command::Outline));
         }
     }
+    if !editing {
+        buttons.extend([
+            ("[Z]", Command::Maximize),
+            ("[W]", Command::Wrap),
+            ("[D]", Command::Diff),
+        ]);
+        if markdown {
+            buttons.push(("[V]", Command::Compare));
+        }
+    }
     buttons
         .into_iter()
         .enumerate()
+        .filter(|(i, _)| rect.width > 4 * (*i as u16 + 1))
         .map(|(i, (label, command))| {
             (
                 Rect::new(rect.right() - 4 * (i as u16 + 1), rect.y, 3, 1),

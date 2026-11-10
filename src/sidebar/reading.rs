@@ -315,10 +315,19 @@ impl Sidebar {
     }
     pub(super) fn start_outline(&mut self) {
         if self.document.as_ref().is_some_and(|d| d.markdown) {
+            let selected = self.document.as_ref().map_or(0, |d| {
+                let byte = d.reading_byte();
+                d.rendered.as_ref().map_or(0, |r| {
+                    r.reading
+                        .headings
+                        .partition_point(|h| h.source.start <= byte)
+                        .saturating_sub(1)
+                })
+            });
             self.reader.outline = Some(Outline {
                 filter: String::new(),
-                selected: 0,
-                scroll: 0,
+                selected,
+                scroll: selected.saturating_sub(4),
                 pressed: None,
             });
         }
@@ -380,17 +389,7 @@ impl Sidebar {
             Color::Rgb(205, 214, 244)
         };
         let base = Style::new().bg(background).fg(foreground);
-        // Clear cannot erase the first half of a wide glyph outside its area.
-        // Leaving it there makes the terminal diff skip our left border cell.
-        if r.x > frame.area().x {
-            for y in r.y..r.bottom() {
-                let cell = &mut frame.buffer_mut()[(r.x - 1, y)];
-                if cell.symbol().width() > 1 {
-                    cell.set_symbol(" ");
-                }
-            }
-        }
-        frame.render_widget(Clear, r);
+        crate::ui::clear_popup(frame, r);
         frame.render_widget(
             Block::bordered()
                 .title(" Outline ")
@@ -411,11 +410,14 @@ impl Sidebar {
             .enumerate()
         {
             frame.render_widget(
-                Paragraph::new(format!(
-                    "{}{}{}",
-                    if i == o.selected { "> " } else { "  " },
-                    "  ".repeat(h.level.saturating_sub(1)),
-                    h.title
+                Paragraph::new(super::features::shortened(
+                    &format!(
+                        "{}{}{}",
+                        if i == o.selected { "> " } else { "  " },
+                        "  ".repeat(h.level.saturating_sub(1)),
+                        h.title
+                    ),
+                    layout.list.width as usize,
                 ))
                 .style(if i == o.selected {
                     Style::new().fg(Color::Black).bg(Color::Cyan)
