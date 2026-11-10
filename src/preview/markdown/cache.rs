@@ -13,6 +13,7 @@ pub struct MarkdownStats {
     pub cached_rows: usize,
     pub known_rows: usize,
     pub complete: bool,
+    pub reused_blocks: usize,
 }
 struct Block {
     events: Vec<(Event<'static>, Range<usize>)>,
@@ -159,7 +160,32 @@ impl MarkdownCache {
             || self.width != width
             || self.light != light
         {
+            let same_layout = self.source.is_some()
+                && self.width == width
+                && self.light == light
+                && self.notes.is_empty();
+            let old_source = self.source.clone();
+            let previous = if same_layout {
+                self.cached
+                    .drain(..)
+                    .map(|(index, rows)| (self.blocks[index].events.clone(), rows))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
             self.reset(source.clone(), width, light);
+            for (events, rows) in previous {
+                // Compare globally resolved events, ranges and original source: reference changes
+                // and moved source coordinates must invalidate reuse.
+                let start = events.iter().map(|(_, r)| r.start).min().unwrap_or(0);
+                let end = events.iter().map(|(_, r)| r.end).max().unwrap_or(start);
+                if old_source.as_ref().and_then(|s| s.get(start..end)) == source.get(start..end)
+                    && let Some(index) = self.blocks.iter().position(|b| b.events == events)
+                {
+                    self.cached.push_back((index, rows));
+                    self.stats.reused_blocks += 1;
+                }
+            }
         }
         let wanted = if all {
             usize::MAX

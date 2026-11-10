@@ -1,0 +1,329 @@
+{
+  "stage": 3,
+  "date": "2026-11-10",
+  "baseline_commit": "6f90999",
+  "before": {
+    "cases": [
+      {
+        "code_ms": 106.3545,
+        "code_parsed_lines": 6546,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 13092,
+          "requests": 2,
+          "retained_lines": 62
+        },
+        "markdown_ms": 2.1954000000000002,
+        "markdown_stats": {
+          "cache_hits": 26,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 26
+        }
+      },
+      {
+        "code_ms": 101.85510000000001,
+        "code_parsed_lines": 6546,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 13092,
+          "requests": 2,
+          "retained_lines": 62
+        },
+        "markdown_ms": 1.9853,
+        "markdown_stats": {
+          "cache_hits": 26,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 26
+        }
+      },
+      {
+        "code_ms": 101.6117,
+        "code_parsed_lines": 6546,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 13092,
+          "requests": 2,
+          "retained_lines": 62
+        },
+        "markdown_ms": 1.7128,
+        "markdown_stats": {
+          "cache_hits": 26,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 26
+        }
+      },
+      {
+        "code_ms": 98.3394,
+        "code_parsed_lines": 6546,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 13092,
+          "requests": 2,
+          "retained_lines": 62
+        },
+        "markdown_ms": 1.8087000000000002,
+        "markdown_stats": {
+          "cache_hits": 26,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 26
+        }
+      },
+      {
+        "code_ms": 98.2478,
+        "code_parsed_lines": 6546,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 13092,
+          "requests": 2,
+          "retained_lines": 62
+        },
+        "markdown_ms": 1.8227,
+        "markdown_stats": {
+          "cache_hits": 26,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 26
+        }
+      }
+    ],
+    "code_bytes": 182000,
+    "code_lines": 7000,
+    "edited_row": 6500,
+    "markdown_bytes": 51390,
+    "scope": "Direct production worker renderer calls; excludes UI event/frame/debounce and source snapshot construction",
+    "viewport_rows": 30
+  },
+  "after": {
+    "cases": [
+      {
+        "code_ms": 3.5126,
+        "code_parsed_lines": 146,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 6692,
+          "requests": 2,
+          "retained_lines": 62,
+          "reused_checkpoints": 1
+        },
+        "markdown_ms": 1.2495,
+        "markdown_stats": {
+          "cache_hits": 51,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 1,
+          "reused_blocks": 25
+        }
+      },
+      {
+        "code_ms": 3.3888,
+        "code_parsed_lines": 146,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 6692,
+          "requests": 2,
+          "retained_lines": 62,
+          "reused_checkpoints": 1
+        },
+        "markdown_ms": 1.2634,
+        "markdown_stats": {
+          "cache_hits": 51,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 1,
+          "reused_blocks": 25
+        }
+      },
+      {
+        "code_ms": 3.709,
+        "code_parsed_lines": 146,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 6692,
+          "requests": 2,
+          "retained_lines": 62,
+          "reused_checkpoints": 1
+        },
+        "markdown_ms": 1.3868,
+        "markdown_stats": {
+          "cache_hits": 51,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 1,
+          "reused_blocks": 25
+        }
+      },
+      {
+        "code_ms": 3.2799,
+        "code_parsed_lines": 146,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 6692,
+          "requests": 2,
+          "retained_lines": 62,
+          "reused_checkpoints": 1
+        },
+        "markdown_ms": 1.4138,
+        "markdown_stats": {
+          "cache_hits": 51,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 1,
+          "reused_blocks": 25
+        }
+      },
+      {
+        "code_ms": 3.2060999999999997,
+        "code_parsed_lines": 146,
+        "code_stats": {
+          "cache_hits": 0,
+          "cancelled": 0,
+          "checkpoints": 52,
+          "colored_lines": 124,
+          "parsed_lines": 6692,
+          "requests": 2,
+          "retained_lines": 62,
+          "reused_checkpoints": 1
+        },
+        "markdown_ms": 1.3902,
+        "markdown_stats": {
+          "cache_hits": 51,
+          "cached_blocks": 26,
+          "cached_rows": 52,
+          "complete": false,
+          "indexed_blocks": 1500,
+          "known_rows": 52,
+          "laid_out_blocks": 1,
+          "reused_blocks": 25
+        }
+      }
+    ],
+    "code_bytes": 182000,
+    "code_lines": 7000,
+    "edited_row": 6500,
+    "markdown_bytes": 51390,
+    "scope": "Direct production worker renderer calls; excludes UI event/frame/debounce and source snapshot construction",
+    "viewport_rows": 30
+  },
+  "scale_after": {
+    "discovery": {
+      "note": "Run the 100-project/8-session release integration benchmark for process CPU/memory; this command measures discovery/search only.",
+      "projects": 100,
+      "scan_ms": 3.5903,
+      "search_mean_ms": 0.0006115
+    },
+    "document_open_ms": [
+      89.1903,
+      60.6149,
+      63.2969
+    ],
+    "edited_file_bytes": 508000,
+    "editor_input_ms": 8.943299999999999,
+    "editor_search_ms": 16.8798,
+    "editor_undo_ms": 14.9815,
+    "excludes": "PowerShell, Agents, Windows Terminal/OpenConsole, compilers and benchmark test runner",
+    "idle_cpu_machine_percent": 0.42186145402871117,
+    "idle_cpu_single_core_percent": 8.437229080574223,
+    "live_sessions": 8,
+    "logical_processors": 20,
+    "one_sidebar_closed_working_set_sum_mib": 94.5703125,
+    "overview_first_project_frame_ms": 77.3644,
+    "overview_frontends": 1,
+    "own_process_count": 6,
+    "pids": [
+      27176,
+      27440,
+      33172,
+      36260,
+      37772,
+      43488
+    ],
+    "preview_editor_private_bytes_sum_mib": 33.1640625,
+    "preview_editor_working_set_sum_mib": 94.21875,
+    "private_bytes_sum_mib": 23.96875,
+    "projects": 100,
+    "save_sampled_peak_working_set_sum_mib": 97.93359375,
+    "save_visible_ms": 32.370999999999995,
+    "search_frame_ms": 17.0394,
+    "visible_session_frontends": 4,
+    "warm_session_frame_ms": [
+      98.5341,
+      95.32509999999999,
+      94.2954,
+      109.2958
+    ],
+    "working_set_sum_mib": 83.2578125
+  },
+  "verification": {
+    "ordinary_tests_passed": 108,
+    "new_regressions": 6,
+    "clippy": "passed",
+    "fmt": "passed",
+    "release_scale": "passed"
+  },
+  "limits": [
+    "Code must still compare source line prefixes/suffixes and build line offsets.",
+    "Lexical changes propagate until state equality; an unclosed multiline construct can require parsing all preceding text.",
+    "Markdown still rebuilds global event/reference indexing; only cached unchanged events, source bytes and exact coordinates are reused.",
+    "Moving blocks after an insertion conservatively invalidate their layout.",
+    "Direct renderer timings exclude editor snapshot construction, event dispatch, terminal output and debounce.",
+    "No general claim about peak memory improvement in this stage."
+  ]
+}

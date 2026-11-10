@@ -586,7 +586,12 @@ impl Sidebar {
         let id = self.serial;
         let source = d.editor.as_ref().map_or_else(
             || loaded.source.clone(),
-            |e| std::sync::Arc::from(e.source()),
+            |e| {
+                d.rendered
+                    .as_ref()
+                    .filter(|_| d.render_revision == e.revision)
+                    .map_or_else(|| std::sync::Arc::from(e.source()), |r| r.source.clone())
+            },
         );
         d.render_revision = d.editor.as_ref().map_or(0, |e| e.revision);
         d.code_generation

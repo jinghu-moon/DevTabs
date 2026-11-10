@@ -37,6 +37,7 @@ pub struct HighlightStats {
     pub colored_lines: u64,
     pub retained_lines: usize,
     pub checkpoints: usize,
+    pub reused_checkpoints: u64,
 }
 
 #[derive(Debug)]
@@ -63,6 +64,10 @@ struct Checkpoint {
     parse: ParseState,
     scopes: ScopeStack,
 }
+struct PendingSuffix {
+    checkpoints: Vec<Checkpoint>,
+    first_unchanged: usize,
+}
 #[derive(Default)]
 pub struct CodeHighlighter {
     source: Option<Arc<str>>,
@@ -72,6 +77,7 @@ pub struct CodeHighlighter {
     checkpoints: Vec<Checkpoint>,
     window: Option<Arc<HighlightWindow>>,
     stats: HighlightStats,
+    pending_suffix: Option<PendingSuffix>,
 }
 impl CodeHighlighter {
     pub fn stats(&self) -> HighlightStats {
@@ -100,23 +106,62 @@ impl CodeHighlighter {
             .is_none_or(|old| !Arc::ptr_eq(old, &source))
             || self.path != path
         {
-            self.safe = match display_text(&source) {
+            let safe = match display_text(&source) {
                 std::borrow::Cow::Borrowed(_) => source.clone(),
                 std::borrow::Cow::Owned(s) => Arc::from(s),
             };
-            self.offsets.clear();
-            self.offsets.push(0);
+            let mut offsets = vec![0];
             let mut offset = 0;
-            for line in self.safe.split_inclusive('\n') {
+            for line in safe.split_inclusive('\n') {
                 offset += line.len();
-                self.offsets.push(offset);
+                offsets.push(offset);
             }
-            if self.offsets.len() == 1 {
-                self.offsets.push(0);
+            if offsets.len() == 1 {
+                offsets.push(0);
             }
+            self.pending_suffix = None;
+            if self.path == path && !self.checkpoints.is_empty() {
+                let old_rows = self.offsets.len() - 1;
+                let new_rows = offsets.len() - 1;
+                let mut prefix = 0;
+                while prefix < old_rows.min(new_rows)
+                    && self.safe[self.offsets[prefix]..self.offsets[prefix + 1]]
+                        == safe[offsets[prefix]..offsets[prefix + 1]]
+                {
+                    prefix += 1;
+                }
+                let mut suffix = 0;
+                while suffix
+                    < old_rows
+                        .saturating_sub(prefix)
+                        .min(new_rows.saturating_sub(prefix))
+                    && self.safe
+                        [self.offsets[old_rows - 1 - suffix]..self.offsets[old_rows - suffix]]
+                        == safe[offsets[new_rows - 1 - suffix]..offsets[new_rows - suffix]]
+                {
+                    suffix += 1;
+                }
+                let invalid = self.checkpoints.partition_point(|c| c.row <= prefix);
+                let mut pending = self.checkpoints.split_off(invalid);
+                pending.retain(|c| c.row >= old_rows - suffix);
+                for checkpoint in &mut pending {
+                    checkpoint.row = checkpoint
+                        .row
+                        .saturating_add_signed(new_rows as isize - old_rows as isize);
+                }
+                if !pending.is_empty() {
+                    self.pending_suffix = Some(PendingSuffix {
+                        checkpoints: pending,
+                        first_unchanged: new_rows - suffix,
+                    });
+                }
+            } else {
+                self.checkpoints.clear();
+            }
+            self.safe = safe;
+            self.offsets = offsets;
             self.source = Some(source);
             self.path = path.to_owned();
-            self.checkpoints.clear();
             self.window = None;
         }
         if let Some(window) = &self.window
@@ -148,7 +193,8 @@ impl CodeHighlighter {
             let mut scopes = checkpoint.scopes.clone();
             let highlighter = Highlighter::new(theme::syntax(light));
             let mut highlight = None;
-            for row in checkpoint.row..range.end {
+            let mut row = checkpoint.row;
+            while row < range.end {
                 if generation.load(Ordering::Relaxed) != expected {
                     self.stats.cancelled += 1;
                     self.stats.checkpoints = self.checkpoints.len();
@@ -192,6 +238,23 @@ impl CodeHighlighter {
                     self.stats.colored_lines += 1;
                 }
                 let next = row + 1;
+                if let Some(pending) = &self.pending_suffix
+                    && next >= pending.first_unchanged
+                    && pending
+                        .checkpoints
+                        .iter()
+                        .find(|c| c.row == next)
+                        .is_some_and(|c| c.parse == parse && c.scopes == scopes)
+                {
+                    let pending = self.pending_suffix.take().unwrap();
+                    let suffix = pending
+                        .checkpoints
+                        .into_iter()
+                        .filter(|c| c.row >= next)
+                        .collect::<Vec<_>>();
+                    self.stats.reused_checkpoints += suffix.len() as u64;
+                    self.checkpoints.extend(suffix);
+                }
                 if next.is_multiple_of(CHECKPOINT_LINES)
                     && self.checkpoints.last().is_none_or(|c| c.row < next)
                 {
@@ -200,6 +263,16 @@ impl CodeHighlighter {
                         parse: parse.clone(),
                         scopes: scopes.clone(),
                     });
+                }
+                row = next;
+                if row < range.start {
+                    let index = self.checkpoints.partition_point(|c| c.row <= range.start);
+                    if index > 0 && self.checkpoints[index - 1].row > row {
+                        let cached = &self.checkpoints[index - 1];
+                        row = cached.row;
+                        parse = cached.parse.clone();
+                        scopes = cached.scopes.clone();
+                    }
                 }
             }
         }
