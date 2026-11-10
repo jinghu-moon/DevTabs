@@ -503,6 +503,9 @@ impl Sidebar {
                 self.focus = Focus::Terminal;
             }
             self.geometry = next;
+            if next.preview.is_none() {
+                self.reader.outline = None;
+            }
         }
         changed
     }
@@ -1720,6 +1723,9 @@ impl Sidebar {
         }
     }
     pub fn mouse(&mut self, event: MouseEvent) -> Result<(bool, Action)> {
+        if self.outline_mouse(event) {
+            return Ok((true, Action::None));
+        }
         if self.modal() {
             return Ok((true, Action::None));
         }
@@ -1746,6 +1752,7 @@ impl Sidebar {
                     rect,
                     d.editing,
                     d.loaded.as_ref().is_some_and(|l| l.markdown()),
+                    d.markdown,
                 );
                 if let Some((_, _, command)) = buttons
                     .into_iter()
@@ -2037,6 +2044,7 @@ impl Sidebar {
                     rect,
                     true,
                     d.loaded.as_ref().is_some_and(|l| l.markdown()),
+                    false,
                 );
                 self.draw_scrollbars(frame);
                 self.draw_overlay(frame);
@@ -2068,6 +2076,7 @@ impl Sidebar {
                 rect,
                 false,
                 d.loaded.as_ref().is_some_and(|l| l.markdown()),
+                d.markdown,
             );
             let inner = crate::ui::content(rect);
             let (_, left) = d.offset();
@@ -2321,7 +2330,12 @@ impl Sidebar {
         }
     }
 }
-fn header_buttons(rect: Rect, editing: bool, markdown: bool) -> Vec<(Rect, &'static str, Command)> {
+fn header_buttons(
+    rect: Rect,
+    editing: bool,
+    markdown: bool,
+    reading: bool,
+) -> Vec<(Rect, &'static str, Command)> {
     let mut buttons = vec![
         ("[X]", Command::Close),
         (
@@ -2337,6 +2351,9 @@ fn header_buttons(rect: Rect, editing: bool, markdown: bool) -> Vec<(Rect, &'sta
         buttons.push(("[P]", Command::Project));
     } else if markdown {
         buttons.push(("[M]", Command::Mode));
+        if reading {
+            buttons.push(("[T]", Command::Outline));
+        }
     }
     buttons
         .into_iter()
@@ -2350,8 +2367,14 @@ fn header_buttons(rect: Rect, editing: bool, markdown: bool) -> Vec<(Rect, &'sta
         })
         .collect()
 }
-fn draw_header_buttons(frame: &mut Frame, rect: Rect, editing: bool, markdown: bool) {
-    for (r, label, _) in header_buttons(rect, editing, markdown) {
+fn draw_header_buttons(
+    frame: &mut Frame,
+    rect: Rect,
+    editing: bool,
+    markdown: bool,
+    reading: bool,
+) {
+    for (r, label, _) in header_buttons(rect, editing, markdown, reading) {
         frame.render_widget(Paragraph::new(label).style(Style::new().fg(Color::Cyan)), r);
     }
 }

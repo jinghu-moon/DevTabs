@@ -28,6 +28,13 @@ pub(super) struct ReadingUi {
 pub(super) struct Outline {
     filter: String,
     selected: usize,
+    scroll: usize,
+    pressed: Option<usize>,
+}
+struct OutlineLayout {
+    popup: Rect,
+    list: Rect,
+    first: usize,
 }
 impl Outline {
     pub(super) fn paste(&mut self, text: &str) {
@@ -35,13 +42,15 @@ impl Outline {
         self.filter
             .extend(text.chars().filter(|c| !c.is_control()).take(remain));
         self.selected = 0;
+        self.scroll = 0;
     }
     fn matches<'a>(&self, d: &'a Document) -> Vec<&'a preview::reading::Heading> {
+        let filter = self.filter.to_lowercase();
         d.rendered.as_ref().map_or(Vec::new(), |r| {
             r.reading
                 .headings
                 .iter()
-                .filter(|h| h.title.to_lowercase().contains(&self.filter.to_lowercase()))
+                .filter(|h| h.title.to_lowercase().contains(&filter))
                 .collect()
         })
     }
@@ -309,13 +318,17 @@ impl Sidebar {
             self.reader.outline = Some(Outline {
                 filter: String::new(),
                 selected: 0,
+                scroll: 0,
+                pressed: None,
             });
         }
     }
     pub(super) fn outline_key(&mut self, key: KeyEvent) -> bool {
+        let first = self.outline_layout().map_or(0, |l| l.first);
         let Some(outline) = &mut self.reader.outline else {
             return false;
         };
+        outline.scroll = first;
         let len = self
             .document
             .as_ref()
@@ -327,6 +340,7 @@ impl Sidebar {
             KeyCode::Backspace => {
                 outline.filter.pop();
                 outline.selected = 0;
+                outline.scroll = 0;
             }
             KeyCode::Char(c)
                 if !key
@@ -336,20 +350,9 @@ impl Sidebar {
             {
                 outline.filter.push(c);
                 outline.selected = 0;
+                outline.scroll = 0;
             }
-            KeyCode::Enter => {
-                let byte = self.document.as_ref().and_then(|d| {
-                    outline
-                        .matches(d)
-                        .get(outline.selected)
-                        .map(|h| h.source.start)
-                });
-                self.reader.outline = None;
-                if let Some(byte) = byte {
-                    self.push_back();
-                    self.seek_reading(byte);
-                }
-            }
+            KeyCode::Enter => self.accept_outline(),
             _ => {}
         }
         true
@@ -361,44 +364,192 @@ impl Sidebar {
         let Some(d) = &self.document else {
             return;
         };
-        let area = frame.area();
-        let r = Rect::new(
-            area.x + area.width.saturating_sub(72) / 2,
-            area.y + area.height.saturating_sub(22) / 2,
-            area.width.min(72),
-            area.height.min(22),
-        );
+        let Some(layout) = self.outline_layout() else {
+            return;
+        };
+        let r = layout.popup;
         let rows = o.matches(d);
-        let height = r.height.saturating_sub(2) as usize;
-        let skip = o.selected.saturating_sub(height.saturating_sub(1));
-        let lines = rows
-            .iter()
-            .enumerate()
-            .skip(skip)
-            .take(height)
-            .map(|(i, h)| {
-                Line::styled(
-                    format!(
-                        "{}{}{}",
-                        if i == o.selected { "> " } else { "  " },
-                        "  ".repeat(h.level.saturating_sub(1)),
-                        h.title
-                    ),
-                    if i == o.selected {
-                        Style::new().fg(Color::Black).bg(Color::Cyan)
-                    } else {
-                        Style::new()
-                    },
-                )
-            })
-            .collect::<Vec<_>>();
+        let background = if self.files.light {
+            Color::Rgb(239, 241, 245)
+        } else {
+            Color::Rgb(35, 39, 48)
+        };
+        let foreground = if self.files.light {
+            Color::Rgb(76, 79, 105)
+        } else {
+            Color::Rgb(205, 214, 244)
+        };
+        let base = Style::new().bg(background).fg(foreground);
         frame.render_widget(Clear, r);
         frame.render_widget(
-            Paragraph::new(lines).block(
-                Block::bordered().title(format!(" Outline: {} · ↑↓ Enter · Esc ", o.filter)),
-            ),
+            Block::bordered()
+                .title(" Outline ")
+                .title_bottom(" ↑↓ Enter · Esc ")
+                .style(base)
+                .border_style(Style::new().fg(Color::Cyan)),
             r,
         );
+        frame.render_widget(
+            Paragraph::new(format!("Find: {}", o.filter)).style(base),
+            Rect::new(r.x + 1, r.y + 1, r.width.saturating_sub(2), 1),
+        );
+        for (y, (i, h)) in rows
+            .iter()
+            .enumerate()
+            .skip(layout.first)
+            .take(layout.list.height as usize)
+            .enumerate()
+        {
+            frame.render_widget(
+                Paragraph::new(format!(
+                    "{}{}{}",
+                    if i == o.selected { "> " } else { "  " },
+                    "  ".repeat(h.level.saturating_sub(1)),
+                    h.title
+                ))
+                .style(if i == o.selected {
+                    Style::new().fg(Color::Black).bg(Color::Cyan)
+                } else {
+                    base
+                }),
+                Rect::new(
+                    layout.list.x,
+                    layout.list.y + y as u16,
+                    layout.list.width,
+                    1,
+                ),
+            );
+        }
+        if rows.is_empty() {
+            frame.render_widget(Paragraph::new("No headings found").style(base), layout.list);
+        }
+    }
+    fn outline_anchor(&self) -> Option<Rect> {
+        let d = self.document.as_ref()?;
+        header_buttons(
+            self.geometry.preview?,
+            d.editing,
+            d.loaded.as_ref().is_some_and(|l| l.markdown()),
+            d.markdown,
+        )
+        .into_iter()
+        .find(|(_, _, c)| matches!(c, Command::Outline))
+        .map(|(r, _, _)| r)
+    }
+    fn outline_layout(&self) -> Option<OutlineLayout> {
+        let outline = self.reader.outline.as_ref()?;
+        let d = self.document.as_ref()?;
+        let preview = self.geometry.preview?;
+        let anchor = self.outline_anchor()?;
+        let rows = outline.matches(d);
+        let width = (rows
+            .iter()
+            .map(|h| h.title.width() + 2 * h.level.saturating_sub(1) + 4)
+            .max()
+            .unwrap_or(24)
+            .clamp(24, 48) as u16)
+            .min(preview.width.saturating_sub(2));
+        let height = (rows.len().clamp(1, 10) as u16 + 3).min(preview.height.saturating_sub(1));
+        if width < 4 || height < 4 {
+            return None;
+        }
+        let x = anchor.right().saturating_sub(width).max(preview.x + 1);
+        let popup = Rect::new(x, preview.y + 1, width, height);
+        let list = Rect::new(x + 1, popup.y + 2, width - 2, height - 3);
+        let mut first = outline
+            .scroll
+            .min(rows.len().saturating_sub(list.height as usize));
+        if outline.selected < first {
+            first = outline.selected;
+        } else if outline.selected >= first + list.height as usize {
+            first = outline.selected + 1 - list.height as usize;
+        }
+        Some(OutlineLayout { popup, list, first })
+    }
+    fn accept_outline(&mut self) {
+        let byte = self.reader.outline.as_ref().and_then(|o| {
+            self.document
+                .as_ref()
+                .and_then(|d| o.matches(d).get(o.selected).map(|h| h.source.start))
+        });
+        self.reader.outline = None;
+        if let Some(byte) = byte {
+            self.push_back();
+            self.seek_reading(byte);
+        }
+    }
+    pub(super) fn outline_mouse(&mut self, event: MouseEvent) -> bool {
+        if self.reader.outline.is_none() {
+            return false;
+        }
+        let point = (event.column, event.row);
+        let down = matches!(event.kind, MouseEventKind::Down(MouseButton::Left));
+        if down
+            && self
+                .outline_anchor()
+                .is_some_and(|r| r.contains(point.into()))
+        {
+            self.reader.outline = None;
+            return true;
+        }
+        let Some(layout) = self.outline_layout() else {
+            if down {
+                self.reader.outline = None;
+            }
+            return true;
+        };
+        if !layout.popup.contains(point.into()) {
+            if matches!(event.kind, MouseEventKind::Down(_)) {
+                self.reader.outline = None;
+            }
+            return true;
+        }
+        let len = self
+            .reader
+            .outline
+            .as_ref()
+            .and_then(|o| self.document.as_ref().map(|d| o.matches(d).len()))
+            .unwrap_or(0);
+        let item = layout
+            .list
+            .contains(point.into())
+            .then(|| layout.first + (event.row - layout.list.y) as usize)
+            .filter(|&i| i < len);
+        let outline = self.reader.outline.as_mut().unwrap();
+        outline.scroll = layout.first;
+        match event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                outline.pressed = item;
+                if let Some(i) = item {
+                    outline.selected = i;
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                let pressed = outline.pressed.take();
+                if item.is_some() && pressed == item {
+                    self.accept_outline();
+                }
+            }
+            MouseEventKind::Moved => {
+                if let Some(i) = item {
+                    outline.selected = i;
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => outline.pressed = None,
+            MouseEventKind::ScrollUp => {
+                outline.pressed = None;
+                outline.selected = outline.selected.saturating_sub(3);
+            }
+            MouseEventKind::ScrollDown => {
+                outline.pressed = None;
+                outline.selected = outline
+                    .selected
+                    .saturating_add(3)
+                    .min(len.saturating_sub(1));
+            }
+            _ => {}
+        }
+        true
     }
     pub(super) fn draw_reading_header(&self, frame: &mut Frame, row: usize, content: Rect) {
         let Some(d) = &self.document else {

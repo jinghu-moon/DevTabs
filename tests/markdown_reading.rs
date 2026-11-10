@@ -679,3 +679,200 @@ fn cross_file_fragment_works_when_the_target_was_remembered_in_source_mode() {
         })
     });
 }
+
+fn outline_button(buffer: &Buffer, preview: Rect) -> u16 {
+    (preview.x..preview.right().saturating_sub(2))
+        .find(|&x| {
+            buffer[(x, preview.y)].symbol() == "["
+                && buffer[(x + 1, preview.y)].symbol() == "T"
+                && buffer[(x + 2, preview.y)].symbol() == "]"
+        })
+        .expect("preview needs an outline button")
+}
+fn outline_bounds(buffer: &Buffer) -> Rect {
+    let (x, y) = (buffer.area.y..buffer.area.bottom())
+        .flat_map(|y| (buffer.area.x..buffer.area.right()).map(move |x| (x, y)))
+        .find(|&(x, y)| {
+            buffer[(x, y)].symbol() == "O"
+                && x + 6 < buffer.area.right()
+                && (0..7)
+                    .map(|i| buffer[(x + i, y)].symbol())
+                    .collect::<String>()
+                    == "Outline"
+        })
+        .expect("outline title");
+    let left = (buffer.area.x..x)
+        .rev()
+        .find(|&x| buffer[(x, y)].symbol() == "┌")
+        .unwrap();
+    let right = (x..buffer.area.right())
+        .find(|&x| buffer[(x, y)].symbol() == "┐")
+        .unwrap();
+    let bottom = (y + 1..buffer.area.bottom())
+        .find(|&y| buffer[(left, y)].symbol() == "└")
+        .unwrap();
+    Rect::new(left, y, right - left + 1, bottom - y + 1)
+}
+
+#[test]
+fn outline_button_opens_a_small_dropdown_anchored_inside_the_preview() {
+    let f = Fixture::new();
+    let mut s = f.open("# One\n\n## Two\n\n## Three\n", 180, 40);
+    let b = draw(&mut s, 180, 40);
+    let preview = s.geometry.preview.unwrap();
+    let x = outline_button(&b, preview);
+    mouse(
+        &mut s,
+        MouseEventKind::Down(MouseButton::Left),
+        x + 1,
+        preview.y,
+    );
+    mouse(
+        &mut s,
+        MouseEventKind::Up(MouseButton::Left),
+        x + 1,
+        preview.y,
+    );
+    assert!(s.modal());
+    let b = draw(&mut s, 180, 40);
+    let popup = outline_bounds(&b);
+    assert_eq!(popup.y, preview.y + 1);
+    assert!(popup.x > preview.x);
+    assert!(popup.right() <= preview.right());
+    assert!(
+        popup.width <= 48 && popup.height <= 8,
+        "dropdown must fit its short list: {popup:?}"
+    );
+    assert!(
+        popup.x <= x && popup.right() > x,
+        "dropdown must anchor below its button"
+    );
+}
+
+#[test]
+fn outline_dropdown_click_selects_and_outside_click_dismisses_without_clickthrough() {
+    let f = Fixture::new();
+    let mut s = f.open("# One\n\n## Two\n\n## Three\n", 80, 24);
+    key(&mut s, KeyCode::Char('t'));
+    let b = draw(&mut s, 80, 24);
+    let popup = outline_bounds(&b);
+    let row = popup.y + 4;
+    mouse(
+        &mut s,
+        MouseEventKind::Down(MouseButton::Left),
+        popup.x + 3,
+        row,
+    );
+    mouse(
+        &mut s,
+        MouseEventKind::Up(MouseButton::Left),
+        popup.x + 3,
+        row,
+    );
+    assert!(!s.modal());
+    let d = s.document.as_ref().unwrap();
+    assert_eq!(d.rendered.as_ref().unwrap().plain[d.offset().0], "Three");
+    key(&mut s, KeyCode::Char('t'));
+    let old = s.document.as_ref().unwrap().offset();
+    mouse(&mut s, MouseEventKind::Down(MouseButton::Left), 1, 12);
+    mouse(&mut s, MouseEventKind::Up(MouseButton::Left), 1, 12);
+    assert!(!s.modal());
+    assert_eq!(s.document.as_ref().unwrap().offset(), old);
+    assert!(s.document.as_ref().unwrap().selection.is_none());
+}
+
+#[test]
+fn outline_dropdown_scrolls_filters_toggles_and_stays_in_bounds_after_resize() {
+    let f = Fixture::new();
+    let text = (0..40)
+        .map(|i| format!("## Heading {i}\n\n"))
+        .collect::<String>();
+    let mut s = f.open(&text, 180, 40);
+    let b = draw(&mut s, 180, 40);
+    let preview = s.geometry.preview.unwrap();
+    let x = outline_button(&b, preview);
+    mouse(
+        &mut s,
+        MouseEventKind::Down(MouseButton::Left),
+        x + 1,
+        preview.y,
+    );
+    mouse(
+        &mut s,
+        MouseEventKind::Down(MouseButton::Left),
+        x + 1,
+        preview.y,
+    );
+    assert!(!s.modal());
+    key(&mut s, KeyCode::Char('t'));
+    for _ in 0..8 {
+        key(&mut s, KeyCode::Down);
+    }
+    let b = draw(&mut s, 180, 40);
+    let popup = outline_bounds(&b);
+    assert!(popup.height <= 14);
+    mouse(&mut s, MouseEventKind::ScrollDown, popup.x + 3, popup.y + 3);
+    s.paste("Heading 39").unwrap();
+    let b = draw(&mut s, 180, 40);
+    assert!(outline_bounds(&b).height <= 6);
+    s.update_layout(Rect::new(0, 0, 64, 12), false);
+    let b = draw(&mut s, 64, 12);
+    let popup = outline_bounds(&b);
+    let preview = s.geometry.preview.unwrap();
+    assert!(
+        popup.x >= preview.x
+            && popup.right() <= preview.right()
+            && popup.bottom() <= preview.bottom()
+    );
+    key(&mut s, KeyCode::Enter);
+    wait(&mut s, |s| {
+        let d = s.document.as_ref().unwrap();
+        d.rendered
+            .as_ref()
+            .is_some_and(|r| r.plain.get(d.offset().0).is_some_and(|s| s == "Heading 39"))
+    });
+}
+
+#[test]
+fn clicking_a_scrolled_outline_row_does_not_reposition_it_before_release() {
+    let f = Fixture::new();
+    let text = (0..50)
+        .map(|i| format!("## Heading {i}\n\n"))
+        .collect::<String>();
+    let mut s = f.open(&text, 80, 30);
+    key(&mut s, KeyCode::Char('t'));
+    for _ in 0..20 {
+        key(&mut s, KeyCode::Down);
+    }
+    let b = draw(&mut s, 80, 30);
+    let popup = outline_bounds(&b);
+    let row = popup.y + 2;
+    let displayed: String = (popup.x + 1..popup.right() - 1)
+        .map(|x| b[(x, row)].symbol())
+        .collect();
+    assert!(displayed.contains("Heading 11"), "{displayed}");
+    mouse(
+        &mut s,
+        MouseEventKind::Down(MouseButton::Left),
+        popup.x + 3,
+        row,
+    );
+    let b = draw(&mut s, 80, 30);
+    let after: String = (popup.x + 1..popup.right() - 1)
+        .map(|x| b[(x, row)].symbol())
+        .collect();
+    assert!(after.contains("Heading 11"), "{after}");
+    mouse(
+        &mut s,
+        MouseEventKind::Up(MouseButton::Left),
+        popup.x + 3,
+        row,
+    );
+    assert!(!s.modal());
+    wait(&mut s, |s| {
+        let d = s.document.as_ref().unwrap();
+        d.rendered
+            .as_ref()
+            .is_some_and(|r| r.plain.get(d.offset().0).is_some_and(|s| s == "Heading 11"))
+    });
+}
