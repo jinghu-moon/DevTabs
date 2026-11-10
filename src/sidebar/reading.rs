@@ -380,6 +380,16 @@ impl Sidebar {
             Color::Rgb(205, 214, 244)
         };
         let base = Style::new().bg(background).fg(foreground);
+        // Clear cannot erase the first half of a wide glyph outside its area.
+        // Leaving it there makes the terminal diff skip our left border cell.
+        if r.x > frame.area().x {
+            for y in r.y..r.bottom() {
+                let cell = &mut frame.buffer_mut()[(r.x - 1, y)];
+                if cell.symbol().width() > 1 {
+                    cell.set_symbol(" ");
+                }
+            }
+        }
         frame.render_widget(Clear, r);
         frame.render_widget(
             Block::bordered()

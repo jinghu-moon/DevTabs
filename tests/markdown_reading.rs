@@ -715,6 +715,62 @@ fn outline_bounds(buffer: &Buffer) -> Rect {
 }
 
 #[test]
+fn outline_borders_cover_wide_body_characters_at_popup_edges() {
+    let f = Fixture::new();
+    let mut text = String::new();
+    for i in 0..8 {
+        text.push_str(&format!(
+            "{}{}\n\n",
+            if i % 2 == 0 { "" } else { "a" },
+            "文".repeat(70)
+        ));
+    }
+    for i in 0..8 {
+        text.push_str(&format!("## Heading {i}\n\n"));
+    }
+    for width in [64, 80, 101] {
+        for light in [false, true] {
+            let mut s = f.open(&text, width, 30);
+            s.files.light = light;
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            terminal.draw(|f| s.draw(f)).unwrap();
+            // Exercise the actual terminal diff, including repeated open/close.
+            for _ in 0..2 {
+                key(&mut s, KeyCode::Char('t'));
+                terminal.draw(|f| s.draw(f)).unwrap();
+                let b = terminal.backend().buffer();
+                let popup = outline_bounds(b);
+                for y in popup.y + 1..popup.bottom() - 1 {
+                    assert_eq!(b[(popup.x, y)].symbol(), "│", "left border at row {y}");
+                    assert_eq!(
+                        b[(popup.right() - 1, y)].symbol(),
+                        "│",
+                        "right border at row {y}"
+                    );
+                }
+                key(&mut s, KeyCode::Esc);
+                let restored = draw(&mut s, width, 30);
+                terminal.draw(|f| s.draw(f)).unwrap();
+                // TestBackend keeps stale cells hidden under wide glyphs, unlike
+                // a real terminal. Compare only cells that are actually visible.
+                for y in 0..30 {
+                    let mut x = 0;
+                    while x < width {
+                        let expected = &restored[(x, y)];
+                        assert_eq!(
+                            terminal.backend().buffer()[(x, y)],
+                            *expected,
+                            "restore covered text at ({x}, {y})"
+                        );
+                        x += unicode_width::UnicodeWidthStr::width(expected.symbol()).max(1) as u16;
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn outline_button_opens_a_small_dropdown_anchored_inside_the_preview() {
     let f = Fixture::new();
     let mut s = f.open("# One\n\n## Two\n\n## Three\n", 180, 40);
