@@ -521,6 +521,60 @@ fn tabs_are_bounded_and_header_click_switches_the_selected_file() {
 }
 
 #[test]
+fn file_tabs_have_boundaries_filename_labels_and_distinct_active_state() {
+    use ratatui::style::Modifier;
+    let f = Fixture::new();
+    fs::create_dir(f.0.join("deep-directory")).unwrap();
+    let path = f.0.join("deep-directory/文档-preview.md");
+    fs::write(&path, "# Body marker\n").unwrap();
+    for light in [false, true] {
+        let mut s = f.open("first body");
+        s.files.light = light;
+        s.open(path.clone(), true).unwrap();
+        ready(&mut s);
+        let b = draw(&mut s);
+        let rect = s.geometry.preview.unwrap();
+        let mut row = String::new();
+        let mut x = rect.x + 1;
+        while x < rect.right() - 1 {
+            let symbol = b[(x, rect.y + 1)].symbol();
+            row.push_str(symbol);
+            x += unicode_width::UnicodeWidthStr::width(symbol).max(1) as u16;
+        }
+        assert!(row.contains("文档-preview.md"), "{row}");
+        assert!(
+            !row.contains("deep-directory"),
+            "show the filename before its directory"
+        );
+        let starts = (rect.x + 1..rect.right() - 1)
+            .filter(|&x| b[(x, rect.y + 1)].symbol() == "│")
+            .collect::<Vec<_>>();
+        assert_eq!(starts.len(), 4, "each tab has two side borders");
+        let inactive = &b[(starts[0] + 1, rect.y + 1)];
+        let active = &b[(starts[2] + 1, rect.y + 1)];
+        assert_ne!(active.bg, inactive.bg);
+        assert!(active.modifier.contains(Modifier::BOLD));
+        assert_eq!(b[(starts[0], rect.y + 2)].symbol(), "└");
+        assert_eq!(b[(starts[2], rect.y + 2)].symbol(), "└");
+        assert_ne!(b[(starts[0], rect.y + 2)].fg, b[(starts[2], rect.y + 2)].fg);
+        assert_eq!(
+            b[(rect.x + 2, rect.y + 3)].symbol(),
+            " ",
+            "keep padding beneath tabs"
+        );
+        // The tab's lower edge is also clickable.
+        mouse(
+            &mut s,
+            starts[0] + 2,
+            rect.y + 2,
+            MouseEventKind::Down(MouseButton::Left),
+        );
+        ready(&mut s);
+        assert!(s.document.as_ref().unwrap().path.ends_with("read.md"));
+    }
+}
+
+#[test]
 fn wrapped_markdown_and_source_comparison_keep_large_open_lazy() {
     let f = Fixture::new();
     let mut s = f.open(

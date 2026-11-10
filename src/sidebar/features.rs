@@ -1,6 +1,7 @@
 //! Preview workspace controls. Inactive tabs retain snapshots, not rendered caches.
 use super::*;
 use ratatui::text::Span;
+use ratatui::{style::Modifier, widgets::Borders};
 use std::sync::Arc;
 
 const MAX_TABS: usize = 8;
@@ -138,8 +139,8 @@ impl Sidebar {
         let rect = self.geometry.preview?;
         let mut inner = crate::ui::preview_content(rect);
         if self.tools.paths.len() > 1 {
-            inner.y += 1;
-            inner.height = inner.height.saturating_sub(1);
+            inner.y += 3;
+            inner.height = inner.height.saturating_sub(3);
         }
         let compare = self
             .document
@@ -501,14 +502,14 @@ impl Sidebar {
             return Vec::new();
         };
         let available = rect.width.saturating_sub(2);
-        let count = (available / 16).max(1).min(self.tools.paths.len() as u16) as usize;
+        let count = (available / 24).max(1).min(self.tools.paths.len() as u16) as usize;
         let selected = self
             .document
             .as_ref()
             .and_then(|d| self.tools.paths.iter().position(|p| p == &d.path))
             .unwrap_or(0);
         let first = selected.saturating_sub(count - 1);
-        let width = (available / count as u16).max(1);
+        let width = (available / count as u16).clamp(1, 33);
         self.tools
             .paths
             .iter()
@@ -517,7 +518,12 @@ impl Sidebar {
             .enumerate()
             .map(|(i, p)| {
                 (
-                    Rect::new(rect.x + 1 + i as u16 * width, rect.y + 1, width, 1),
+                    Rect::new(
+                        rect.x + 1 + i as u16 * width,
+                        rect.y + 1,
+                        width.saturating_sub(1),
+                        2,
+                    ),
                     p.clone(),
                 )
             })
@@ -540,7 +546,9 @@ impl Sidebar {
             return Ok(false);
         }
         if self.geometry.preview.is_some_and(|r| {
-            event.row == r.y + 1 && event.column > r.x && event.column < r.right() - 1
+            (r.y + 1..=r.y + 2).contains(&event.row)
+                && event.column > r.x
+                && event.column < r.right() - 1
         }) && self.tools.paths.len() > 1
         {
             match event.kind {
@@ -604,19 +612,80 @@ impl Sidebar {
             return;
         }
         if let Some(d) = &self.document {
-            for (r, path) in self.tab_buttons() {
-                let current = d.path == path;
-                let label = path
-                    .strip_prefix(&self.files.root)
-                    .unwrap_or(&path)
-                    .to_string_lossy();
+            let tabs = self.tab_buttons();
+            if !tabs.is_empty()
+                && let Some(rect) = self.geometry.preview
+            {
+                let background = if self.files.light {
+                    Color::Rgb(220, 224, 232)
+                } else {
+                    Color::Rgb(24, 27, 34)
+                };
                 frame.render_widget(
-                    Paragraph::new(shortened(&format!(" {} ", label), r.width as usize)).style(
-                        if current {
-                            Style::new().fg(Color::Black).bg(Color::Cyan)
-                        } else {
-                            Style::new().fg(Color::Gray)
-                        },
+                    Block::default().style(Style::new().bg(background)),
+                    Rect::new(rect.x + 1, rect.y + 1, rect.width - 2, 2),
+                );
+            }
+            for (r, path) in tabs {
+                let current = d.path == path;
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let duplicate = self
+                    .tools
+                    .paths
+                    .iter()
+                    .filter(|p| p.file_name() == path.file_name())
+                    .count()
+                    > 1;
+                let label = if duplicate {
+                    format!(
+                        "{} · {}",
+                        name,
+                        path.parent()
+                            .and_then(|p| p.file_name())
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                    )
+                } else {
+                    name.into_owned()
+                };
+                let (foreground, background, edge) = match (self.files.light, current) {
+                    (false, true) => (
+                        Color::Rgb(230, 237, 246),
+                        Color::Rgb(48, 63, 78),
+                        Color::Cyan,
+                    ),
+                    (false, false) => (
+                        Color::Rgb(159, 172, 190),
+                        Color::Rgb(32, 36, 45),
+                        Color::Rgb(70, 79, 94),
+                    ),
+                    (true, true) => (
+                        Color::Rgb(25, 58, 83),
+                        Color::Rgb(204, 229, 245),
+                        Color::Rgb(0, 110, 150),
+                    ),
+                    (true, false) => (
+                        Color::Rgb(92, 101, 119),
+                        Color::Rgb(232, 235, 241),
+                        Color::Rgb(160, 169, 185),
+                    ),
+                };
+                let style = Style::new().fg(foreground).bg(background);
+                frame.render_widget(
+                    Paragraph::new(format!(
+                        "{} {}",
+                        if current { "●" } else { " " },
+                        shortened(&label, r.width.saturating_sub(5) as usize)
+                    ))
+                    .style(if current {
+                        style.add_modifier(Modifier::BOLD)
+                    } else {
+                        style
+                    })
+                    .block(
+                        Block::default()
+                            .borders(Borders::LEFT | Borders::RIGHT | Borders::BOTTOM)
+                            .border_style(Style::new().fg(edge).bg(background)),
                     ),
                     r,
                 );
