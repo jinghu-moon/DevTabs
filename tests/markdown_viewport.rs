@@ -197,6 +197,88 @@ fn end_key_reaches_the_real_tail_of_a_partially_laid_out_document() {
 }
 
 #[test]
+fn reading_fixture_keeps_code_diagrams_math_and_quotes_in_the_actual_sidebar() {
+    use ratatui::style::Color;
+    use std::collections::HashSet;
+    let original = include_str!("fixtures/markdown-reading.md").replace("\r\n", "\n");
+    let root = Fixture::new();
+    for crlf in [false, true] {
+        let source = if crlf {
+            original.replace('\n', "\r\n")
+        } else {
+            original.clone()
+        };
+        let path = root.0.join("reading.md");
+        fs::write(&path, &source).unwrap();
+        for light in [false, true] {
+            let mut s = Sidebar::new(root.0.clone());
+            s.visible = false;
+            s.files.light = light;
+            s.open(path.clone(), true).unwrap();
+            s.update_layout(Rect::new(0, 0, 100, 120), false);
+            ready(&mut s);
+            let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+            let full =
+                preview::render(&source, std::path::Path::new("reading.md"), true, 98, light);
+            assert!(r.complete, "fixture should fit the viewport plus prefetch");
+            assert_eq!(r.plain, full.plain, "crlf={crlf} light={light}");
+            let window = r.window.as_ref().unwrap();
+            assert_eq!(window.text, *full.text);
+            let prose = r.plain.join("\n");
+            assert!(
+                prose.contains("E=mc²"),
+                "inline math fell back to TeX: {prose}"
+            );
+            assert!(
+                r.rows.iter().any(|r| r.kind == preview::RowKind::Diagram),
+                "Mermaid fell back to source: {}",
+                r.note
+            );
+            assert!(r.rows.iter().any(|r| r.kind == preview::RowKind::Math));
+            assert!(prose.contains("☑") && prose.contains("☐"));
+            let code = r
+                .plain
+                .iter()
+                .position(|l| l.contains("let answer = 42;"))
+                .unwrap();
+            assert!(
+                window
+                    .line(code)
+                    .unwrap()
+                    .spans
+                    .iter()
+                    .filter_map(|s| s.style.fg)
+                    .collect::<HashSet<_>>()
+                    .len()
+                    >= 3
+            );
+            let plain = r.plain.clone();
+            let note = r.note.clone();
+            let mut terminal = Terminal::new(TestBackend::new(100, 120)).unwrap();
+            terminal.draw(|f| s.draw(f)).unwrap();
+            let buffer = terminal.backend().buffer();
+            let row = &buffer.content[(code + 1) * 100..(code + 2) * 100];
+            assert!(
+                row.iter()
+                    .filter(|c| !c.symbol().trim().is_empty())
+                    .map(|c| c.fg)
+                    .collect::<HashSet<_>>()
+                    .len()
+                    >= 3,
+                "Sidebar lost Rust colors"
+            );
+            assert!(buffer.content.iter().any(|c| c.fg != Color::Reset));
+            if let Some(directory) = std::env::var_os("DEVTABS_READING_SNAPSHOT") {
+                let directory = PathBuf::from(directory);
+                fs::create_dir_all(&directory).unwrap();
+                let cells=buffer.content.iter().map(|c|serde_json::json!({"symbol":c.symbol(),"fg":format!("{:?}",c.fg),"bg":format!("{:?}",c.bg),"modifiers":format!("{:?}",c.modifier)})).collect::<Vec<_>>();
+                fs::write(directory.join(format!("reading-{}-{}.json",if light{"light"}else{"dark"},if crlf{"crlf"}else{"lf"})),serde_json::to_vec_pretty(&serde_json::json!({"columns":100,"rows":120,"plain":plain,"note":note,"cells":cells})).unwrap()).unwrap();
+            }
+        }
+    }
+}
+
+#[test]
 #[ignore = "isolated Release Markdown viewport comparison"]
 fn markdown_viewport_workload() {
     if cfg!(debug_assertions) {

@@ -12,6 +12,14 @@ Windows Rust 项目工作区：原生 Codex / Claude Code 与 PowerShell Debug �
 
 本轮可执行文件为 `artifacts/DevTabs-0.4.0/devtabs.exe`。运行中的旧版 `target/release/devtabs.exe` 不会被覆盖。
 
+四项性能优化后的测试程序为 `artifacts/DevTabs-0.4.0-optimized/devtabs.exe`。若同时运行旧版，重新编译不会更新已经打开的界面；总览也可能激活仍在运行的旧前端。测试当前渲染时，明确指定程序路径并加 `--new-instance`，在新的界面打开 `tests/fixtures/markdown-reading.md`：
+
+```powershell
+& "D:\100_Projects\110_Daily\new-project\artifacts\DevTabs-0.4.0-optimized\devtabs.exe" --project "D:\100_Projects\110_Daily\new-project" --agent codex --layout split --new-instance
+```
+
+可用 `Get-CimInstance Win32_Process -Filter "Name = 'devtabs.exe'" | Select-Object ProcessId, ExecutablePath, CommandLine` 核对实际运行路径。0.4.0 的本地源码渲染器已支持 `rust,no_run` 元数据、有限 Mermaid/公式、任务框和引用续行；0.3.2 的旧预览不能用于判断这些能力。针对这份完整样本，`cargo test --test markdown_viewport reading_fixture -- --test-threads=1` 覆盖实际 Sidebar 的 LF/CRLF、明暗主题、代码颜色、图形、公式及与完整渲染逐行一致性。
+
 ```powershell
 # 首次设置默认 Agent 和项目根目录，可添加多个根
 .\artifacts\DevTabs-0.4.0\devtabs.exe config agent codex
