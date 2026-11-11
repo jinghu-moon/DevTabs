@@ -548,6 +548,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             let options = entry
                 .restore
                 .clone()
+                .or_else(|| entry.connect.clone())
                 .unwrap_or_else(|| app.options_for(&entry.path));
             let part = format!(
                 "{} {} · {}{}  ",
@@ -969,6 +970,42 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                     spans.splice(3..4, highlighted);
                 }
                 frame.render_widget(Paragraph::new(Line::from(spans)).style(base), hit);
+            }
+            Row::Task(path, workspace, task) => {
+                if let Some(work) = app
+                    .workspaces
+                    .get(&config::key(path))
+                    .into_iter()
+                    .flatten()
+                    .find(|w| w.id == *workspace)
+                    && let Some(task) = work.tasks.iter().find(|t| t.id == *task)
+                {
+                    let agent = work.sessions.iter().find(|s| {
+                        s.task.task_id == task.id && s.task.role == crate::tasks::Role::Agent
+                    });
+                    let state = agent.map_or_else(
+                        || t("failed").into_owned(),
+                        |s| match &s.status {
+                            crate::session::Status::Running => t("running").into_owned(),
+                            crate::session::Status::Exited(c) => format!("{} {c}", t("exited")),
+                            crate::session::Status::Failed(e) => e.clone(),
+                        },
+                    );
+                    frame.render_widget(
+                        Paragraph::new(fit(
+                            &format!(
+                                "    {} {} · {} · {}",
+                                if selected { "▸" } else { "↳" },
+                                task.name,
+                                task.branch,
+                                state
+                            ),
+                            inner.width as usize,
+                        ))
+                        .style(base.fg(palette().accent)),
+                        hit,
+                    );
+                }
             }
             Row::Session(path, agent, id) => {
                 let c = app
@@ -1669,9 +1706,7 @@ impl Overview {
                         || mouse.modifiers.contains(KeyModifiers::CONTROL)
                     {
                         self.dashboard.undo = Some(self.marked.clone());
-                        if let Some(p) = self.path() {
-                            self.marked.toggle(p)
-                        }
+                        self.toggle_selected_queue();
                         self.last_click = None;
                     } else if mouse.modifiers.contains(KeyModifiers::SHIFT) {
                         self.dashboard.undo = Some(self.marked.clone());

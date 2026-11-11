@@ -84,6 +84,7 @@ struct Host {
     workspaces: HashMap<String, Workspace>,
     floating: Floating,
     shutdown: bool,
+    starting: HashMap<String, String>,
 }
 
 pub fn ensure() -> Result<()> {
@@ -329,7 +330,10 @@ impl Host {
     fn handle(&mut self, request: Request) -> Result<Response> {
         let _perf = crate::perf::span(crate::perf::Metric::HostRequest);
         match request {
-            Request::PlanTask { .. } | Request::AddTask { .. } | Request::TaskOperation { .. } => {
+            Request::StartRole { .. }
+            | Request::PlanTask { .. }
+            | Request::AddTask { .. }
+            | Request::TaskOperation { .. } => {
                 anyhow::bail!("Task operation must run outside host input lock")
             }
             Request::Layout { workspace, layout } => {
@@ -387,23 +391,71 @@ impl Host {
                     return Ok(Response::Workspace(Box::new(work.info())));
                 }
                 let id = uuid::Uuid::new_v4().to_string();
-                let task = {
+                let tasks = {
                     let _lock = config::ConfigLock::acquire()?;
                     let mut catalog = crate::tasks::Catalog::load(&config::home())?;
-                    let task = catalog.main_task(&options)?;
+                    let tasks = if let Some(old) = &options.recovery_id {
+                        let journal = crate::recovery::load()?;
+                        let record = journal
+                            .entries
+                            .get(old)
+                            .context("Recovery record missing; resources retained")?;
+                        anyhow::ensure!(
+                            !record.task_ids.is_empty(),
+                            "Recovery has no authoritative task identities"
+                        );
+                        let mut tasks = vec![];
+                        for id in &record.task_ids {
+                            let task = catalog
+                                .tasks
+                                .get(id)
+                                .context("Recovery task missing from catalog")?
+                                .clone();
+                            anyhow::ensure!(
+                                !task.archived && task.cwd.is_dir(),
+                                "Task archived or directory missing; resources retained"
+                            );
+                            if task.owned {
+                                let repo = crate::tasks::Repository::discover(&task.cwd)?;
+                                anyhow::ensure!(
+                                    crate::tasks::text(&repo.root, &["branch", "--show-current"])?
+                                        == task.branch,
+                                    "Task branch changed; explicit review required"
+                                );
+                            }
+                            tasks.push(task);
+                        }
+                        tasks
+                    } else {
+                        vec![catalog.main_task(&options)?]
+                    };
                     catalog.save(&config::home())?;
-                    task
+                    tasks
                 };
-                let sessions = spawn_task(&task)?;
+                let mut sessions = vec![];
+                for task in &tasks {
+                    if options.recovery_id.is_some() {
+                        let mut restored = task.clone();
+                        restored.options.continue_latest = false;
+                        restored.options.resume = false;
+                        restored.options.fresh = restored.options.resume_id.is_none();
+                        sessions.extend(spawn_task_filtered(
+                            &restored,
+                            Some(crate::tasks::Role::Agent),
+                        )?);
+                    } else {
+                        sessions.extend(spawn_task(task)?);
+                    }
+                }
                 let workspace = Workspace {
                     id: id.clone(),
                     options,
                     sessions,
-                    tasks: vec![task],
+                    tasks,
                     finished: None,
                     view_ready: false,
                 };
-                crate::recovery::register(&id, &workspace.options)?;
+                crate::recovery::register_tasks(&id, &workspace.options, &workspace.tasks)?;
                 let info = workspace.info();
                 self.workspaces.insert(id, workspace);
                 Ok(Response::Workspace(Box::new(info)))
@@ -654,6 +706,12 @@ impl Host {
 }
 
 fn spawn_task(task: &crate::tasks::Task) -> Result<Vec<Managed>> {
+    spawn_task_filtered(task, None)
+}
+fn spawn_task_filtered(
+    task: &crate::tasks::Task,
+    only: Option<crate::tasks::Role>,
+) -> Result<Vec<Managed>> {
     use crate::tasks::{Binding, Role};
     let options = &task.options;
     let mut sessions = Vec::new();
@@ -671,6 +729,9 @@ fn spawn_task(task: &crate::tasks::Task) -> Result<Vec<Managed>> {
                 )
             }
         };
+        if only.is_some_and(|wanted| wanted != role) {
+            continue;
+        }
         let directory = if directory.is_relative() {
             task.cwd.join(directory)
         } else {
@@ -715,6 +776,21 @@ fn spawn_task(task: &crate::tasks::Task) -> Result<Vec<Managed>> {
 fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Response>> {
     use crate::tasks::{Catalog, Operation};
     match request {
+        Request::StartRole {
+            workspace,
+            task,
+            role,
+            fresh,
+            expected_run,
+        } => start_role(
+            state,
+            workspace,
+            task,
+            *role,
+            *fresh,
+            expected_run.as_deref(),
+        )
+        .map(Some),
         Request::PlanTask {
             workspace,
             source,
@@ -815,8 +891,11 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                             .get_mut(&workspace)
                             .context("Workspace closed; task resources retained")?;
                         if !work.tasks.iter().any(|t| t.id == task.id) {
+                            let task_id = task.id.clone();
                             work.tasks.push(task);
                             work.sessions.extend(sessions);
+                            drop(host);
+                            crate::recovery::append_task(&workspace, &task_id)?;
                         }
                         Ok(())
                     })();
@@ -841,6 +920,216 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
         }
         _ => Ok(None),
     }
+}
+
+fn start_role(
+    state: &Arc<Mutex<Host>>,
+    workspace: &str,
+    task_id: &str,
+    role: crate::tasks::Role,
+    fresh: bool,
+    expected: Option<&str>,
+) -> Result<Response> {
+    use crate::session::{CommandStatus, Status};
+    use crate::tasks::{Catalog, Operation, Plan, Role};
+    anyhow::ensure!(
+        role != Role::Extra,
+        "Choose an explicit configured Extra terminal"
+    );
+    let key = format!("{workspace}:{task_id}:{role:?}");
+    let operation = uuid::Uuid::new_v4().to_string();
+    let (mut task, old_run) = {
+        let mut host = state
+            .lock()
+            .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+        if let Some(id) = host.starting.get(&key) {
+            let id = id.clone();
+            drop(host);
+            let catalog = Catalog::load(&config::home())?;
+            return Ok(Response::TaskOperation(Box::new(
+                catalog
+                    .operations
+                    .get(&id)
+                    .context("Task start preparing; query again")?
+                    .clone(),
+            )));
+        }
+        let work = host
+            .workspaces
+            .get(workspace)
+            .context("Workspace missing")?;
+        let task = work
+            .tasks
+            .iter()
+            .find(|t| t.id == task_id)
+            .context("Task not in workspace")?
+            .clone();
+        anyhow::ensure!(!task.archived, "Task archived");
+        let old = work
+            .sessions
+            .iter()
+            .find(|s| s.task.task_id == task_id && s.task.role == role);
+        if let Some(old) = old {
+            anyhow::ensure!(
+                expected.is_none_or(|run| run == old.task.run_id),
+                "Agent run changed; inspect before recovering"
+            );
+            let state = old.session.state();
+            let active = state.status == Status::Running
+                && (role != Role::Agent
+                    || task.options.agent == crate::launch::Agent::Shell
+                    || !matches!(state.command, CommandStatus::Exited(_)));
+            if active {
+                drop(state);
+                return Ok(Response::Workspace(Box::new(work.info())));
+            }
+        }
+        let old_run = old.map(|s| s.task.run_id.clone());
+        host.starting.insert(key.clone(), operation.clone());
+        (task, old_run)
+    };
+    let prepared = (|| -> Result<Operation> {
+        if role == Role::Agent {
+            if fresh {
+                task.options.resume_id = None;
+                task.options.fresh = true;
+            } else {
+                anyhow::ensure!(
+                    task.options.resume_id.is_some(),
+                    "Task has no verified conversation binding; choose a new conversation"
+                );
+                task.options.fresh = false;
+            }
+            task.options.resume = false;
+            task.options.continue_latest = false;
+        } else if task.options.composition == crate::launch::Composition::AgentOnly {
+            task.options.composition = crate::launch::Composition::AgentDebug;
+        }
+        let op = Operation {
+            plan: Plan {
+                operation: operation.clone(),
+                workspace: Some(workspace.into()),
+                task: task.clone(),
+                source: task.checkout.clone(),
+            },
+            phase: "Spawning".into(),
+            error: None,
+        };
+        let _lock = config::ConfigLock::acquire()?;
+        let mut catalog = Catalog::load(&config::home())?;
+        anyhow::ensure!(
+            catalog
+                .operations
+                .values()
+                .filter(|o| o.phase == "Spawning")
+                .count()
+                < 64,
+            "Task start queue full"
+        );
+        catalog.operations.insert(operation.clone(), op.clone());
+        catalog.save(&config::home())?;
+        Ok(op)
+    })();
+    let op = match prepared {
+        Ok(op) => op,
+        Err(e) => {
+            state
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .starting
+                .remove(&key);
+            return Err(e);
+        }
+    };
+    let shared = state.clone();
+    let workspace = workspace.to_owned();
+    let task_id = task_id.to_owned();
+    let worker_key = key.clone();
+    let worker_op = operation.clone();
+    let worker = thread::Builder::new()
+        .name("devtabs-start-role".into())
+        .spawn(move || {
+            let result = (|| -> Result<()> {
+                let mut sessions = spawn_task_filtered(&task, Some(role))?;
+                let next = sessions
+                    .pop()
+                    .context("Requested role has no configured terminal")?;
+                let old = {
+                    let mut host = shared
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                    let work = host
+                        .workspaces
+                        .get_mut(&workspace)
+                        .context("Workspace closed; task retained")?;
+                    let previous = work
+                        .sessions
+                        .iter()
+                        .position(|s| s.task.task_id == task_id && s.task.role == role);
+                    anyhow::ensure!(
+                        previous.map(|i| work.sessions[i].task.run_id.clone()) == old_run,
+                        "Role changed while starting; new child discarded"
+                    );
+                    let old = if let Some(i) = previous {
+                        let old = &work.sessions[i];
+                        let state = old.session.state();
+                        anyhow::ensure!(
+                            state.status != Status::Running
+                                || (role == Role::Agent
+                                    && matches!(state.command, CommandStatus::Exited(_))),
+                            "Original role became active; recovery canceled"
+                        );
+                        drop(state);
+                        Some(std::mem::replace(&mut work.sessions[i], next))
+                    } else {
+                        work.sessions.push(next);
+                        None
+                    };
+                    *work
+                        .tasks
+                        .iter_mut()
+                        .find(|t| t.id == task_id)
+                        .context("Task disappeared")? = task.clone();
+                    old
+                };
+                // Closing the previous ConPTY and job never holds the host input lock.
+                drop(old);
+                let _lock = config::ConfigLock::acquire()?;
+                let mut catalog = Catalog::load(&config::home())?;
+                catalog.tasks.insert(task_id.clone(), task);
+                catalog.save(&config::home())?;
+                Ok(())
+            })();
+            shared
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .starting
+                .remove(&worker_key);
+            if let Ok(_lock) = config::ConfigLock::acquire()
+                && let Ok(mut catalog) = Catalog::load(&config::home())
+                && let Some(op) = catalog.operations.get_mut(&worker_op)
+            {
+                op.phase = if result.is_ok() { "Attached" } else { "Failed" }.into();
+                op.error = result.err().map(|e| format!("{e:#}"));
+                let _ = catalog.save(&config::home());
+            }
+        });
+    if let Err(e) = worker {
+        state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .starting
+            .remove(&key);
+        let _lock = config::ConfigLock::acquire()?;
+        let mut catalog = Catalog::load(&config::home())?;
+        let failed = catalog.operations.get_mut(&operation).unwrap();
+        failed.phase = "Failed".into();
+        failed.error = Some(e.to_string());
+        let failed = failed.clone();
+        catalog.save(&config::home())?;
+        return Ok(Response::TaskOperation(Box::new(failed)));
+    }
+    Ok(Response::TaskOperation(Box::new(op)))
 }
 
 fn managed_args(options: &Options, index: usize, control: &std::path::Path) -> Result<Vec<String>> {

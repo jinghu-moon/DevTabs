@@ -79,6 +79,38 @@ impl App {
                 state.shell_pid = info.shell_pid;
             }
         }
+        for local in &mut self.sessions {
+            if local.info.task.role != crate::tasks::Role::Extra
+                && !work.sessions.iter().any(|s| s.id == local.info.id)
+            {
+                local.detach();
+                local.info.task.role = crate::tasks::Role::Extra;
+                local.info.placement = Placement::Collapsed;
+                local.info.name = format!(
+                    "{} · {}",
+                    local.info.name,
+                    crate::i18n::t("parallel.previous_run")
+                );
+                local.info.status = crate::session::Status::Failed(
+                    crate::i18n::t("parallel.replaced_run").into_owned(),
+                );
+                local.state().status = local.info.status.clone();
+                changed = true;
+                moved = true;
+            }
+        }
+        if let Some((task, role)) = self.parallel.role_focus.clone()
+            && let Some(info) = work
+                .sessions
+                .iter()
+                .find(|s| s.task.task_id == task && s.task.role == role)
+            && let Some(i) = self.sessions.iter().position(|s| s.info.id == info.id)
+        {
+            self.parallel.role_focus = None;
+            if self.parallel.context == task {
+                self.focus(i);
+            }
+        }
         if let Some(i) = self.popup
             && self.sessions[i].info.placement != Placement::Floating
         {
@@ -472,6 +504,22 @@ pub(super) fn short_name(s: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn single_task_layout_uses_roles_when_debug_precedes_agent() {
+        let mut app = app();
+        app.sessions.truncate(2);
+        app.options.layout = Layout::Split;
+        app.focus = 1;
+        for s in &mut app.sessions {
+            s.info.task.task_id = "A".into();
+            s.info.placement = Placement::Docked;
+        }
+        app.sessions[0].info.task.role = crate::tasks::Role::Debug;
+        app.sessions[1].info.task.role = crate::tasks::Role::Agent;
+        let rects = app.rects();
+        assert_eq!(rects[0].0, 1);
+        assert_eq!(rects[1].0, 0);
+    }
     #[test]
     fn parallel_agents_share_one_frontend_and_keep_focus_on_background_addition() {
         let mut app = app();

@@ -208,7 +208,87 @@ fn running_dirty_task_can_add_an_isolated_task_without_restarting_or_crossing_in
         fs::read_to_string(h.root.join("same.txt")).unwrap(),
         "A dirty"
     );
-    h.rpc(Request::Close { workspace: w.id }).unwrap();
+    h.rpc(Request::Input {
+        workspace: w.id.clone(),
+        session: info.sessions[1].id.clone(),
+        client: "B-client".into(),
+        bytes: b"exit\r".to_vec(),
+    })
+    .unwrap();
+    wait("B exits independently", || {
+        matches!(
+            h.info(&w.id).sessions[1].status,
+            devtabs::session::Status::Exited(_)
+        )
+    });
+    let restart = h
+        .rpc(Request::StartRole {
+            workspace: w.id.clone(),
+            task: info.tasks[1].id.clone(),
+            role: devtabs::tasks::Role::Agent,
+            fresh: true,
+            expected_run: Some(info.sessions[1].task.run_id.clone()),
+        })
+        .unwrap();
+    assert!(
+        matches!(restart, Response::TaskOperation(_)),
+        "Independent task recovery must be available"
+    );
+    wait("B gets a new run", || {
+        h.info(&w.id).sessions.iter().any(|s| {
+            s.task.task_id == info.tasks[1].id && s.task.run_id != info.sessions[1].task.run_id
+        })
+    });
+    let recovered = h.info(&w.id);
+    assert_eq!(recovered.sessions[0].id, before.sessions[0].id);
+    assert_eq!(
+        recovered.sessions[0].shell_pid,
+        before.sessions[0].shell_pid
+    );
+    assert_eq!(recovered.tasks[1].id, info.tasks[1].id);
+    let Response::Host { pid } = h.rpc(Request::Ping).unwrap() else {
+        panic!("host identity")
+    };
+    unsafe {
+        use windows_sys::Win32::{
+            Foundation::CloseHandle,
+            System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess},
+        };
+        let process = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        assert!(!process.is_null());
+        assert_ne!(TerminateProcess(process, 77), 0);
+        CloseHandle(process);
+    }
+    wait("fixture host exits", || h.rpc(Request::Ping).is_err());
+    let result = h
+        .command()
+        .args(["--restore", "--headless"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let restored: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let next: WorkspaceInfo = serde_json::from_value(restored["workspaces"][0].clone()).unwrap();
+    assert_eq!(
+        next.tasks.iter().map(|t| &t.id).collect::<Vec<_>>(),
+        recovered.tasks.iter().map(|t| &t.id).collect::<Vec<_>>()
+    );
+    assert_eq!(next.sessions.len(), 2, "Do not automatically resume Debug");
+    assert!(next.sessions.iter().all(|s| {
+        !recovered
+            .sessions
+            .iter()
+            .any(|old| old.id == s.id || old.task.run_id == s.task.run_id)
+    }));
+    assert_eq!(next.tasks[1].cwd, target);
+    assert_eq!(
+        fs::read_to_string(target.join("route.txt")).unwrap(),
+        "B-only"
+    );
+    h.rpc(Request::Close { workspace: next.id }).unwrap();
 }
 #[test]
 fn agent_only_creates_exactly_one_pty_and_roundtrips_recovery() {
@@ -371,6 +451,7 @@ fn launch_journal_survives_host_crash_restore_is_idempotent_and_last_reuses_work
             .all(|s| s.shell_pid.is_some())
     });
     let old_pid = h.info(&original.id).sessions[0].shell_pid.unwrap();
+    let old_task = original.tasks[0].id.clone();
     let home = h.root.join("data");
     let journal = devtabs::recovery::Journal::load_at(&home).unwrap();
     assert!(journal.entries.contains_key(&original.id));
@@ -426,6 +507,11 @@ fn launch_journal_survives_host_crash_restore_is_idempotent_and_last_reuses_work
         h.info(&id).sessions.iter().all(|s| s.shell_pid.is_some())
     });
     assert_eq!(h.info(&id).options.title.as_deref(), Some("恢复测试"));
+    assert_eq!(
+        h.info(&id).tasks[0].id,
+        old_task,
+        "Restoration must retain the authoritative task identity"
+    );
     assert_ne!(h.info(&id).sessions[0].shell_pid, Some(old_pid));
     let journal = devtabs::recovery::Journal::load_at(&home).unwrap();
     assert_eq!(journal.entries.len(), 1);
@@ -1193,6 +1279,33 @@ fn parallel_task_form_adds_two_live_agents_to_one_frontend_without_stealing_inpu
     );
     assert_eq!(h.info(&w.id).sessions[0].shell_pid, pid);
     assert!(front.child.process_id().is_some());
+    let before = h
+        .info(&w.id)
+        .sessions
+        .iter()
+        .map(|s| (s.id.clone(), s.shell_pid))
+        .collect::<Vec<_>>();
+    keys(b"\x07p");
+    wait("overview reveals the original task", || {
+        front.contents().contains("Feature-B") && front.contents().contains("Projects")
+    });
+    keys(b"\r");
+    wait("reentered same workspace", || {
+        front.contents().contains("[+ New task]")
+    });
+    keys(b"[IO.File]::WriteAllText((Join-Path (Get-Location) 'return-route.txt'),'B')\r");
+    wait("return navigation preserved B", || {
+        checkout.join("return-route.txt").exists()
+    });
+    assert!(!h.root.join("return-route.txt").exists());
+    assert_eq!(
+        h.info(&w.id)
+            .sessions
+            .iter()
+            .map(|s| (s.id.clone(), s.shell_pid))
+            .collect::<Vec<_>>(),
+        before
+    );
     drop(front);
     h.rpc(Request::Close { workspace: w.id }).unwrap();
 }

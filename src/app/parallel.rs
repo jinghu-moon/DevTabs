@@ -20,10 +20,13 @@ pub enum Axis {
     Stack,
 }
 #[derive(Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LayoutState {
     pub pair: Vec<String>,
     pub axis: Axis,
     pub ratio: u16,
+    pub focus: Option<String>,
+    pub focused_task: Option<String>,
 }
 #[derive(Default)]
 pub struct State {
@@ -41,6 +44,7 @@ pub struct State {
     pub operations: std::collections::VecDeque<String>,
     pub operation_pending: Option<mpsc::Receiver<Result<Response>>>,
     pub operation_at: Option<Instant>,
+    pub role_focus: Option<(String, Role)>,
 }
 #[derive(Clone)]
 pub struct InputTarget {
@@ -141,6 +145,25 @@ impl App {
                 } else {
                     None
                 }
+            })
+    }
+    pub(super) fn secondary_index(&self) -> Option<usize> {
+        let agent = self.role_index(Role::Agent).unwrap_or(self.focus);
+        if self.focus != agent && self.docked(self.focus) {
+            return Some(self.focus);
+        }
+        self.role_index(Role::Debug)
+            .filter(|&i| self.docked(i))
+            .or_else(|| {
+                self.sessions
+                    .iter()
+                    .enumerate()
+                    .find(|(i, s)| {
+                        *i != agent
+                            && s.info.task.task_id == self.sessions[agent].info.task.task_id
+                            && self.docked(*i)
+                    })
+                    .map(|(i, _)| i)
             })
     }
     pub(super) fn parallel_rects(&self) -> Option<Vec<(usize, Rect)>> {
@@ -286,10 +309,7 @@ impl App {
         self.parallel.drag = false;
     }
     pub(super) fn save_task_layout(&mut self) {
-        if self
-            .workspace_id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-')
+        if uuid::Uuid::parse_str(&self.workspace_id).is_ok()
             && let Ok(bytes) = serde_json::to_vec(&self.parallel.layout)
         {
             let path = crate::config::home()
@@ -362,6 +382,37 @@ impl App {
             pending: None,
             error: String::new(),
         });
+    }
+    pub(super) fn start_task_role(&mut self, role: Role, fresh: bool) {
+        let task = self.sessions[self.focus].info.task.task_id.clone();
+        let expected_run = self
+            .role_index(role)
+            .map(|i| self.sessions[i].info.task.run_id.clone());
+        let result = crate::protocol::rpc(Request::StartRole {
+            workspace: self.workspace_id.clone(),
+            task: task.clone(),
+            role,
+            fresh,
+            expected_run,
+        });
+        match result {
+            Ok(Response::Workspace(work)) => {
+                if let Err(e) = self.sync_presentations(&work) {
+                    self.message = format!("{e:#}");
+                    return;
+                }
+                if let Some(i) = self.role_index(role) {
+                    self.focus(i);
+                }
+            }
+            Ok(Response::TaskOperation(op)) => {
+                self.parallel.operations.push_back(op.plan.operation);
+                self.parallel.role_focus = Some((task, role));
+                self.message = crate::i18n::t("parallel.working").into_owned();
+            }
+            Err(e) => self.message = format!("{e:#}"),
+            _ => self.message = "Unexpected role response".into(),
+        }
     }
     pub(super) fn task_key(&mut self, key: KeyEvent) {
         if key.kind == KeyEventKind::Release {

@@ -7,13 +7,15 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, io::Read, path::Path};
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Record {
     pub id: String,
     pub opened: u64,
     pub options: Options,
+    pub task_ids: Vec<String>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[serde(deny_unknown_fields)]
 pub struct Journal {
     pub entries: BTreeMap<String, Record>,
     pub last: Vec<Options>,
@@ -62,6 +64,7 @@ impl Journal {
                 id: id.into(),
                 opened: config::now(),
                 options: clean(options.clone()),
+                task_ids: vec![],
             },
         );
     }
@@ -79,6 +82,41 @@ pub fn load() -> Result<Journal> {
 pub fn register(id: &str, o: &Options) -> Result<()> {
     edit(|j| j.register(id, o))
 }
+pub fn register_tasks(id: &str, o: &Options, tasks: &[crate::tasks::Task]) -> Result<()> {
+    if let Some(old) = &o.recovery_id {
+        anyhow::ensure!(
+            uuid::Uuid::parse_str(old).is_ok() && uuid::Uuid::parse_str(id).is_ok(),
+            "Invalid recovery layout identity"
+        );
+        let source = config::home().join("layouts").join(format!("{old}.json"));
+        match std::fs::File::open(source) {
+            Ok(file) => {
+                let mut bytes = vec![];
+                file.take(65537).read_to_end(&mut bytes)?;
+                anyhow::ensure!(bytes.len() <= 65536, "Recovery layout exceeds 64 KiB");
+                config::atomic_write(
+                    &config::home().join("layouts").join(format!("{id}.json")),
+                    &bytes,
+                )?;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    edit(|j| {
+        j.register(id, o);
+        j.entries.get_mut(id).unwrap().task_ids = tasks.iter().map(|t| t.id.clone()).collect();
+    })
+}
+pub fn append_task(workspace: &str, task: &str) -> Result<()> {
+    edit(|j| {
+        if let Some(record) = j.entries.get_mut(workspace)
+            && !record.task_ids.iter().any(|id| id == task)
+        {
+            record.task_ids.push(task.into());
+        }
+    })
+}
 pub fn remove(id: &str) -> Result<()> {
     edit(|j| {
         j.entries.remove(id);
@@ -95,6 +133,7 @@ pub fn update_layout(id: &str, layout: crate::launch::Layout) -> Result<()> {
     })
 }
 pub fn clean(mut o: Options) -> Options {
+    o.navigation = None;
     o.workspace = None;
     o.view = None;
     o.restore = false;
@@ -110,8 +149,8 @@ pub fn restore_options(r: &Record) -> Options {
     o.new_instance = true;
     o.recovery_id = Some(r.id.clone());
     if o.agent != crate::launch::Agent::Shell && o.resume_id.is_none() {
-        o.continue_latest = true;
-        o.fresh = false;
+        o.continue_latest = false;
+        o.fresh = true;
         o.resume = false;
     }
     o

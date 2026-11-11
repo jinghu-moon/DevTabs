@@ -31,3 +31,13 @@ RED：`parallel_foundations` 中超预算接收与旧 generation 覆盖两个行
 使用入口：底栏「＋ 新任务」或 Ctrl+G → +；Tab 选择名称/提交引用/路径，Enter 准备并展示冻结提交，再 Enter 创建。创建进度在后台查询，Esc 退出表单可继续操作 A。Ctrl+G → V 切换 Agent 横排/竖排，`[` / `]` 或 1–9 切任务，C 固定当前两个可见任务/解除固定，E 显式替换第二个固定项。固定后进入隐藏任务使用临时放大，Z 可还原；后台事件不会替换组合或改焦点。Debug Float/Split/Tabs 与 Agent 排列分开；不因新增 Agent 自动启动额外 WT。
 
 三项真机项保持未验证：原生 Agent 的输入模式、真实 WT Debug 标签的激活、Windows Terminal 的图片切换表现。没有宣称本阶段已有 Provider 完成检测或系统通知，它们属于 D。
+
+## 阶段 C：总览、返回与恢复
+
+2026-11-12 自动化验证 C01–C03。总览使用稳定任务行，历史对话保持独立；启动队列区分已有任务连接和历史会话启动。返回入口携带 project/workspace/task/session，清除隐藏原对象的筛选后揭示原任务。再次进入复用原进程和输入目标，不因历史记录数量增加项目或任务计数。
+
+实际 RED：任务行数 0 而预期 2；恢复后 task ID 改变；局部重启入口被宿主输入锁拒绝。对应 GREEN 与完整回归日志在 `artifacts/parallel-workspace/stage-C/`。补充真实隔离双 shell 重启测试：B 单独退出/恢复时 A PID/session 不变；宿主崩溃恢复后 A/B task ID 和 cwd 保留，新 session/run 与旧身份不同，不自动启动 Debug。布局复制限 64 KiB，未知 schema 报错保留原记录；精确恢复缺少绑定时要求显式新建对话。
+
+用户真实 Agent/WT 组合仍等待真机验证；自动化只启动 fixture shell，没有修改真实 hooks 或发送系统通知。
+
+完整 workspace：381 通过、0 失败、28 忽略；Clippy `-D warnings`、fmt、diff-check 通过。

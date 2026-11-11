@@ -1,6 +1,6 @@
 # 并行 Agent 工作区 TDD 实施任务
 
-状态：实施中；阶段 0、A、B 自动验证完成，C–E 待实施。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
+状态：实施中；阶段 0、A、B、C 自动验证完成，D–E 待实施。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
 
 本文是整个文档 37 的实施计划，覆盖 0–E 阶段、通知及每轮文件变化记录，不仅是一个通知子功能。任务按实际证据更新状态，不修改真实 Agent 配置或发送系统通知；历史构建的结果不替代实施当天基线。
 
@@ -132,9 +132,9 @@ flowchart LR
 
 ## 8. 阶段 C：总览、返回与恢复
 
-- [ ] **C01 — 任务层级与队列。** RED：历史变任务、项目数膨胀、同项目任务被队列吞并、过滤后丢选择；GREEN：任务行、父项目保留、稳定选择/搜索与明确队列意图；REFACTOR：沿用单行密度、现有筛选与项目脉搏，历史正文仍惰性读取。
-- [ ] **C02 — 返回目标。** RED：点“← 总览”停止后台或选回错误任务，再进入新建 Agent；GREEN：携带 project/workspace/task/session 返回目标，揭示被过滤对象；REFACTOR：点击与 Ctrl+G → P 同一路由，返回与关闭入口区分。
-- [ ] **C03 — 持久化与局部恢复。** RED：B 断连时恢复重启 A/存活 Debug、重启宿主后把旧 PID 当存活、精确 resume 串 cwd；GREEN：任务权威记录、布局、run 与恢复验证，错误 schema 保留原文件并失败；REFACTOR：删除重复 task 定义/猜测兼容路径，不自动续跑 Debug。
+- [x] **C01 — 任务层级与队列。** RED：历史变任务、项目数膨胀、同项目任务被队列吞并、过滤后丢选择；GREEN：任务行、父项目保留、稳定选择/搜索与明确队列意图；REFACTOR：沿用单行密度、现有筛选与项目脉搏，历史正文仍惰性读取。
+- [x] **C02 — 返回目标。** RED：点“← 总览”停止后台或选回错误任务，再进入新建 Agent；GREEN：携带 project/workspace/task/session 返回目标，揭示被过滤对象；REFACTOR：点击与 Ctrl+G → P 同一路由，返回与关闭入口区分。
+- [x] **C03 — 持久化与局部恢复。** RED：B 断连时恢复重启 A/存活 Debug、重启宿主后把旧 PID 当存活、精确 resume 串 cwd；GREEN：任务权威记录、布局、run 与恢复验证，错误 schema 保留原文件并失败；REFACTOR：删除重复 task 定义/猜测兼容路径，不自动续跑 Debug。
 
 阶段退出：0–C 主路径完成，单 Agent/历史/总览/预览仍通过；用户可在此验收首个隔离同屏体验。D/E 全部保持待实施直到各自通过。
 

@@ -551,5 +551,11 @@
   "parallel.name": "任务名称",
   "parallel.new_task": "新任务",
   "parallel.path": "工作树路径（留空自动）",
-  "parallel.working": "准备中…"
+  "parallel.working": "准备中…",
+  "chrome.command.new_conversation": "为任务新开对话",
+  "chrome.command.resume_task": "续接任务关联对话",
+  "parallel.connect_existing": "Enter：在当前终端连接原任务",
+  "parallel.conversation_unbound": "尚未关联对话",
+  "parallel.previous_run": "上次运行",
+  "parallel.replaced_run": "运行已替换，保留最后输出"
 }

@@ -551,5 +551,11 @@
   "parallel.name": "Name",
   "parallel.new_task": "New task",
   "parallel.path": "Worktree path (blank = automatic)",
-  "parallel.working": "Preparing…"
+  "parallel.working": "Preparing…",
+  "chrome.command.new_conversation": "Recover task with new conversation",
+  "chrome.command.resume_task": "Recover linked conversation",
+  "parallel.connect_existing": "Enter: connect the existing task in this terminal",
+  "parallel.conversation_unbound": "No conversation has been linked to this task",
+  "parallel.previous_run": "previous run",
+  "parallel.replaced_run": "Run replaced; last output retained"
 }

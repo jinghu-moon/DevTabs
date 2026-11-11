@@ -169,6 +169,8 @@ pub struct Overview {
     dialog_preview: Rect,
     last_click: Option<(usize, Instant)>,
     focus_after_scan: Option<PathBuf>,
+    return_target: Option<crate::tasks::Navigation>,
+    return_applied: bool,
     dirty: bool,
     pending_edits: usize,
     edit_serial: u64,
@@ -186,6 +188,8 @@ impl Overview {
         let show_detail = config.overview.detail.unwrap_or(true);
         let show_stats = config.overview.statistics.unwrap_or(true);
         Self {
+            return_target: None,
+            return_applied: false,
             dashboard: dashboard::Dashboard::default(),
             filter_counts: BTreeMap::new(),
             group_counts: BTreeMap::new(),
@@ -244,6 +248,13 @@ impl Overview {
     }
     fn rebuild(&mut self) {
         let old = self.path();
+        let old_task = self.rows.get(self.selected).and_then(|r| {
+            if let Row::Task(_, w, t) = r {
+                Some((w.clone(), t.clone()))
+            } else {
+                None
+            }
+        });
         let old_session = self.rows.get(self.selected).and_then(|r| {
             if let Row::Session(_, a, id) = r {
                 Some((*a, id.clone()))
@@ -259,6 +270,18 @@ impl Overview {
         for (key, time) in &self.usage {
             let p = effective.projects.entry(key.clone()).or_default();
             p.last_opened = p.last_opened.max(*time);
+        }
+        // Search labels are transient metadata; project settings remain untouched.
+        for (key, workspaces) in &self.workspaces {
+            let search = &mut effective.projects.entry(key.clone()).or_default().note;
+            for task in workspaces.iter().flat_map(|w| &w.tasks) {
+                search.push_str(&format!(
+                    " {} {} {}",
+                    task.name,
+                    task.branch,
+                    task.cwd.display()
+                ));
+            }
         }
         effective.overview.attention = self.profile_errors.keys().cloned().collect();
         effective.overview.attention.extend(
@@ -344,7 +367,21 @@ impl Overview {
         let mut expanded = Vec::new();
         for row in self.rows.drain(..) {
             let children = if let Row::Project(p) = &row {
-                if self.dashboard.expanded_projects.contains(&config::key(p)) {
+                if self.dashboard.expanded_projects.contains(&config::key(p))
+                    || !self.query.is_empty()
+                {
+                    let mut children = self
+                        .workspaces
+                        .get(&config::key(p))
+                        .into_iter()
+                        .flatten()
+                        .flat_map(|w| {
+                            w.tasks
+                                .iter()
+                                .filter(|t| !t.archived)
+                                .map(|t| Row::Task(p.clone(), w.id.clone(), t.id.clone()))
+                        })
+                        .collect::<Vec<_>>();
                     let agent = self.staged.get(&config::key(p)).map_or_else(
                         || {
                             effective
@@ -356,16 +393,19 @@ impl Overview {
                         },
                         |o| o.agent,
                     );
-                    self.dashboard
-                        .contexts
-                        .get(&dashboard::context_key(p, agent))
-                        .map(|h| {
-                            h.sessions
-                                .iter()
-                                .map(|c| Row::Session(p.clone(), agent, c.id.clone()))
-                                .collect::<Vec<_>>()
-                        })
-                        .unwrap_or_default()
+                    children.extend(
+                        self.dashboard
+                            .contexts
+                            .get(&dashboard::context_key(p, agent))
+                            .map(|h| {
+                                h.sessions
+                                    .iter()
+                                    .map(|c| Row::Session(p.clone(), agent, c.id.clone()))
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default(),
+                    );
+                    children
                 } else {
                     Vec::new()
                 }
@@ -382,18 +422,61 @@ impl Overview {
                 self.rows.iter().position(|r| {
                     r.path()
                         .is_some_and(|p| config::key(p) == config::key(path))
-                        && match (&old_session, r) {
-                            (Some((a, id)), Row::Session(_, b, other)) => a == b && id == other,
-                            (None, Row::Project(_)) => true,
-                            _ => false,
+                        && if let Some((w, t)) = &old_task {
+                            matches!(r,Row::Task(_,other_w,other_t) if w==other_w&&t==other_t)
+                        } else {
+                            match (&old_session, r) {
+                                (Some((a, id)), Row::Session(_, b, other)) => a == b && id == other,
+                                (None, Row::Project(_)) => true,
+                                _ => false,
+                            }
                         }
                 })
             })
             .or_else(|| self.rows.iter().position(|r| r.path().is_some()))
             .unwrap_or(0);
         self.last_click = None;
+        self.reveal_return_target();
         self.dashboard.hover = None;
         self.dirty = true;
+    }
+    fn reveal_return_target(&mut self) {
+        if !self.return_applied
+            && let Some(target) = &self.return_target
+            && let Some(index) = self
+                .rows
+                .iter()
+                .position(|r| matches!(r,Row::Task(_,w,t) if *w==target.workspace&&*t==target.task))
+        {
+            self.selected = index;
+            self.focus_after_scan = None;
+            self.return_applied = true;
+        }
+    }
+    fn selected_task(&self) -> Option<crate::tasks::Task> {
+        let Row::Task(path, workspace, id) = self.rows.get(self.selected)? else {
+            return None;
+        };
+        self.workspaces
+            .get(&config::key(path))?
+            .iter()
+            .find(|w| w.id == *workspace)?
+            .tasks
+            .iter()
+            .find(|t| t.id == *id)
+            .cloned()
+    }
+    fn active_path(&self) -> Option<PathBuf> {
+        self.selected_task().map(|t| t.cwd).or_else(|| self.path())
+    }
+    fn toggle_selected_queue(&mut self) {
+        if let Some(p) = self.path() {
+            if matches!(self.rows.get(self.selected), Some(Row::Task(..))) {
+                self.marked.toggle_task(self.options_for(&p));
+            } else {
+                self.marked.toggle(p);
+            }
+        }
     }
     fn edit(&mut self, w: &Workers, edit: Edit) -> Result<()> {
         self.edit_serial += 1;
@@ -483,6 +566,45 @@ impl Overview {
             options.new_instance = existing.is_none();
             options.workspace = existing.map(|w| w.id.clone());
         }
+        if let Some(Row::Task(p, workspace, task)) = self.rows.get(self.selected)
+            && config::key(p) == config::key(path)
+            && let Some(work) = self
+                .workspaces
+                .get(&config::key(p))
+                .into_iter()
+                .flatten()
+                .find(|w| w.id == *workspace)
+        {
+            options = work
+                .tasks
+                .iter()
+                .find(|t| t.id == *task)
+                .map_or_else(|| work.options.clone(), |t| t.options.clone());
+            options.project = p.clone();
+            options.workspace = Some(workspace.clone());
+            if let Some(session) = work
+                .sessions
+                .iter()
+                .find(|s| s.task.task_id == *task && s.task.role == crate::tasks::Role::Agent)
+            {
+                options.navigation = Some(Box::new(crate::tasks::Navigation {
+                    project: p.clone(),
+                    workspace: workspace.clone(),
+                    task: task.clone(),
+                    session: session.id.clone(),
+                }));
+                if let Some(target) = &self.return_target
+                    && target.workspace == *workspace
+                    && target.task == *task
+                    && work
+                        .sessions
+                        .iter()
+                        .any(|s| s.id == target.session && s.task.task_id == *task)
+                {
+                    options.navigation = Some(Box::new(target.clone()));
+                }
+            }
+        }
         options
     }
     fn stage_resume(&mut self, path: &std::path::Path, agent: Agent, id: String) {
@@ -531,6 +653,7 @@ impl Overview {
             .map(|e| {
                 e.restore
                     .clone()
+                    .or_else(|| e.connect.clone())
                     .unwrap_or_else(|| self.options_for(&e.path))
             })
             .collect()
@@ -843,7 +966,8 @@ impl Overview {
         }
         if rebuild {
             self.rebuild();
-            if let Some(path) = &self.focus_after_scan
+            if !self.return_applied
+                && let Some(path) = &self.focus_after_scan
                 && let Some(index) = self.rows.iter().position(|r| {
                     r.path()
                         .is_some_and(|p| config::key(p) == config::key(path))
@@ -860,7 +984,7 @@ impl Overview {
         if self.refresh_pending.is_some() {
             return Ok(());
         }
-        let Some(path) = self.path() else {
+        let Some(path) = self.active_path() else {
             return Ok(());
         };
         let key = config::key(&path);
@@ -945,7 +1069,17 @@ impl Overview {
                 self.dashboard.source_pending = Some(self.dashboard.source_ticket);
             }
         }
-        let agent = self.options_for(&path).agent;
+        let task = self.selected_task();
+        let options = task
+            .as_ref()
+            .map_or_else(|| self.options_for(&path), |t| t.options.clone());
+        if task.is_some() && options.resume_id.is_none() {
+            if self.dashboard.context_pending.take().is_some() {
+                w.history_ticket();
+            }
+            return Ok(());
+        }
+        let agent = options.agent;
         let target = dashboard::context_key(&path, agent);
         if self.dashboard.context_target.as_ref() != Some(&target) {
             if !matches!(self.dialog, Some(Dialog::History { .. })) {
@@ -986,7 +1120,6 @@ impl Overview {
                     .nth(*selected)
             })
         } else {
-            let options = self.options_for(&path);
             self.dashboard.contexts.get(&target).and_then(|h| {
                 options
                     .resume_id
@@ -1235,6 +1368,15 @@ impl Overview {
             Command::Open | Command::Options => {
                 if let Some(p) = path {
                     let options = self.options_for(&p);
+                    if matches!(command, Command::Open)
+                        && matches!(self.rows.get(self.selected), Some(Row::Task(..)))
+                    {
+                        anyhow::ensure!(
+                            options.navigation.is_some(),
+                            "Task Agent unavailable; select recovery explicitly"
+                        );
+                        return Ok(Outcome::Current(Box::new(options)));
+                    }
                     if matches!(command, Command::Options) {
                         self.dialog = Some(Dialog::Options {
                             options,
@@ -1497,7 +1639,25 @@ impl Overview {
                     self.rebuild()
                 }
             }
-            Command::Launch => self.start(w, self.queue_options())?,
+            Command::Launch => {
+                let options = self.queue_options();
+                let connects = options
+                    .iter()
+                    .filter(|o| o.navigation.is_some())
+                    .collect::<Vec<_>>();
+                if let Some(first) = connects.first() {
+                    anyhow::ensure!(
+                        connects.len() == options.len(),
+                        "Connect tasks and launch projects in separate batches"
+                    );
+                    anyhow::ensure!(
+                        connects.iter().all(|o| o.workspace == first.workspace),
+                        "Select tasks from one workspace to view in the current terminal"
+                    );
+                    return Ok(Outcome::Current(Box::new((*first).clone())));
+                }
+                self.start(w, options)?;
+            }
             Command::SavePreset => {
                 anyhow::ensure!(!self.marked.is_empty(), "{}", t("preset_empty"));
                 self.dialog = Some(Dialog::Input(Input::Preset, String::new()))
@@ -2182,9 +2342,7 @@ impl Overview {
                 None
             }
             KeyCode::Char(' ') if !ctrl => {
-                if let Some(p) = self.path() {
-                    self.marked.toggle(p)
-                }
+                self.toggle_selected_queue();
                 None
             }
             KeyCode::Up => {
@@ -2509,6 +2667,13 @@ pub fn run_from(
 ) -> Result<Option<Options>> {
     let mut app = Overview::new(Config::load()?);
     if let Some(mut origin) = origin {
+        app.return_target = origin.navigation.as_deref().cloned();
+        origin.navigation = None;
+        if let Some(target) = &app.return_target {
+            app.dashboard
+                .expanded_projects
+                .insert(config::key(&target.project));
+        }
         app.focus_after_scan = Some(origin.project.clone());
         origin.workspace = None;
         app.staged.insert(config::key(&origin.project), origin);

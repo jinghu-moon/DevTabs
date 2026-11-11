@@ -1,5 +1,136 @@
 use super::*;
 use crossterm::event::{MouseEvent, MouseEventKind};
+#[test]
+fn task_rows_are_distinct_from_history_and_preserve_selection_after_reordering() {
+    let mut app = overview();
+    let mut options = crate::launch::Options::parse_for_view();
+    options.project = "a".into();
+    let task = |id: &str| crate::tasks::Task {
+        id: id.into(),
+        name: id.into(),
+        project: "a".into(),
+        checkout: format!("a-{id}").into(),
+        cwd: format!("a-{id}").into(),
+        branch: id.into(),
+        base: "commit".into(),
+        owned: true,
+        archived: false,
+        options: options.clone(),
+    };
+    let sessions = ["A", "B"]
+        .into_iter()
+        .map(|id| crate::protocol::SessionInfo {
+            id: format!("session-{id}"),
+            task: Box::new(crate::tasks::Binding {
+                task_id: id.into(),
+                run_id: id.into(),
+                role: crate::tasks::Role::Agent,
+                initial_cwd: format!("a-{id}").into(),
+            }),
+            name: "Agent".into(),
+            shell_pid: Some(1),
+            status: crate::session::Status::Running,
+            command: crate::session::CommandStatus::Running,
+            placement: crate::presentation::Placement::Docked,
+        })
+        .collect();
+    let work = crate::protocol::WorkspaceInfo {
+        id: "w".into(),
+        project: "a".into(),
+        options: options.clone(),
+        sessions,
+        tasks: vec![task("A"), task("B")],
+    };
+    app.workspaces
+        .insert(config::key(std::path::Path::new("a")), vec![work]);
+    app.dashboard
+        .expanded_projects
+        .insert(config::key(std::path::Path::new("a")));
+    app.dashboard.store_context(
+        "a|Codex".into(),
+        history::History {
+            sessions: (0..40)
+                .map(|i| history::Conversation {
+                    id: format!("history-{i}"),
+                    timestamp: String::new(),
+                    prompt: String::new(),
+                    turns: vec![],
+                    file: format!("{i}.jsonl").into(),
+                })
+                .collect(),
+            ..Default::default()
+        },
+    );
+    app.rebuild();
+    assert_eq!(
+        app.rows
+            .iter()
+            .filter(|r| matches!(r, Row::Task(..)))
+            .count(),
+        2
+    );
+    assert_eq!(
+        app.rows
+            .iter()
+            .filter(|r| matches!(r, Row::Project(..)))
+            .count(),
+        2
+    );
+    app.selected = app
+        .rows
+        .iter()
+        .position(|r| matches!(r,Row::Task(_,_,id) if id=="B"))
+        .unwrap();
+    app.workspaces.values_mut().next().unwrap()[0]
+        .tasks
+        .reverse();
+    app.rebuild();
+    assert!(matches!(app.rows.get(app.selected),Some(Row::Task(_,_,id)) if id=="B"));
+    assert_eq!(
+        app.options_for(std::path::Path::new("a"))
+            .workspace
+            .as_deref(),
+        Some("w")
+    );
+    assert_eq!(
+        app.rows
+            .iter()
+            .filter(|r| matches!(r, Row::Session(..)))
+            .count(),
+        40
+    );
+    assert_eq!(
+        app.options_for(std::path::Path::new("a"))
+            .navigation
+            .as_ref()
+            .unwrap()
+            .task,
+        "B"
+    );
+    app.toggle_selected_queue();
+    app.selected = app
+        .rows
+        .iter()
+        .position(|r| matches!(r,Row::Task(_,_,id) if id=="A"))
+        .unwrap();
+    app.toggle_selected_queue();
+    assert_eq!(app.queue_options().len(), 2);
+    assert_eq!(
+        app.queue_options()[0].navigation.as_ref().unwrap().task,
+        "B"
+    );
+    assert_eq!(
+        app.queue_options()[1].navigation.as_ref().unwrap().task,
+        "A"
+    );
+    app.query = "a-B".into();
+    app.rebuild();
+    assert!(
+        app.rows
+            .iter()
+            .any(|r| matches!(r,Row::Task(_,_,id) if id=="B"))
+    );
+}
 fn overview() -> Overview {
     let mut app = Overview::new(Config::default());
     app.projects = vec![PathBuf::from("a"), PathBuf::from("b")];

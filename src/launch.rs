@@ -54,6 +54,8 @@ impl Composition {
     about = "Agent and Debug together in a Windows terminal"
 )]
 pub struct Options {
+    #[arg(skip)]
+    pub navigation: Option<Box<crate::tasks::Navigation>>,
     /// Application UI language; does not change Agent output or shell locale.
     #[arg(long, value_enum)]
     #[serde(default)]

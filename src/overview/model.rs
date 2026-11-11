@@ -255,11 +255,12 @@ pub enum Row {
     Group(u8),
     Project(PathBuf),
     Session(PathBuf, Agent, String),
+    Task(PathBuf, String, String),
 }
 impl Row {
     pub fn path(&self) -> Option<&Path> {
         match self {
-            Self::Project(p) | Self::Session(p, ..) => Some(p),
+            Self::Project(p) | Self::Session(p, ..) | Self::Task(p, ..) => Some(p),
             _ => None,
         }
     }
@@ -429,6 +430,7 @@ pub fn toggle_selection(selected: &mut Vec<PathBuf>, path: PathBuf) {
 pub struct QueueEntry {
     pub path: PathBuf,
     pub restore: Option<Options>,
+    pub connect: Option<Options>,
 }
 #[derive(Clone, Debug, Default)]
 pub struct Queue(pub Vec<QueueEntry>);
@@ -443,27 +445,27 @@ impl Queue {
         self.0.is_empty()
     }
     pub fn contains(&self, path: &Path) -> bool {
-        self.0
-            .iter()
-            .any(|e| e.restore.is_none() && config::key(&e.path) == config::key(path))
+        self.0.iter().any(|e| {
+            e.restore.is_none() && e.connect.is_none() && config::key(&e.path) == config::key(path)
+        })
     }
     pub fn push(&mut self, path: PathBuf) {
         if !self.contains(&path) {
             self.0.push(QueueEntry {
                 path,
                 restore: None,
+                connect: None,
             });
         }
     }
     pub fn retain(&mut self, mut keep: impl FnMut(&PathBuf) -> bool) {
-        self.0.retain(|e| e.restore.is_some() || keep(&e.path));
+        self.0
+            .retain(|e| e.restore.is_some() || e.connect.is_some() || keep(&e.path));
     }
     pub fn toggle(&mut self, path: PathBuf) {
-        if let Some(i) = self
-            .0
-            .iter()
-            .position(|e| e.restore.is_none() && config::key(&e.path) == config::key(&path))
-        {
+        if let Some(i) = self.0.iter().position(|e| {
+            e.restore.is_none() && e.connect.is_none() && config::key(&e.path) == config::key(&path)
+        }) {
             self.0.remove(i);
         } else {
             self.push(path);
@@ -478,6 +480,22 @@ impl Queue {
             self.0.push(QueueEntry {
                 path: options.project.clone(),
                 restore: Some(options),
+                connect: None,
+            });
+        }
+    }
+    pub fn toggle_task(&mut self, options: Options) {
+        if let Some(i) = self.0.iter().position(|e| {
+            e.connect
+                .as_ref()
+                .is_some_and(|o| o.navigation == options.navigation)
+        }) {
+            self.0.remove(i);
+        } else {
+            self.0.push(QueueEntry {
+                path: options.project.clone(),
+                restore: None,
+                connect: Some(options),
             });
         }
     }

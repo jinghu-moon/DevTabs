@@ -119,7 +119,7 @@ fn run() -> Result<()> {
         app::run(&mut terminal, &mut app)?;
         terminal.clear()?;
         if app.return_overview {
-            overview_origin = Some(app.options.clone());
+            overview_origin = Some(app.overview_options());
             continue;
         }
         return Ok(());

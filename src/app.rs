@@ -72,6 +72,7 @@ pub struct App {
 
 impl App {
     pub fn new(options: Options, _executable: &Path, size: ratatui::layout::Rect) -> Result<Self> {
+        let navigation = options.navigation.clone();
         let image_protocol = options.image_protocol;
         let image_cell_size = options.image_cell_size;
         let named_main = options.view.as_deref() == Some("main");
@@ -87,10 +88,10 @@ impl App {
             _ => anyhow::bail!("Session host returned no workspace"),
         };
         let auto_debug = info.options.layout == Layout::Float
-            && info
-                .sessions
-                .get(1)
-                .is_some_and(|s| s.placement == crate::presentation::Placement::Docked);
+            && info.sessions.iter().any(|s| {
+                s.task.role == crate::tasks::Role::Debug
+                    && s.placement == crate::presentation::Placement::Docked
+            });
         let sessions = info
             .sessions
             .into_iter()
@@ -135,28 +136,81 @@ impl App {
             hover: None,
             zoom: None,
         };
+        if let Some(target) = &navigation {
+            anyhow::ensure!(
+                target.workspace == app.workspace_id,
+                "Navigation workspace mismatch"
+            );
+            app.focus = app
+                .sessions
+                .iter()
+                .position(|s| s.info.id == target.session && s.info.task.task_id == target.task)
+                .context("Requested task/session is no longer available")?;
+            app.options.navigation = Some(target.clone());
+        }
         if app.view.as_deref() == Some("debug") {
-            app.focus = 1;
+            app.focus = app
+                .role_index(crate::tasks::Role::Debug)
+                .context("No Debug terminal")?;
         }
         if app.view.is_none() {
-            app.sidebar = Some(crate::sidebar::Sidebar::new(app.options.project.clone()));
-            app.parallel.context = app.sessions[app.focus].info.task.task_id.clone();
+            use std::io::Read;
             let path = crate::config::home()
                 .join("layouts")
                 .join(format!("{}.json", app.workspace_id));
-            if let Ok(bytes) = std::fs::read(path)
-                && bytes.len() <= 65536
-            {
+            if let Ok(file) = std::fs::File::open(path) {
+                let mut bytes = vec![];
+                file.take(65537).read_to_end(&mut bytes)?;
+                anyhow::ensure!(bytes.len() <= 65536, "Task layout exceeds 64 KiB");
                 app.parallel.layout = serde_json::from_slice(&bytes)?;
+                anyhow::ensure!(
+                    app.parallel.layout.pair.len() <= 2
+                        && app
+                            .parallel
+                            .layout
+                            .pair
+                            .iter()
+                            .collect::<HashSet<_>>()
+                            .len()
+                            == app.parallel.layout.pair.len(),
+                    "Invalid pinned task identities"
+                );
+                if navigation.is_none()
+                    && let Some(saved) = &app.parallel.layout.focus
+                    && let Some(i) = app.sessions.iter().position(|s| s.info.id == *saved)
+                {
+                    app.focus = i;
+                } else if navigation.is_none()
+                    && let Some(task) = &app.parallel.layout.focused_task
+                    && let Some(i) = app.sessions.iter().position(|s| {
+                        s.info.task.task_id == *task
+                            && s.info.task.role == crate::tasks::Role::Agent
+                    })
+                {
+                    app.focus = i;
+                }
             }
+            app.sidebar = Some(crate::sidebar::Sidebar::new(
+                app.sessions[app.focus].info.task.initial_cwd.clone(),
+            ));
+            app.parallel.context = app.sessions[app.focus].info.task.task_id.clone();
         }
         if let Some(view) = &app.view
             && let Some(index) = view.strip_prefix("session:")
         {
             app.focus = index.parse()?;
         }
+        if let Some(view) = &app.view
+            && let Some(id) = view.strip_prefix("session-id:")
+        {
+            app.focus = app
+                .sessions
+                .iter()
+                .position(|s| s.info.id == id)
+                .context("Requested terminal no longer exists")?;
+        }
         if app.view.as_deref() == Some("debug")
-            && (app.options.layout != Layout::Tabs || !app.docked(1))
+            && (app.options.layout != Layout::Tabs || !app.docked(app.focus))
         {
             app.force_exit = true;
             return Ok(app);
@@ -171,6 +225,10 @@ impl App {
             app.focus = i;
         }
         app.attach_visible()?;
+        if navigation.is_some() {
+            let index = app.focus;
+            app.focus(index);
+        }
         execute!(
             io::stdout(),
             crossterm::terminal::SetTitle(format!(
@@ -212,6 +270,18 @@ impl App {
     }
     pub fn sidebar_active(&self) -> bool {
         self.sidebar.is_some()
+    }
+    pub fn overview_options(&self) -> Options {
+        let mut options = self.options.clone();
+        let session = &self.sessions[self.focus].info;
+        options.navigation = Some(Box::new(crate::tasks::Navigation {
+            project: options.project.clone(),
+            workspace: self.workspace_id.clone(),
+            task: session.task.task_id.clone(),
+            session: session.id.clone(),
+        }));
+        options.workspace = Some(self.workspace_id.clone());
+        options
     }
     pub(crate) fn update_image_occlusion(&mut self) {
         let cover = self
@@ -256,12 +326,10 @@ impl App {
         let active = self.sidebar_active();
         let split = self.options.layout == Layout::Split
             && self.agents().len() < 2
-            && self.docked(0)
             && self
-                .sessions
-                .iter()
-                .enumerate()
-                .any(|(i, _)| i > 0 && self.docked(i));
+                .role_index(crate::tasks::Role::Agent)
+                .is_some_and(|i| self.docked(i))
+            && self.secondary_index().is_some();
         if let Some(sidebar) = &mut self.sidebar {
             sidebar.enlarged = match self.zoom {
                 Some(chrome::Zoom::Tree) => Some(crate::sidebar::Focus::Tree),
@@ -294,15 +362,16 @@ impl App {
         if let Some(rects) = self.parallel_rects() {
             return rects;
         }
+        let agent = self
+            .role_index(crate::tasks::Role::Agent)
+            .unwrap_or(self.focus);
+        let secondary = self.secondary_index().unwrap_or(agent);
         let primary = if self.options.layout == Layout::Split
-            && self.docked(0)
-            && self
-                .sessions
-                .iter()
-                .enumerate()
-                .any(|(i, _)| i > 0 && self.docked(i))
+            && self.view.is_none()
+            && self.docked(agent)
+            && secondary != agent
         {
-            0
+            agent
         } else {
             if self.docked(self.focus) {
                 self.focus
@@ -312,15 +381,6 @@ impl App {
                     .position(|s| s.info.placement == crate::presentation::Placement::Docked)
                     .unwrap_or(0)
             }
-        };
-        let secondary = if self.focus > 0 && self.docked(self.focus) {
-            self.focus
-        } else {
-            self.sessions
-                .iter()
-                .enumerate()
-                .find(|(i, _)| *i > 0 && self.docked(*i))
-                .map_or(1, |(i, _)| i)
         };
         let mut rects = if self.sidebar_active()
             && let Some(sidebar) = &self.sidebar
@@ -338,14 +398,15 @@ impl App {
             out
         } else if self.options.layout == Layout::Split
             && self.view.is_none()
-            && self.docked(0)
+            && self.docked(agent)
+            && secondary != agent
             && self.docked(secondary)
         {
             ui::panes(ratatui::layout::Rect {
                 height: self.size.height,
                 ..self.size
             })
-            .map(|r| vec![(0, r[0]), (secondary, r[1])])
+            .map(|r| vec![(agent, r[0]), (secondary, r[1])])
             .unwrap_or_default()
         } else {
             vec![(
@@ -571,7 +632,7 @@ impl App {
             }
             return;
         }
-        if self.view.is_some() && index == 0 {
+        if self.view.is_some() && self.sessions[index].info.task.role == crate::tasks::Role::Agent {
             if let Err(error) = crate::windows::focus_workspace(&self.workspace_id) {
                 self.message = format!("{error:#}");
             }
@@ -581,7 +642,7 @@ impl App {
             && self.options.layout == Layout::Tabs
             && self.view.is_none()
         {
-            let view = format!("session:{index}");
+            let view = format!("session-id:{}", self.sessions[index].info.id);
             if let Err(error) = crate::windows::spawn_view(&self.workspace_id, &view, false) {
                 self.message = format!("{error:#}");
             }
@@ -610,6 +671,9 @@ impl App {
             self.send(self.focus, b"\x1b[O".to_vec());
         }
         self.focus = index;
+        self.parallel.layout.focus = Some(self.sessions[index].info.id.clone());
+        self.parallel.layout.focused_task = Some(self.sessions[index].info.task.task_id.clone());
+        self.save_task_layout();
         self.selection = None;
         if let Err(error) = self.attach_visible() {
             self.message = format!("{error:#}");
@@ -725,8 +789,12 @@ impl App {
                 KeyCode::Char('d' | 'D') => {
                     if let Some(i) = self.role_index(crate::tasks::Role::Debug) {
                         self.focus(i);
+                    } else {
+                        self.start_task_role(crate::tasks::Role::Debug, true);
                     }
                 }
+                KeyCode::Char('j' | 'J') => self.start_task_role(crate::tasks::Role::Agent, true),
+                KeyCode::Char('h' | 'H') => self.start_task_role(crate::tasks::Role::Agent, false),
                 KeyCode::Char('l' | 'L') => {
                     if let Err(error) = self.layout() {
                         self.message = format!("{error:#}");

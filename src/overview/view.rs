@@ -632,6 +632,24 @@ pub(super) fn opening(options: &Options) -> String {
 pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>> {
     use super::dashboard::DetailAction;
     app.dashboard.detail_actions.clear();
+    if let Some(task) = app.selected_task() {
+        let mut lines = vec![
+            section(task.name.clone(), width),
+            info_line(t("agent"), format!("{:?}", task.options.agent)),
+            info_line(t("branch"), task.branch.clone()),
+            Line::from(task.cwd.display().to_string()),
+            Line::from(t("parallel.connect_existing")),
+            Line::from(""),
+            section(t("history").into_owned(), width),
+        ];
+        if let Some(id) = &task.options.resume_id {
+            lines.push(Line::from(id.clone()));
+            lines.extend(conversation(app, &task.cwd, &task.options, width));
+        } else {
+            lines.push(Line::from(t("parallel.conversation_unbound")));
+        }
+        return lines;
+    }
     let Some(path) = app.path() else {
         return vec![Line::from(t("no_project"))];
     };
@@ -1141,7 +1159,7 @@ pub(super) fn human_bytes(bytes: u64) -> String {
     }
 }
 pub(super) fn stats_lines(app: &Overview, width: u16) -> Vec<Line<'static>> {
-    let Some(path) = app.path() else {
+    let Some(path) = app.active_path() else {
         return vec![Line::from(t("no_project"))];
     };
     let key = config::key(&path);

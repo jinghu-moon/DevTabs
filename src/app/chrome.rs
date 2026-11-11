@@ -22,6 +22,8 @@ pub(crate) const COMMANDS: &[(char, &str)] = &[
     ('v', "agent_layout"),
     ('c', "task_pins"),
     ('e', "replace_task"),
+    ('j', "new_conversation"),
+    ('h', "resume_task"),
     ('a', "agent"),
     ('d', "debug"),
     ('f', "tree"),

@@ -34,6 +34,13 @@ pub struct SessionInfo {
 }
 #[derive(Serialize, Deserialize)]
 pub enum Request {
+    StartRole {
+        workspace: String,
+        task: String,
+        role: crate::tasks::Role,
+        fresh: bool,
+        expected_run: Option<String>,
+    },
     PlanTask {
         workspace: String,
         source: String,

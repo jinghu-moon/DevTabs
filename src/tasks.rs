@@ -21,6 +21,14 @@ pub struct Binding {
     pub role: Role,
     pub initial_cwd: PathBuf,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Navigation {
+    pub project: PathBuf,
+    pub workspace: String,
+    pub task: String,
+    pub session: String,
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Task {
