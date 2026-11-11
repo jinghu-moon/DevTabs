@@ -703,6 +703,52 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn round_review_is_read_only_scrolls_visible_diff_and_keeps_agent_focus() {
+        let root = std::env::temp_dir().join(format!("DevTabs-review-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/a"), "old").unwrap();
+        let recorder = crate::rounds::Recorder::new(root.join("history"));
+        let r = recorder
+            .begin(
+                "task",
+                "run",
+                &root,
+                crate::rounds::Mode::Snapshot(vec!["src".into()]),
+                false,
+            )
+            .unwrap();
+        std::fs::write(root.join("src/a"), "new").unwrap();
+        let r = recorder.finish(r).unwrap();
+        let mut app = app();
+        app.parallel.review.open = true;
+        app.parallel.review.data.records = vec![r];
+        app.parallel.review.data.diff = Some((0..1000).map(|i| format!("+line {i}\n")).collect());
+        let focus = app.focus;
+        app.review_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+        assert_eq!(app.parallel.review.scroll, 12);
+        assert_eq!(app.focus, focus);
+        for (w, h) in [(40, 10), (100, 30)] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+            terminal
+                .draw(|f| super::super::review::draw(f, &app))
+                .unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>();
+            assert!(!text.contains("line 999"));
+        }
+        app.review_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.parallel.review.open);
+        assert_eq!(std::fs::read_to_string(root.join("src/a")).unwrap(), "new");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
     fn app() -> App {
         let sessions = (0..8)
             .map(|i| {
@@ -714,6 +760,7 @@ mod tests {
                     status: crate::session::Status::Running,
                     command: crate::session::CommandStatus::Idle,
                     placement: Placement::Collapsed,
+                    activity: Default::default(),
                 })
             })
             .collect();

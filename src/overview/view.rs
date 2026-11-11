@@ -128,6 +128,31 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     .collect();
                 pane(frame, t("overview.instances"), lines, rect, 0);
             }
+            Dialog::Attention { selected } => {
+                let rect = popup(frame, 100, 24);
+                let rows = app.attention();
+                let lines = rows
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (target, state))| {
+                        let name = app
+                            .workspaces
+                            .values()
+                            .flatten()
+                            .flat_map(|w| w.tasks.iter())
+                            .find(|t| t.id == target.task)
+                            .map_or(target.task.as_str(), |t| t.name.as_str());
+                        Line::from(format!(
+                            "{} {} · {} · #{}",
+                            if i == *selected { "▸" } else { " " },
+                            name,
+                            t(state.phase.label()),
+                            state.result
+                        ))
+                    })
+                    .collect();
+                pane(frame, t("review.inbox"), lines, rect, 0);
+            }
             Dialog::Diagnostics => {
                 let rect = popup(frame, 110, area.height.saturating_sub(4));
                 let mut lines = vec![info_line("Build", crate::protocol::BUILD_ID)];

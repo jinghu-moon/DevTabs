@@ -110,6 +110,124 @@ fn wait(label: &str, mut f: impl FnMut() -> bool) {
 fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
+#[test]
+fn managed_hook_events_are_bound_to_run_deduplicated_and_old_ack_cannot_clear_new_result() {
+    let h = Harness::new();
+    let w = h.open(&["--composition", "agent-only"]);
+    let session = w.sessions[0].id.clone();
+    let task = w.tasks[0].id.clone();
+    h.rpc(Request::Attach {
+        workspace: w.id.clone(),
+        session: session.clone(),
+        client: "fixture".into(),
+        takeover: false,
+        floating: None,
+        rows: 24,
+        cols: 100,
+    })
+    .unwrap();
+    let send = |kind: &str| {
+        let payload = serde_json::json!({"hook_event_name":kind,"session_id":"fixture-conversation","turn_id":"turn-A","cwd":h.root});
+        let marker = h.root.join("hook-finished");
+        let _ = fs::remove_file(&marker);
+        let source = format!(
+            "'{}' | & {} __hook shell; [IO.File]::WriteAllText({},'done')\r",
+            payload.to_string().replace('\'', "''"),
+            quoted(&h.exe),
+            quoted(&marker)
+        );
+        h.rpc(Request::Input {
+            workspace: w.id.clone(),
+            session: session.clone(),
+            client: "fixture".into(),
+            bytes: source.into_bytes(),
+        })
+        .unwrap();
+        wait("helper shell returns", || marker.exists());
+    };
+    send("UserPromptSubmit");
+    wait("managed prompt event", || {
+        h.info(&w.id).sessions[0].activity.phase == devtabs::activity::Phase::Working
+    });
+    send("Stop");
+    {
+        let until = Instant::now() + Duration::from_secs(5);
+        while h.info(&w.id).sessions[0].activity.result != 1 {
+            assert!(
+                Instant::now() < until,
+                "report event missing; helper diagnostic: {:?}; activity: {:?}",
+                fs::read_to_string(h.root.join("data/hook-last-error.txt")),
+                h.info(&w.id).sessions[0].activity
+            );
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
+    send("Stop");
+    send("UserPromptSubmit");
+    wait("continuation", || {
+        h.info(&w.id).sessions[0].activity.phase == devtabs::activity::Phase::Working
+    });
+    send("Stop");
+    wait("new result", || {
+        h.info(&w.id).sessions[0].activity.result == 2
+    });
+    let mut target = devtabs::notifications::Target {
+        workspace: w.id.clone(),
+        task: task.clone(),
+        session,
+        run: w.sessions[0].task.run_id.clone(),
+        result: 1,
+    };
+    h.rpc(Request::Notifications {
+        action: devtabs::notifications::Action::Ack {
+            target: target.clone(),
+        },
+    })
+    .unwrap();
+    assert!(h.info(&w.id).sessions[0].activity.pending());
+    h.rpc(Request::Notifications {
+        action: devtabs::notifications::Action::Navigate {
+            target: target.clone(),
+        },
+    })
+    .unwrap();
+    let Response::Notifications(other) = h
+        .rpc(Request::Notifications {
+            action: devtabs::notifications::Action::Poll {
+                workspace: w.id.clone(),
+                clients: vec!["other-view".into()],
+            },
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert!(other.navigation.is_none());
+    let Response::Notifications(original) = h
+        .rpc(Request::Notifications {
+            action: devtabs::notifications::Action::Poll {
+                workspace: w.id.clone(),
+                clients: vec!["fixture".into()],
+            },
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(original.navigation, Some(target.clone()));
+    target.run = "expired".into();
+    assert!(
+        h.rpc(Request::Notifications {
+            action: devtabs::notifications::Action::Navigate { target }
+        })
+        .is_err()
+    );
+    assert!(
+        !h.root.join("data/notification-identity.json").exists(),
+        "Fixture must not register or send real notifications"
+    );
+    h.rpc(Request::Close { workspace: w.id }).unwrap();
+}
 
 #[test]
 fn running_dirty_task_can_add_an_isolated_task_without_restarting_or_crossing_input() {

@@ -1,6 +1,6 @@
 # 并行 Agent 工作区 TDD 实施任务
 
-状态：实施中；阶段 0、A、B、C 自动验证完成，D–E 待实施。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
+状态：实施中；阶段 0、A、B、C、D 开发路径自动验证完成，E 待实施；Provider/Windows 真机项等待用户验证。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
 
 本文是整个文档 37 的实施计划，覆盖 0–E 阶段、通知及每轮文件变化记录，不仅是一个通知子功能。任务按实际证据更新状态，不修改真实 Agent 配置或发送系统通知；历史构建的结果不替代实施当天基线。
 
@@ -140,33 +140,35 @@ flowchart LR
 
 ## 9. 阶段 D：文件记录、审阅与通知
 
+本阶段勾选表示已实现并通过隔离自动化；D08–D13 的真实 Provider、横幅/回调/WT 激活为等待真机，不能解释为所有 Windows 组合已验收。逐项证据和支持限制见文档 40。
+
 ### 9.1 先完成可独立验证的文件审阅
 
-- [ ] **D01 — 轮次状态机与手动记录。** RED：晚起点仍完整、Stop 继续换起始基线、子 Agent/压缩创建新轮、后态晚到改变已读；GREEN：独立 round/result/capture revision、手动 prepare/start/end 与捕获窗口；REFACTOR：活动和采集状态分开。拟测 `tests/round_state.rs`。
-- [ ] **D02 — 有界内容存储与封存。** RED：原文件继续写入改变旧快照、满额误删引用、半写崩溃显示完整、对象缺失用当前文件填补；GREEN：最小只读内容寻址/完整性校验、原子清单、配额与回收；REFACTOR：统一引用/故障原因，不增加数据库服务。若需新增哈希依赖，先复核现有可复用能力，再选维护中的专用库，禁止自创哈希算法。拟测 `tests/round_store.rs`。
-- [ ] **D03 — Git 起始基准与例外。** RED：已有 staged/unstaged/untracked 被计成本轮、staged 新文件被当不存在、十万干净文件逐轮复制；GREEN：冻结提交树＋实际工作树例外，保存预算内例外内容/缺失状态；REFACTOR：批量 Git 对象/路径查询，NUL 路径保真，不写 index/refs。拟测 `tests/round_git.rs`。
-- [ ] **D04 — Git 结束候选与归档。** RED：中途 commit 后 clean 漏改动、起点 dirty 恢复干净遗漏、CRLF 假改动、外部 GC 后完整历史不可读；GREEN：两端树/例外/未跟踪候选合并，校验净内容并封存所需前后内容；REFACTOR：只读取必要候选，复杂 filter/不完整查询明确降级。先测内容真值，再测候选读量；不能以少读但漏文件变绿。
-- [ ] **D05 — 非 Git 默认变化观察。** RED：无事件显示零修改、watcher 溢出被忽略、无前态显示 diff、打开项目偷偷 init；GREEN：有界路径事件聚合、观察语义/当前内容导航和不完整原因；REFACTOR：复用现有 watcher，事件模式不保存全量内容。拟测 `tests/round_observation.rs`，另有受控真实 watcher 集成测试。
-- [ ] **D06 — 限定快照与模式冻结。** RED：只选 src 却记录全项目、超限仍完整、途中 git init 混基线、未保存草稿被自动写盘；GREEN：显式目录范围、准备/就绪、前后快照/预算及下轮模式重探测；REFACTOR：与 D02 共享只读存储和 diff，不把非 Git 项目变成隐式 Git 仓库。拟测 `tests/round_snapshot.rs`。
-- [ ] **D07 — 轮次清单与差异导航。** RED：旧轮读当前文件、文件删除创建占位、行号失配直接编辑错误位置、历史通知跳最新轮；GREEN：最近轮选择、分页清单、统一 diff/搜索/跳差异块、当前文件显式导航、树标记和独立已读；REFACTOR：复用预览/编辑与虚拟化，不增常驻第四栏。拟测 `tests/round_review.rs` 和既有 preview/editor 测试。
+- [x] **D01 — 轮次状态机与手动记录。** RED：晚起点仍完整、Stop 继续换起始基线、子 Agent/压缩创建新轮、后态晚到改变已读；GREEN：独立 round/result/capture revision、手动 prepare/start/end 与捕获窗口；REFACTOR：活动和采集状态分开。拟测 `tests/round_state.rs`。
+- [x] **D02 — 有界内容存储与封存。** RED：原文件继续写入改变旧快照、满额误删引用、半写崩溃显示完整、对象缺失用当前文件填补；GREEN：最小只读内容寻址/完整性校验、原子清单、配额与回收；REFACTOR：统一引用/故障原因，不增加数据库服务。若需新增哈希依赖，先复核现有可复用能力，再选维护中的专用库，禁止自创哈希算法。拟测 `tests/round_store.rs`。
+- [x] **D03 — Git 起始基准与例外。** RED：已有 staged/unstaged/untracked 被计成本轮、staged 新文件被当不存在、十万干净文件逐轮复制；GREEN：冻结提交树＋实际工作树例外，保存预算内例外内容/缺失状态；REFACTOR：批量 Git 对象/路径查询，NUL 路径保真，不写 index/refs。拟测 `tests/round_git.rs`。
+- [x] **D04 — Git 结束候选与归档。** RED：中途 commit 后 clean 漏改动、起点 dirty 恢复干净遗漏、CRLF 假改动、外部 GC 后完整历史不可读；GREEN：两端树/例外/未跟踪候选合并，校验净内容并封存所需前后内容；REFACTOR：只读取必要候选，复杂 filter/不完整查询明确降级。先测内容真值，再测候选读量；不能以少读但漏文件变绿。
+- [x] **D05 — 非 Git 默认变化观察。** RED：无事件显示零修改、watcher 溢出被忽略、无前态显示 diff、打开项目偷偷 init；GREEN：有界路径事件聚合、观察语义/当前内容导航和不完整原因；REFACTOR：复用现有 watcher，事件模式不保存全量内容。拟测 `tests/round_observation.rs`，另有受控真实 watcher 集成测试。
+- [x] **D06 — 限定快照与模式冻结。** RED：只选 src 却记录全项目、超限仍完整、途中 git init 混基线、未保存草稿被自动写盘；GREEN：显式目录范围、准备/就绪、前后快照/预算及下轮模式重探测；REFACTOR：与 D02 共享只读存储和 diff，不把非 Git 项目变成隐式 Git 仓库。拟测 `tests/round_snapshot.rs`。
+- [x] **D07 — 轮次清单与差异导航。** RED：旧轮读当前文件、文件删除创建占位、行号失配直接编辑错误位置、历史通知跳最新轮；GREEN：最近轮选择、分页清单、统一 diff/搜索/跳差异块、当前文件显式导航、树标记和独立已读；REFACTOR：复用预览/编辑与虚拟化，不增常驻第四栏。拟测 `tests/round_review.rs` 和既有 preview/editor 测试。
 
 小闭环：先手动记录，证明 dirty 起点→中途提交→历史差异正确；非 Git 两种模式按实际能力展示。没有 Provider 自动接入也可验证此闭环。
 
 ### 9.2 再接 Provider 与 Windows 通知
 
-- [ ] **D08 — 外部配置安装与 helper。** RED：覆盖其他 hooks/notify、重复安装套娃、特殊路径破坏命令、无受管环境仍发送、停用后自动装回；GREEN：实际配置目录解析、所有权/备份/原子写入、幂等安装移除和有界早期 helper 分派；REFACTOR：JSON 复用 serde，只有确需外部 TOML 编辑再引入专用库。拟测 `tests/agent_hook_install.rs` 与 `tests/agent_hook_transport_windows.rs`。测试仅操作 fixture 配置，不动用户信任数据库。
-- [ ] **D09 — 事件归属与自动轮次。** RED：外来/子 Agent/旧 run 完成当前任务，Stop 报告变最终成功，重投/原生＋legacy 双发、同 turn 继续后再结束被永久去重；GREEN：Provider 能力矩阵、受管身份/限额/顺序门、结果版本和自动捕获边界；REFACTOR：一个宿主活动状态源。拟测 `tests/agent_events.rs`。仅已收到且验证过的事件标能力可用；真机前均未验证，不启动已安装 Agent 探测。
-- [ ] **D10 — Windows 发送后端。** RED：通知失败阻塞 Input、对象释放后回调不可路由、多前端发重复通知、满队列丢失唯一待授权；GREEN：宿主发送、专用有界 worker、COM/WinRT 生命周期、自有 AUMID 注册/移除与失败诊断；REFACTOR：只增加 `windows` 必要功能，不引入 Tauri/.NET。拟测 `tests/notifications.rs`，真实对象/横幅由用户验收，mock 不能证明 WinRT 回调存活。
-- [ ] **D11 — 点击定位闭环。** RED：点击旧结果新建 Agent、同名任务被误选、抢其他前端租约、关闭宿主后自动恢复、未完成采集显示空结果；GREEN：校验定位标识，连接原前端并揭示指定 round/result，错误明确；REFACTOR：复用 C02 导航，Windows 激活适配与纯路由分开。拟测 `tests/notification_navigation.rs`，WT 精确窗口/标签激活另列真机门禁。
-- [ ] **D12 — 待处理与诊断。** RED：失败＋新结果双计数、后台更新跳选、测试通知产生真实未读、配置存在就声称接入通过；GREEN：派生事项列表、状态/类别、明确已读确认、自检与可复制脱敏诊断；REFACTOR：复用已有浮层/焦点/国际化，不保存第二套事项状态。测试自检不弹真实通知、不修改配置。
-- [ ] **D13 — 延后、静音与单次订阅。** RED：已读/新一轮/静音后仍补提醒、全局关闭被任务例外绕过、授权消耗结束订阅、重启重放一次性提醒；GREEN：可控时钟调度、结果版本复核、全局/任务/类别优先级和一次性消费；REFACTOR：复用宿主 worker，不为每任务建 timer 线程。拟测 `tests/notification_policy.rs`。
+- [x] **D08 — 外部配置安装与 helper。** RED：覆盖其他 hooks/notify、重复安装套娃、特殊路径破坏命令、无受管环境仍发送、停用后自动装回；GREEN：实际配置目录解析、所有权/备份/原子写入、幂等安装移除和有界早期 helper 分派；REFACTOR：JSON 复用 serde，只有确需外部 TOML 编辑再引入专用库。拟测 `tests/agent_hook_install.rs` 与 `tests/agent_hook_transport_windows.rs`。测试仅操作 fixture 配置，不动用户信任数据库。
+- [x] **D09 — 事件归属与自动轮次。** RED：外来/子 Agent/旧 run 完成当前任务，Stop 报告变最终成功，重投/原生＋legacy 双发、同 turn 继续后再结束被永久去重；GREEN：Provider 能力矩阵、受管身份/限额/顺序门、结果版本和自动捕获边界；REFACTOR：一个宿主活动状态源。拟测 `tests/agent_events.rs`。仅已收到且验证过的事件标能力可用；真机前均未验证，不启动已安装 Agent 探测。
+- [x] **D10 — Windows 发送后端。** RED：通知失败阻塞 Input、对象释放后回调不可路由、多前端发重复通知、满队列丢失唯一待授权；GREEN：宿主发送、专用有界 worker、COM/WinRT 生命周期、自有 AUMID 注册/移除与失败诊断；REFACTOR：只增加 `windows` 必要功能，不引入 Tauri/.NET。拟测 `tests/notifications.rs`，真实对象/横幅由用户验收，mock 不能证明 WinRT 回调存活。
+- [x] **D11 — 点击定位闭环。** RED：点击旧结果新建 Agent、同名任务被误选、抢其他前端租约、关闭宿主后自动恢复、未完成采集显示空结果；GREEN：校验定位标识，连接原前端并揭示指定 round/result，错误明确；REFACTOR：复用 C02 导航，Windows 激活适配与纯路由分开。拟测 `tests/notification_navigation.rs`，WT 精确窗口/标签激活另列真机门禁。
+- [x] **D12 — 待处理与诊断。** RED：失败＋新结果双计数、后台更新跳选、测试通知产生真实未读、配置存在就声称接入通过；GREEN：派生事项列表、状态/类别、明确已读确认、自检与可复制脱敏诊断；REFACTOR：复用已有浮层/焦点/国际化，不保存第二套事项状态。测试自检不弹真实通知、不修改配置。
+- [x] **D13 — 延后、静音与单次订阅。** RED：已读/新一轮/静音后仍补提醒、全局关闭被任务例外绕过、授权消耗结束订阅、重启重放一次性提醒；GREEN：可控时钟调度、结果版本复核、全局/任务/类别优先级和一次性消费；REFACTOR：复用宿主 worker，不为每任务建 timer 线程。拟测 `tests/notification_policy.rs`。
 
 Provider 发布契约可能变化。仅接入实施时实际支持的字段；官方文档与本地 main 源码冲突时按已安装发布版本/官方发布行为验证。未支持最终回合事件就保留报告语义，不扩大监听私有文件来假装能力齐全。
 
 ### 9.3 补齐运行准备、检查与项目审阅
 
-- [ ] **D14 — 初始化与受管检查。** RED：重试 B 重跑 A、从 Agent 文本执行命令、Stop 报告时自动检查与 Agent 并发、代码变化后旧通过仍有效；GREEN：明确配置的初始化步骤、隔离资源设置、受管检查和 task/checkout/result/HEAD/工作树 revision 绑定；REFACTOR：复用现有进程基础，检查不进入 Agent/存活 Debug 输入。“仅检查结束提醒”、失败/超时/过期和独立耗时用行为测试验证。拟测 `tests/task_checks.rs`。
-- [ ] **D15 — 共同修改与性能公平性。** RED：前五个热点求交漏重叠、部分路径当无交集、A 高频输出饿死 B/输入、看历史触发全仓重扫；GREEN：基准成果＋未提交完整路径并集、部分原因、仓库只读历史复用及有界公平调度；REFACTOR：对热点按同夹具前后数据优化，记录 1/2/4 任务及 Git/非 Git 不同精度模式，不牺牲正确性。拟测 `tests/task_overlap.rs`、`tests/parallel_performance.rs`。
+- [x] **D14 — 初始化与受管检查。** RED：重试 B 重跑 A、从 Agent 文本执行命令、Stop 报告时自动检查与 Agent 并发、代码变化后旧通过仍有效；GREEN：明确配置的初始化步骤、隔离资源设置、受管检查和 task/checkout/result/HEAD/工作树 revision 绑定；REFACTOR：复用现有进程基础，检查不进入 Agent/存活 Debug 输入。“仅检查结束提醒”、失败/超时/过期和独立耗时用行为测试验证。拟测 `tests/task_checks.rs`。
+- [x] **D15 — 共同修改与性能公平性。** RED：前五个热点求交漏重叠、部分路径当无交集、A 高频输出饿死 B/输入、看历史触发全仓重扫；GREEN：基准成果＋未提交完整路径并集、部分原因、仓库只读历史复用及有界公平调度；REFACTOR：对热点按同夹具前后数据优化，记录 1/2/4 任务及 Git/非 Git 不同精度模式，不牺牲正确性。拟测 `tests/task_overlap.rs`、`tests/parallel_performance.rs`。
 
 D 阶段退出：手动/Git/非 Git 审阅、受支持自动事件、Windows 通知和六项补充均有证据；点击路由、真实 hooks、权限/WT 组合待用户验证时明确“等待真机”，不能把仅发送 mock 通过计作整个 D 完成。
 

@@ -325,6 +325,7 @@ pub(crate) fn hidden_attribute(_: &fs::Metadata) -> bool {
 }
 
 pub struct Files {
+    round_paths: std::collections::BTreeSet<PathBuf>,
     refresh_pending: VecDeque<PathBuf>,
     pub git: crate::explorer::Git,
     pub modified_only: bool,
@@ -374,6 +375,7 @@ impl Files {
         state.open(vec![Key::Entry(root.clone())]);
         state.select(vec![Key::Entry(root.clone())]);
         Self {
+            round_paths: Default::default(),
             refresh_pending: VecDeque::new(),
             git: Default::default(),
             modified_only: false,
@@ -761,6 +763,12 @@ impl Files {
         }
         Ok(())
     }
+    pub fn mark_round(&mut self, paths: std::collections::BTreeSet<PathBuf>) {
+        if self.round_paths != paths {
+            self.round_paths = paths;
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
     pub fn items(&self, preview: Option<&Path>, width: usize) -> Vec<TreeItem<'static, Key>> {
         let _perf = crate::perf::span(crate::perf::Metric::TreeItems);
         vec![self.item(&self.root, preview, width, 0)]
@@ -788,7 +796,12 @@ impl Files {
         };
         let status = crate::explorer::status_for(&self.git, path);
         let badge = format!(
-            "{}{}{}",
+            "{}{}{}{}",
+            if self.round_paths.contains(path) {
+                " ◆"
+            } else {
+                ""
+            },
             if n.link { " @" } else { "" },
             if preview == Some(path) { " [P]" } else { "" },
             status.map_or_else(String::new, |s| format!(" {}", s.badge()))
@@ -813,6 +826,14 @@ impl Files {
         );
         let color = if self.light { Color::Blue } else { n.color };
         let line = Line::from(vec![
+            Span::styled(
+                if self.round_paths.contains(path) {
+                    "◆ "
+                } else {
+                    ""
+                },
+                Style::new().fg(Color::Cyan),
+            ),
             Span::styled(icon, Style::new().fg(color)),
             Span::raw(name),
             Span::styled(

@@ -13,6 +13,8 @@ use std::{
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Profile {
+    pub prepare: Vec<crate::checks::Spec>,
+    pub check: Option<crate::checks::Spec>,
     pub agent: Option<Agent>,
     pub layout: Option<Layout>,
     pub composition: Option<crate::launch::Composition>,
@@ -26,6 +28,8 @@ pub struct Profile {
 impl Profile {
     pub fn from_project(p: &Project) -> Self {
         Self {
+            prepare: vec![],
+            check: None,
             agent: p.agent,
             layout: p.layout,
             composition: p.composition,
@@ -70,7 +74,18 @@ impl Profile {
         crate::overview::model::validate_settings(&p)?;
         config::atomic_write(
             &root.join(".devtabs.toml"),
-            toml::to_string_pretty(self)?.as_bytes(),
+            toml::to_string_pretty(&{
+                let mut profile = self.clone();
+                if profile.prepare.is_empty()
+                    && profile.check.is_none()
+                    && let Some(old) = Self::load(root)?
+                {
+                    profile.prepare = old.prepare;
+                    profile.check = old.check;
+                }
+                profile
+            })?
+            .as_bytes(),
         )
     }
 }

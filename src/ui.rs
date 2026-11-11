@@ -95,6 +95,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     crate::app::terminals::overlay(frame, app);
     crate::app::chrome::overlay(frame, app);
     crate::app::parallel::overlay(frame, app);
+    crate::app::review::draw(frame, app);
     confirm(frame, app);
 }
 
@@ -142,6 +143,15 @@ fn terminal(frame: &mut Frame, app: &App, index: usize, rect: Rect) {
         );
     let focused = app.terminal_focused(index);
     let mut title = format!(" {label} ");
+    if info.task.role == crate::tasks::Role::Agent
+        && info.activity.phase != crate::activity::Phase::Unknown
+    {
+        title.push_str(&format!(
+            "· {} {} ",
+            if info.activity.pending() { "◆" } else { "" },
+            crate::i18n::t(info.activity.phase.label())
+        ));
+    }
     match &state.status {
         crate::session::Status::Running => {}
         crate::session::Status::Exited(c) => {
@@ -162,11 +172,23 @@ fn terminal(frame: &mut Frame, app: &App, index: usize, rect: Rect) {
         } else {
             Style::default()
         })
-        .border_style(Style::new().fg(if focused {
-            crate::appearance::palette().accent
-        } else {
-            crate::appearance::palette().muted
-        }));
+        .border_style(
+            Style::new().fg(
+                if !focused
+                    && info.activity.pending()
+                    && info
+                        .activity
+                        .ended
+                        .is_some_and(|at| crate::config::now().saturating_sub(at) < 3)
+                {
+                    Color::Yellow
+                } else if focused {
+                    crate::appearance::palette().accent
+                } else {
+                    crate::appearance::palette().muted
+                },
+            ),
+        );
     let block = if let Some(task) = app
         .parallel
         .tasks

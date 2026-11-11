@@ -242,3 +242,26 @@ fn recovery_never_adopts_an_unrelated_clone_at_the_intended_path() {
     assert!(c.create(&home.0, &p).is_err());
     assert!(p.task.checkout.join("same.txt").exists());
 }
+
+#[test]
+fn overlap_uses_all_paths_beyond_hotspot_rank_and_includes_committed_progress() {
+    let f = Fixture::new();
+    f.init();
+    let home = Fixture::new();
+    let targets = Fixture::new();
+    let mut c = Catalog::default();
+    let a = c.main_task(&options(&f.0)).unwrap();
+    let plan = c
+        .plan(&a.id, "B", "HEAD", Some(targets.0.join("B")))
+        .unwrap();
+    let b = c.create(&home.0, &plan).unwrap();
+    for i in 0..9 {
+        fs::write(a.checkout.join(format!("file{i}.txt")), "A").unwrap();
+        fs::write(b.checkout.join(format!("file{i}.txt")), "B").unwrap();
+    }
+    git(&b.checkout, &["add", "."]);
+    git(&b.checkout, &["commit", "-m", "B progress"]);
+    let overlap = devtabs::tasks::overlaps(&[a, b]).unwrap();
+    assert_eq!(overlap.len(), 9);
+    assert!(overlap.contains_key(Path::new("file8.txt")));
+}

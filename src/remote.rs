@@ -363,6 +363,7 @@ mod tests {
                 status: Status::Running,
                 command: CommandStatus::Idle,
                 placement: crate::presentation::Placement::Docked,
+                activity: Default::default(),
             },
             error: None,
         }

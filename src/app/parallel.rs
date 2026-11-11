@@ -30,6 +30,7 @@ pub struct LayoutState {
 }
 #[derive(Default)]
 pub struct State {
+    pub review: super::review::State,
     pub tasks: Vec<Task>,
     pub context: String,
     pub sidebars: BTreeMap<String, crate::sidebar::Sidebar>,

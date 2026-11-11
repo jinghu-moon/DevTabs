@@ -32,6 +32,7 @@ fn task_rows_are_distinct_from_history_and_preserve_selection_after_reordering()
             status: crate::session::Status::Running,
             command: crate::session::CommandStatus::Running,
             placement: crate::presentation::Placement::Docked,
+            activity: Default::default(),
         })
         .collect();
     let work = crate::protocol::WorkspaceInfo {
@@ -394,6 +395,7 @@ fn instance_selection_survives_host_reordering_and_disappearance_cannot_launch()
             status: crate::session::Status::Running,
             command: crate::session::CommandStatus::Idle,
             placement: crate::presentation::Placement::Docked,
+            activity: Default::default(),
         }],
     };
     let one = make("one");

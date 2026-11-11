@@ -15,6 +15,37 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Action {
+    Overlap {
+        tasks: Vec<String>,
+    },
+    Check {
+        workspace: String,
+        task: String,
+        #[arg(long)]
+        initialize: bool,
+        #[arg(long)]
+        status: bool,
+        #[arg(last = true)]
+        command: Vec<String>,
+    },
+    /// Record or review disk changes without parsing Agent text.
+    Record {
+        workspace: String,
+        task: String,
+        #[command(subcommand)]
+        action: RecordCommand,
+    },
+    Hooks {
+        provider: String,
+        #[arg(long)]
+        config: Option<PathBuf>,
+        #[arg(long)]
+        remove: bool,
+    },
+    Notify {
+        #[command(subcommand)]
+        action: NotifyCommand,
+    },
     List,
     Close {
         workspace: String,
@@ -56,6 +87,61 @@ enum Action {
     Bench,
 }
 #[derive(Subcommand)]
+enum RecordCommand {
+    Begin {
+        #[arg(long)]
+        scope: Vec<PathBuf>,
+    },
+    End,
+    List,
+    Open {
+        round: String,
+        #[arg(long)]
+        file: Option<usize>,
+    },
+    Ack {
+        round: String,
+        revision: u64,
+    },
+}
+#[derive(Subcommand)]
+enum NotifyCommand {
+    Category {
+        category: String,
+        #[arg(long)]
+        task: Option<String>,
+        #[arg(long)]
+        off: bool,
+    },
+    AfterCheck {
+        task: String,
+        #[arg(long)]
+        off: bool,
+    },
+    Sound {
+        #[arg(long)]
+        off: bool,
+    },
+    Register {
+        #[arg(long)]
+        remove: bool,
+    },
+    List,
+    Diagnostics,
+    Test,
+    Global {
+        enabled: bool,
+    },
+    Mute {
+        task: String,
+        #[arg(long)]
+        off: bool,
+    },
+    Once {
+        task: String,
+    },
+}
+#[derive(Subcommand)]
 enum ConfigAction {
     /// Persist application UI language.
     Language {
@@ -95,6 +181,10 @@ pub fn dispatch() -> Result<bool> {
         return Ok(false);
     };
     if ![
+        "record",
+        "hooks",
+        "notify",
+        "check",
         "list",
         "close",
         "stop",
@@ -105,6 +195,7 @@ pub fn dispatch() -> Result<bool> {
         "install",
         "uninstall",
         "bench",
+        "overlap",
     ]
     .contains(&first.as_str())
     {
@@ -112,6 +203,124 @@ pub fn dispatch() -> Result<bool> {
     }
     let cli = Cli::parse();
     match cli.action {
+        Action::Overlap { tasks } => {
+            let catalog = crate::tasks::Catalog::load(&config::home())?;
+            let selected = tasks
+                .iter()
+                .map(|id| catalog.tasks.get(id).cloned().context("Unknown task"))
+                .collect::<Result<Vec<_>>>()?;
+            anyhow::ensure!(selected.len() >= 2, "Select at least two tasks");
+            let common = crate::tasks::Repository::discover(&selected[0].checkout)?.common;
+            for t in &selected {
+                anyhow::ensure!(
+                    crate::tasks::Repository::discover(&t.checkout)?.common == common,
+                    "Tasks belong to different repositories"
+                );
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&crate::tasks::overlaps(&selected)?)?
+            );
+        }
+        Action::Check {
+            workspace,
+            task,
+            initialize,
+            status,
+            command,
+        } => {
+            let request = if status {
+                Request::CheckStatus { task }
+            } else {
+                Request::Check {
+                    workspace,
+                    task,
+                    initialize,
+                    spec: if command.is_empty() {
+                        None
+                    } else {
+                        Some(crate::checks::Spec {
+                            argv: command,
+                            cwd: ".".into(),
+                            env: Default::default(),
+                            timeout_ms: 300_000,
+                        })
+                    },
+                }
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&protocol::rpc(request)?)?
+            );
+        }
+        Action::Hooks {
+            provider,
+            config,
+            remove,
+        } => {
+            let path = match config {
+                Some(p) => p,
+                None => crate::hooks::config_path(&provider)?,
+            };
+            crate::hooks::install(&path, &provider, &std::env::current_exe()?, remove)?;
+            println!(
+                "{} · configured, runtime events and Provider trust remain unverified",
+                path.display()
+            );
+        }
+        Action::Record {
+            workspace,
+            task,
+            action,
+        } => {
+            use crate::rounds::service::Action as R;
+            let action = match action {
+                RecordCommand::Begin { scope } => R::Begin { scope },
+                RecordCommand::End => R::End,
+                RecordCommand::List => R::List,
+                RecordCommand::Open { round, file } => R::Open { round, path: file },
+                RecordCommand::Ack { round, revision } => R::Ack { round, revision },
+            };
+            let r = protocol::rpc(Request::Review {
+                workspace,
+                task,
+                action,
+            })?;
+            println!("{}", serde_json::to_string_pretty(&r)?);
+        }
+        Action::Notify { action } => {
+            use crate::notifications::Action as N;
+            let action = match action {
+                NotifyCommand::Register { remove } => {
+                    crate::notifications::register(remove)?;
+                    return Ok(true);
+                }
+                NotifyCommand::List => N::List,
+                NotifyCommand::Category {
+                    category,
+                    task,
+                    off,
+                } => N::Category {
+                    category,
+                    task,
+                    enabled: !off,
+                },
+                NotifyCommand::AfterCheck { task, off } => N::AfterCheck {
+                    task,
+                    enabled: !off,
+                },
+                NotifyCommand::Sound { off } => N::Sound { enabled: !off },
+                NotifyCommand::Diagnostics => N::Diagnostics,
+                NotifyCommand::Test => N::Test,
+                NotifyCommand::Global { enabled } => N::Global { enabled },
+                NotifyCommand::Mute { task, off } => N::Mute { task, muted: !off },
+                NotifyCommand::Once { task } => N::Once { task },
+            };
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&protocol::rpc(Request::Notifications { action })?)?
+            );
+        }
         Action::List => {
             crate::host::ensure()?;
             if let Response::Workspaces(work) = protocol::rpc(Request::List)? {

@@ -985,10 +985,22 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                     });
                     let state = agent.map_or_else(
                         || t("failed").into_owned(),
-                        |s| match &s.status {
-                            crate::session::Status::Running => t("running").into_owned(),
-                            crate::session::Status::Exited(c) => format!("{} {c}", t("exited")),
-                            crate::session::Status::Failed(e) => e.clone(),
+                        |s| {
+                            if s.activity.phase != crate::activity::Phase::Unknown {
+                                format!(
+                                    "{} {}",
+                                    if s.activity.pending() { "◆" } else { "" },
+                                    t(s.activity.phase.label())
+                                )
+                            } else {
+                                match &s.status {
+                                    crate::session::Status::Running => t("running").into_owned(),
+                                    crate::session::Status::Exited(c) => {
+                                        format!("{} {c}", t("exited"))
+                                    }
+                                    crate::session::Status::Failed(e) => e.clone(),
+                                }
+                            }
                         },
                     );
                     frame.render_widget(

@@ -126,10 +126,13 @@ fn lock_name(home: &Path) -> String {
 }
 impl ConfigLock {
     pub fn acquire() -> Result<Self> {
+        Self::acquire_at(&home())
+    }
+    pub fn acquire_at(root: &Path) -> Result<Self> {
         #[cfg(windows)]
         {
             use windows_sys::Win32::{Foundation::CloseHandle, System::Threading::*};
-            let name: Vec<u16> = lock_name(&home()).encode_utf16().chain(Some(0)).collect();
+            let name: Vec<u16> = lock_name(root).encode_utf16().chain(Some(0)).collect();
             let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
             anyhow::ensure!(!handle.is_null(), "Create configuration lock");
             let wait = unsafe { WaitForSingleObject(handle, 5000) };

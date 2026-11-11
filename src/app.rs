@@ -1,6 +1,7 @@
 pub(crate) mod chrome;
 pub(crate) mod parallel;
 pub(crate) mod popup;
+pub(crate) mod review;
 pub(crate) mod terminals;
 use std::{
     collections::HashSet,
@@ -293,6 +294,7 @@ impl App {
             sidebar.images_occluded = self.mode != Mode::Normal
                 || self.terminal_menu.is_some()
                 || self.parallel.dialog.is_some()
+                || self.parallel.review.open
                 || !active;
             sidebar.image_occlusion = cover;
         }
@@ -716,6 +718,11 @@ impl App {
         Ok(())
     }
     fn key(&mut self, key: KeyEvent, native: Option<Vec<u8>>, repeat: usize) {
+        if self.parallel.review.open {
+            self.consumed_keys.insert(key.code);
+            self.review_key(key);
+            return;
+        }
         let pressed = key.kind != KeyEventKind::Release;
         if !pressed && self.consumed_keys.remove(&key.code) {
             return;
@@ -757,6 +764,8 @@ impl App {
                 KeyCode::Char('z' | 'Z') => self.toggle_zoom(),
                 KeyCode::Char('w' | 'W') => self.terminal_menu = Some(self.focus),
                 KeyCode::Char('+') => self.new_task(),
+                KeyCode::Char('g') => self.open_review(false),
+                KeyCode::Char('!') => self.open_review(true),
                 KeyCode::Char('c' | 'C') => self.toggle_task_pins(),
                 KeyCode::Char('e' | 'E') => self.replace_pinned_task(),
                 KeyCode::Char('[') => self.select_task(-1),
@@ -1095,6 +1104,9 @@ impl App {
         }
     }
     fn mouse(&mut self, event: MouseEvent) {
+        if self.review_mouse(event) {
+            return;
+        }
         if self.task_mouse(event) {
             return;
         }
@@ -1377,6 +1389,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     let mut finished = None;
     loop {
         changed |= app.task_tick();
+        changed |= app.review_tick();
         let sidebar_active = app.sidebar_active();
         app.update_image_occlusion();
         if let Some(sidebar) = &mut app.sidebar {

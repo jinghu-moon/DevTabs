@@ -206,3 +206,26 @@ cargo test --release --locked --target-dir target/perf --test workspace_windows 
 依赖版本由 Cargo.lock 固定，本轮采用核对后的最新稳定版本。侧栏与编辑升级结果、构建哈希和实测边界见 [侧栏验证](docs/07-File-Sidebar-Verification.md)、[编辑验证](docs/08-File-Editor-Verification.md)。原工作区升级记录见 [04](docs/04-Upgrade-Verification.md)。[01](docs/01-Embedded-Terminal-MVP.md)、[02](docs/02-MVP-Verification.md) 为前台 MVP 历史记录。
 
 预览渲染修复、可直接打开对照的 Markdown 示例与测试证据见 [10](docs/10-Preview-Rendering-Fixes.md)。
+
+## 并行任务、轮次审阅和提醒
+
+同一终端内使用底栏「＋ 新任务」或 `Ctrl+G → +` 从冻结提交创建独立 worktree；不复制未提交文件、不切换原分支。`Ctrl+G → V` 切换横排/竖排，`[` / `]` 切任务，`C` 固定当前两任务，`Z` 放大/还原。`← 总览` 保留后台进程。
+
+`Ctrl+G → g` 打开只读轮次审阅：`b` 建立基线、`e` 结束、`s` 设置非 Git 快照范围（相对目录，分号分隔），`l` 历史、`[` / `]` 选轮、方向键选文件、Enter 差异、`n` 下一差异块、`/` 搜索、`o` 显式打开当前文件。Git 记录包含 dirty 起点与中途提交；默认非 Git 只观察路径事件，不提供不存在的旧内容。自动捕获标明晚起点；Stop 仅代表 Agent 报告，不能当作最终成功。
+
+`Ctrl+G → !` 或右下角待处理入口查看事项；`a` 确认、`m/u` 静音/取消、`1` 下一次结束、`5/3` 延后 5/30 分钟、`0` 取消、`g` 全局开关、`d/y` 诊断/复制。后台提醒不抢输入；系统通知点击只路由已有视图，不自动启动 Agent。真实横幅与 WT 精确激活仍待真机验证。
+
+以下命令均需用户显式执行；安装 hooks 不修改 Provider 信任数据库，仍须在对应 Agent 内审阅/启用：
+
+```powershell
+devtabs hooks codex  # 或 claude；--config 指定配置，--remove 移除自己拥有的 hook
+devtabs notify register  # 显式注册当前用户通知身份；--remove 移除
+devtabs notify diagnostics
+devtabs notify test  # 明确发送系统测试通知，不创建未读事项
+devtabs notify after-check '<TaskId>'  # 仅受管检查结束时提醒
+devtabs check '<WorkspaceId>' '<TaskId>' -- cargo test
+devtabs check '<WorkspaceId>' '<TaskId>' --status
+devtabs overlap '<TaskA>' '<TaskB>'  # 完整成果路径交集；查询不完整会报错
+```
+
+`.devtabs.toml` 可配置 `prepare` 命令数组及 `check`，每条命令使用 `argv`、`cwd`、`env`、`timeout_ms`；均为显式本地命令，不从 Agent 文字提取。初始化成功步骤按 task/命令摘要记录，失败重试跳过已成功步骤。检查使用独立受管进程，显示退出码、耗时及代码变化后的过期状态，不向 Agent/Debug 输入命令。详见 [实施证据与真机清单](docs/40-Parallel-Agent-Workspace-Verification.md)。

@@ -19,6 +19,9 @@ use std::{
 };
 
 struct Managed {
+    round_at: Option<Instant>,
+    token: String,
+    activity: crate::activity::State,
     id: String,
     task: crate::tasks::Binding,
     name: String,
@@ -36,6 +39,14 @@ struct Workspace {
     view_ready: bool,
 }
 impl Workspace {
+    fn project_name(&self) -> String {
+        self.options
+            .project
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    }
     fn info(&self) -> WorkspaceInfo {
         WorkspaceInfo {
             id: self.id.clone(),
@@ -58,6 +69,7 @@ impl Managed {
             status: s.status.clone(),
             command: s.command.clone(),
             placement: self.placement,
+            activity: Box::new(self.activity.clone()),
         }
     }
     fn own(&mut self, client: &str, takeover: bool) -> Result<()> {
@@ -81,6 +93,15 @@ impl Managed {
 }
 #[derive(Default)]
 struct Host {
+    ledger: crate::notifications::Ledger,
+    checking: std::collections::HashSet<String>,
+    notifications: Option<crate::notifications::Worker>,
+    notification_settings: crate::notifications::Settings,
+    policies: HashMap<String, crate::notifications::Policy>,
+    diagnostic: std::collections::VecDeque<String>,
+    navigation: HashMap<String, crate::notifications::Target>,
+    notification_routes: HashMap<String, String>,
+    records: Option<crate::rounds::service::Worker>,
     workspaces: HashMap<String, Workspace>,
     floating: Floating,
     shutdown: bool,
@@ -213,15 +234,226 @@ pub fn serve() -> Result<()> {
         }
         Err(e) => return Err(e.into()),
     };
-    let state = Arc::new(Mutex::new(Host::default()));
+    let _ = host_clock();
+    let hook_events = crate::hooks::listen(&format!("{}-hooks", protocol::endpoint()))?;
+    let state = Arc::new(Mutex::new(Host {
+        notifications: Some(crate::notifications::Worker::spawn()?),
+        ledger: crate::notifications::Ledger::load(&config::home())?,
+        notification_settings: crate::notifications::Settings::load()?,
+        records: Some(crate::rounds::service::Worker::spawn(
+            config::home().join("history"),
+        )?),
+        ..Host::default()
+    }));
     let mut empty = Instant::now();
     let mut last_sweep = Instant::now();
+    let mut notification_sweep = Instant::now();
     let mut handles: Vec<thread::JoinHandle<()>> = Vec::new();
     loop {
         handles.retain(|h| !h.is_finished());
         if handles.len() >= 64 {
             thread::sleep(Duration::from_millis(5));
             continue;
+        }
+        for envelope in hook_events.try_iter().take(64) {
+            let mut host = state.lock().unwrap_or_else(|p| p.into_inner());
+            let records = host.records.clone();
+            let mut notices = vec![];
+            let mut bindings = vec![];
+            let mut activity_updates = vec![];
+            for work in host.workspaces.values_mut() {
+                let project_name = work.project_name();
+                if let Some(m) = work.sessions.iter_mut().find(|m| {
+                    m.id == envelope.context.session
+                        && m.task.task_id == envelope.context.task
+                        && m.task.run_id == envelope.context.run
+                        && m.token == envelope.context.token
+                }) && envelope.context.provider == envelope.event.provider
+                    && !envelope.event.child
+                    && dunce::canonicalize(&envelope.event.cwd)
+                        .ok()
+                        .is_some_and(|p| p.starts_with(&m.task.initial_cwd))
+                {
+                    let generation = m.activity.generation;
+                    if work
+                        .tasks
+                        .iter()
+                        .find(|t| t.id == m.task.task_id)
+                        .is_none_or(|t| {
+                            format!("{:?}", t.options.agent).to_lowercase()
+                                != envelope.event.provider
+                        })
+                    {
+                        continue;
+                    }
+                    if m.activity.apply(&envelope.event, config::now()) {
+                        if let Some(task) = work.tasks.iter_mut().find(|t| t.id == m.task.task_id)
+                            && task.options.resume_id.as_deref()
+                                != Some(&envelope.event.conversation)
+                            && matches!(
+                                task.options.agent,
+                                crate::launch::Agent::Codex | crate::launch::Agent::Claude
+                            )
+                        {
+                            task.options.resume_id = Some(envelope.event.conversation.clone());
+                            bindings.push(task.clone());
+                        }
+                        use crate::activity::Phase;
+                        if m.activity.phase == Phase::Working && generation != m.activity.generation
+                        {
+                            m.round_at = Some(Instant::now());
+                            m.activity.duration_ms = None;
+                        }
+                        if matches!(
+                            m.activity.phase,
+                            Phase::Reported | Phase::Failed | Phase::Interrupted | Phase::Ended
+                        ) {
+                            m.activity.duration_ms =
+                                m.round_at.map(|t| t.elapsed().as_millis() as u64);
+                        }
+                        activity_updates.push((
+                            crate::notifications::Target {
+                                workspace: work.id.clone(),
+                                task: m.task.task_id.clone(),
+                                session: m.id.clone(),
+                                run: m.task.run_id.clone(),
+                                result: m.activity.result,
+                            },
+                            m.activity.clone(),
+                        ));
+                        let phase = &m.activity.phase;
+                        if matches!(
+                            phase,
+                            Phase::Working
+                                | Phase::Reported
+                                | Phase::Failed
+                                | Phase::Interrupted
+                                | Phase::Ended
+                        ) && let Some(records) = &records
+                        {
+                            let _ = records.event(
+                                m.task.task_id.clone(),
+                                m.task.run_id.clone(),
+                                m.task.initial_cwd.clone(),
+                                *phase == Phase::Working,
+                                generation != m.activity.generation,
+                                m.activity.result,
+                            );
+                        }
+                        if matches!(
+                            phase,
+                            Phase::Reported | Phase::Failed | Phase::Permission | Phase::Input
+                        ) {
+                            notices.push(crate::notifications::Notice {
+                                target: crate::notifications::Target {
+                                    workspace: work.id.clone(),
+                                    task: m.task.task_id.clone(),
+                                    session: m.id.clone(),
+                                    run: m.task.run_id.clone(),
+                                    result: m.activity.result,
+                                },
+                                title: format!("DevTabs · {}", project_name),
+                                body: crate::i18n::t(phase.label()).into_owned(),
+                                test: false,
+                                ending: matches!(phase, Phase::Reported | Phase::Failed),
+                                urgent: *phase != Phase::Reported,
+                                silent: false,
+                            });
+                        }
+                    }
+                }
+            }
+            for n in notices {
+                host.notify(n);
+            }
+            for (t, s) in activity_updates {
+                if let Err(e) = host.ledger.insert(t, s) {
+                    host.diagnostic.push_back(e.to_string());
+                }
+            }
+            let ledger = host.ledger.bytes();
+            drop(host);
+            if let Ok(bytes) = ledger {
+                config::atomic_write(&config::home().join("activity.json"), &bytes)?;
+            }
+            if !bindings.is_empty() {
+                let _lock = config::ConfigLock::acquire()?;
+                let mut catalog = crate::tasks::Catalog::load(&config::home())?;
+                for t in bindings {
+                    catalog.tasks.insert(t.id.clone(), t);
+                }
+                catalog.save(&config::home())?;
+            }
+        }
+        if notification_sweep.elapsed() >= Duration::from_millis(100) {
+            notification_sweep = Instant::now();
+            let mut host = state.lock().unwrap_or_else(|p| p.into_inner());
+            let clicks = host
+                .notifications
+                .as_ref()
+                .map(|n| n.clicks.try_iter().take(64).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let diagnostics = host
+                .notifications
+                .as_ref()
+                .map(|n| n.diagnostics.try_iter().take(64).collect::<Vec<_>>())
+                .unwrap_or_default();
+            for t in clicks {
+                if host.valid_target(&t) {
+                    let key = format!("{}:{}", t.run, t.result);
+                    if let Some(client) = host.notification_routes.get(&key).cloned() {
+                        host.navigation.insert(client, t);
+                    } else {
+                        host.diagnostic.push_back(
+                            "Original notification view is unavailable; use the attention inbox"
+                                .into(),
+                        );
+                    }
+                }
+            }
+            for d in diagnostics {
+                host.diagnostic.push_back(d);
+            }
+            host.diagnostic.truncate(64);
+            let pending = host
+                .workspaces
+                .values()
+                .flat_map(|w| {
+                    w.sessions.iter().map(|m| {
+                        (
+                            crate::notifications::Target {
+                                workspace: w.id.clone(),
+                                task: m.task.task_id.clone(),
+                                session: m.id.clone(),
+                                run: m.task.run_id.clone(),
+                                result: m.activity.result,
+                            },
+                            m.activity.clone(),
+                        )
+                    })
+                })
+                .collect::<Vec<_>>();
+            let enabled = !host.notification_settings.disabled;
+            for (target, activity) in pending {
+                if host.policies.entry(target.task.clone()).or_default().due(
+                    host_clock(),
+                    activity.result,
+                    activity.read < activity.result,
+                    activity.generation,
+                ) && enabled
+                    && let Some(worker) = &host.notifications
+                {
+                    let _ = worker.tx.try_send(crate::notifications::Notice {
+                        target,
+                        title: "DevTabs".into(),
+                        body: crate::i18n::t(activity.phase.label()).into_owned(),
+                        test: false,
+                        ending: true,
+                        urgent: false,
+                        silent: false,
+                    });
+                }
+            }
         }
         match listener.accept() {
             Ok(mut stream) => {
@@ -330,7 +562,11 @@ impl Host {
     fn handle(&mut self, request: Request) -> Result<Response> {
         let _perf = crate::perf::span(crate::perf::Metric::HostRequest);
         match request {
-            Request::StartRole { .. }
+            Request::Check { .. }
+            | Request::CheckStatus { .. }
+            | Request::Notifications { .. }
+            | Request::Review { .. }
+            | Request::StartRole { .. }
             | Request::PlanTask { .. }
             | Request::AddTask { .. }
             | Request::TaskOperation { .. } => {
@@ -743,7 +979,26 @@ fn spawn_task_filtered(
             "Terminal cwd leaves task checkout"
         );
         let control = config::home().join("runtime").join(format!("{id}.json"));
-        let args = managed_args(options, index, &control)?;
+        let run_id = uuid::Uuid::new_v4().to_string();
+        let token = uuid::Uuid::new_v4().to_string();
+        let hook = crate::hooks::HookContext {
+            task: task.id.clone(),
+            session: id.clone(),
+            run: run_id.clone(),
+            token: token.clone(),
+            endpoint: format!("{}-hooks", protocol::endpoint()),
+            provider: format!("{:?}", options.agent).to_lowercase(),
+        };
+        let args = managed_args_with_hook(
+            options,
+            index,
+            &control,
+            if role == Role::Agent {
+                Some(&hook)
+            } else {
+                None
+            },
+        )?;
         let mut session = Session::spawn(Spawn {
             id: index,
             executable: &std::env::current_exe()?,
@@ -756,10 +1011,13 @@ fn spawn_task_filtered(
         })?;
         session.control = Some(control);
         sessions.push(Managed {
+            round_at: None,
+            token,
+            activity: Default::default(),
             id,
             task: Binding {
                 task_id: task.id.clone(),
-                run_id: uuid::Uuid::new_v4().to_string(),
+                run_id,
                 role,
                 initial_cwd: directory,
             },
@@ -776,6 +1034,354 @@ fn spawn_task_filtered(
 fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Response>> {
     use crate::tasks::{Catalog, Operation};
     match request {
+        Request::CheckStatus { task } => {
+            anyhow::ensure!(uuid::Uuid::parse_str(task).is_ok(), "Invalid task ID");
+            let path = config::home().join("checks").join(format!("{task}.json"));
+            let mut report = if path.exists() {
+                Some(serde_json::from_slice::<crate::checks::Report>(&fs::read(
+                    path,
+                )?)?)
+            } else {
+                None
+            };
+            if let Some(r) = &mut report {
+                let catalog = crate::tasks::Catalog::load(&config::home())?;
+                if let Some(t) = catalog.tasks.get(task) {
+                    r.stale |= crate::checks::fingerprint(&t.checkout).ok().as_deref()
+                        != Some(&r.after)
+                        || t.checkout != r.checkout;
+                    let host = state
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                    r.stale |= host
+                        .workspaces
+                        .values()
+                        .flat_map(|w| &w.sessions)
+                        .filter(|m| {
+                            m.task.task_id == *task && m.task.role == crate::tasks::Role::Agent
+                        })
+                        .any(|m| m.task.run_id != r.run);
+                }
+            }
+            Ok(Some(Response::Check(Box::new(report))))
+        }
+        Request::Check {
+            workspace,
+            task,
+            spec,
+            initialize,
+        } => {
+            let (root, result, run) = {
+                let mut host = state
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                anyhow::ensure!(
+                    host.checking.len() < 2 && !host.checking.contains(task),
+                    "Check worker busy"
+                );
+                let w = host
+                    .workspaces
+                    .get(workspace)
+                    .context("Workspace missing")?;
+                let t = w
+                    .tasks
+                    .iter()
+                    .find(|t| &t.id == task)
+                    .context("Task missing")?;
+                let result = w
+                    .sessions
+                    .iter()
+                    .find(|m| m.task.task_id == *task && m.task.role == crate::tasks::Role::Agent)
+                    .map(|m| (m.activity.result, m.task.run_id.clone()))
+                    .unwrap_or_default();
+                let root = t.checkout.clone();
+                host.checking.insert(task.clone());
+                (root, result.0, result.1)
+            };
+            let shared = state.clone();
+            let task = task.clone();
+            let spec = spec.clone();
+            let initialize = *initialize;
+            let failed_task = task.clone();
+            let check_workspace = workspace.clone();
+            let worker = thread::Builder::new()
+                .name("devtabs-check".into())
+                .spawn(move || {
+                    let mut check_report = None;
+                    let outcome = (|| -> Result<()> {
+                        if initialize {
+                            crate::checks::initialize(&task, &root, &config::home())?;
+                        } else {
+                            let spec = match spec {
+                                Some(s) => s,
+                                None => crate::project_profile::Profile::load(&root)?
+                                    .and_then(|p| p.check)
+                                    .context("Configure an explicit check in .devtabs.toml")?,
+                            };
+                            let mut report = crate::checks::run(&task, result, &root, &spec)?;
+                            report.run = run.clone();
+                            config::atomic_write(
+                                &config::home().join("checks").join(format!("{task}.json")),
+                                &serde_json::to_vec(&report)?,
+                            )?;
+                            check_report = Some(report);
+                        }
+                        Ok(())
+                    })();
+                    let mut host = shared.lock().unwrap_or_else(|p| p.into_inner());
+                    host.checking.remove(&task);
+                    if host.notification_settings.after_check.get(&task) == Some(&true)
+                        && let Some(report) = &check_report
+                        && !report.stale
+                        && let Some(m) = host.workspaces.get(&check_workspace).and_then(|w| {
+                            w.sessions.iter().find(|m| {
+                                m.task.task_id == task
+                                    && m.task.role == crate::tasks::Role::Agent
+                                    && m.activity.result == result
+                            })
+                        })
+                    {
+                        let notice = crate::notifications::Notice {
+                            target: crate::notifications::Target {
+                                workspace: check_workspace.clone(),
+                                task: task.clone(),
+                                session: m.id.clone(),
+                                run: m.task.run_id.clone(),
+                                result,
+                            },
+                            title: "DevTabs".into(),
+                            body: crate::i18n::t(if report.exit == Some(0) && !report.timeout {
+                                "review.check_passed"
+                            } else {
+                                "review.check_failed"
+                            })
+                            .into_owned(),
+                            test: false,
+                            ending: true,
+                            urgent: report.exit != Some(0),
+                            silent: host.notification_settings.silent,
+                        };
+                        if !host.notification_settings.disabled
+                            && host
+                                .policies
+                                .entry(task.clone())
+                                .or_default()
+                                .allow(true, true)
+                            && let Some(worker) = &host.notifications
+                        {
+                            let _ = worker.tx.try_send(notice);
+                        }
+                    }
+                    host.diagnostic.push_back(match outcome {
+                        Ok(()) => "Managed check ended; view its bound revision".into(),
+                        Err(e) => format!("Managed check failed: {e:#}"),
+                    });
+                });
+            if let Err(e) = worker {
+                state
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .checking
+                    .remove(&failed_task);
+                return Err(e.into());
+            }
+            Ok(Some(Response::Ok))
+        }
+        Request::Notifications { action } => {
+            use crate::notifications::Action;
+            let mut host = state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+            let mut save = false;
+            let mut navigation = None;
+            match action {
+                Action::List | Action::Diagnostics => {}
+                Action::AfterCheck { task, enabled } => {
+                    host.notification_settings
+                        .after_check
+                        .insert(task.clone(), *enabled);
+                    save = true;
+                }
+                Action::Sound { enabled } => {
+                    host.notification_settings.silent = !*enabled;
+                    save = true;
+                }
+                Action::Category {
+                    task,
+                    category,
+                    enabled,
+                } => {
+                    anyhow::ensure!(
+                        ["end", "failure", "permission", "input"].contains(&category.as_str()),
+                        "Unknown notification category"
+                    );
+                    if let Some(task) = task {
+                        host.notification_settings
+                            .task_categories
+                            .entry(task.clone())
+                            .or_default()
+                            .insert(category.clone(), *enabled);
+                    } else {
+                        host.notification_settings
+                            .categories
+                            .insert(category.clone(), *enabled);
+                    }
+                    save = true;
+                }
+                Action::Poll { workspace, clients } => {
+                    for client in clients.iter().take(64) {
+                        if host
+                            .navigation
+                            .get(client)
+                            .is_some_and(|t| &t.workspace == workspace)
+                        {
+                            navigation = host.navigation.remove(client);
+                            break;
+                        }
+                    }
+                }
+                Action::Ack { target } => {
+                    anyhow::ensure!(host.valid_target(target), "Result target expired");
+                    if let Ok(m) = host.managed(&target.workspace, &target.session) {
+                        m.activity.ack(target.result);
+                    }
+                    if let Some((_, s)) = host.ledger.0.get_mut(&target.run) {
+                        s.ack(target.result);
+                    }
+                }
+                Action::Navigate { target } => {
+                    anyhow::ensure!(host.valid_target(target), "Result target expired");
+                    let client = host
+                        .managed(&target.workspace, &target.session)?
+                        .owner
+                        .as_ref()
+                        .map(|(id, _)| id.clone())
+                        .context(
+                            "Original view unavailable; attach this existing task explicitly",
+                        )?;
+                    host.navigation.insert(client, target.clone());
+                }
+                Action::Mute { task, muted } => {
+                    host.policies.entry(task.clone()).or_default().muted = *muted;
+                    host.notification_settings
+                        .muted
+                        .insert(task.clone(), *muted);
+                    save = true;
+                }
+                Action::Once { task } => {
+                    host.policies.entry(task.clone()).or_default().once = true;
+                }
+                Action::Global { enabled } => {
+                    host.notification_settings.disabled = !*enabled;
+                    save = true;
+                }
+                Action::Snooze { target, seconds } => {
+                    anyhow::ensure!(host.valid_target(target), "Result target expired");
+                    anyhow::ensure!(
+                        *seconds == 300 || *seconds == 1800 || *seconds == 0,
+                        "Choose 5 or 30 minutes, or cancel"
+                    );
+                    let generation = host
+                        .managed(&target.workspace, &target.session)?
+                        .activity
+                        .generation;
+                    let policy = host.policies.entry(target.task.clone()).or_default();
+                    policy.snooze = if *seconds == 0 {
+                        None
+                    } else {
+                        Some((host_clock() + seconds, target.result, generation))
+                    };
+                }
+                Action::Test => {
+                    let n = crate::notifications::Notice {
+                        target: crate::notifications::Target {
+                            workspace: String::new(),
+                            task: String::new(),
+                            session: String::new(),
+                            run: String::new(),
+                            result: 0,
+                        },
+                        title: "DevTabs · TEST".into(),
+                        body: crate::i18n::t("notify.test").into_owned(),
+                        test: true,
+                        ending: false,
+                        urgent: false,
+                        silent: false,
+                    };
+                    host.notifications
+                        .as_ref()
+                        .context("Notifications unavailable")?
+                        .tx
+                        .try_send(n)
+                        .map_err(|_| anyhow::anyhow!("Notification queue full"))?;
+                }
+            }
+            let settings = if save {
+                Some(serde_json::to_vec(&host.notification_settings)?)
+            } else {
+                None
+            };
+            let ledger = if matches!(action, Action::Ack { .. }) {
+                Some(host.ledger.bytes()?)
+            } else {
+                None
+            };
+            let mut view = host.notification_view();
+            view.navigation = navigation;
+            drop(host);
+            if let Some(bytes) = ledger {
+                config::atomic_write(&config::home().join("activity.json"), &bytes)?;
+            }
+            if matches!(action, Action::Diagnostics) {
+                for provider in ["codex", "claude"] {
+                    if let Ok(path) = crate::hooks::config_path(provider) {
+                        view.diagnostic
+                            .push(crate::hooks::diagnostic(provider, &path));
+                    }
+                }
+            }
+            if let Some(bytes) = settings {
+                let _lock = config::ConfigLock::acquire()?;
+                config::atomic_write(&config::home().join("notifications.json"), &bytes)?;
+            }
+            Ok(Some(Response::Notifications(Box::new(view))))
+        }
+        Request::Review {
+            workspace,
+            task,
+            action,
+        } => {
+            let (records, run, root) = {
+                let host = state
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                let w = host
+                    .workspaces
+                    .get(workspace)
+                    .context("Workspace missing")?;
+                let t = w
+                    .tasks
+                    .iter()
+                    .find(|t| &t.id == task)
+                    .context("Task missing")?;
+                let m = w
+                    .sessions
+                    .iter()
+                    .find(|s| s.task.task_id == *task && s.task.role == crate::tasks::Role::Agent)
+                    .context("Agent missing")?;
+                (
+                    host.records.clone().context("Records unavailable")?,
+                    m.task.run_id.clone(),
+                    t.checkout.clone(),
+                )
+            };
+            Ok(Some(Response::Review(Box::new(records.request(
+                task.clone(),
+                run,
+                root,
+                action.clone(),
+            )?))))
+        }
         Request::StartRole {
             workspace,
             task,
@@ -882,6 +1488,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                             c.save(&config::home())?;
                             task
                         };
+                        crate::checks::initialize(&task.id, &task.checkout, &config::home())?;
                         let sessions = spawn_task(&task)?;
                         let mut host = state
                             .lock()
@@ -1132,7 +1739,12 @@ fn start_role(
     Ok(Response::TaskOperation(Box::new(op)))
 }
 
-fn managed_args(options: &Options, index: usize, control: &std::path::Path) -> Result<Vec<String>> {
+fn managed_args_with_hook(
+    options: &Options,
+    index: usize,
+    control: &std::path::Path,
+    hook: Option<&crate::hooks::HookContext>,
+) -> Result<Vec<String>> {
     fs::create_dir_all(control.parent().unwrap())?;
     let path = control.to_string_lossy().replace('\'', "''");
     let source = options.source(index).unwrap_or_default();
@@ -1140,13 +1752,127 @@ fn managed_args(options: &Options, index: usize, control: &std::path::Path) -> R
     let source = source.replace('\'', "''");
     // A small shell integration records facts about managed commands only.
     // Existing Profile and prompt are retained, with one wrapper around prompt.
-    let script = include_str!("shell.ps1")
-        .replace("__CONTROL__", &path)
-        .replace("__SOURCE_JSON__", &source);
+    let environment = hook
+        .map(serde_json::to_string)
+        .transpose()?
+        .unwrap_or_default()
+        .replace('\'', "''");
+    let script = format!(
+        "$env:DEVTABS_HOOK_CONTEXT = '{environment}';\n{}",
+        include_str!("shell.ps1")
+    )
+    .replace("__CONTROL__", &path)
+    .replace("__SOURCE_JSON__", &source);
     let mut args = vec!["-NoLogo".into(), "-NoExit".into()];
     if options.no_profile {
         args.push("-NoProfile".into());
     }
     args.extend(["-EncodedCommand".into(), encode_script(&script)]);
     Ok(args)
+}
+
+fn host_clock() -> u64 {
+    static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    START.get_or_init(Instant::now).elapsed().as_secs()
+}
+impl Host {
+    fn valid_target(&self, t: &crate::notifications::Target) -> bool {
+        self.workspaces.get(&t.workspace).is_some_and(|w| {
+            w.sessions.iter().any(|m| {
+                m.id == t.session
+                    && m.task.task_id == t.task
+                    && m.task.run_id == t.run
+                    && (m.activity.results.iter().any(|r| r.version == t.result)
+                        || t.result == m.activity.result)
+            })
+        }) || self.ledger.0.get(&t.run).is_some_and(|(target, state)| {
+            target.task == t.task
+                && target.session == t.session
+                && target.workspace == t.workspace
+                && state.results.iter().any(|r| r.version == t.result)
+        })
+    }
+    fn notification_view(&self) -> crate::notifications::View {
+        let pending = self.ledger.pending();
+        crate::notifications::View {
+            pending,
+            diagnostic: self.diagnostic.iter().cloned().collect(),
+            navigation: None,
+            enabled: !self.notification_settings.disabled,
+            policies: self
+                .policies
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+        }
+    }
+    fn notify(&mut self, mut n: crate::notifications::Notice) {
+        if self.notification_routes.len() >= 1024 {
+            self.notification_routes.retain(|_, client| {
+                self.workspaces.values().any(|w| {
+                    w.sessions
+                        .iter()
+                        .any(|m| m.owner.as_ref().is_some_and(|(id, _)| id == client))
+                })
+            });
+        }
+        if self.notification_routes.len() < 1024
+            && let Some(client) = self
+                .workspaces
+                .get(&n.target.workspace)
+                .and_then(|w| w.sessions.iter().find(|m| m.id == n.target.session))
+                .and_then(|m| m.owner.as_ref())
+                .map(|(id, _)| id.clone())
+        {
+            self.notification_routes
+                .insert(format!("{}:{}", n.target.run, n.target.result), client);
+        }
+        let phase = self
+            .workspaces
+            .get(&n.target.workspace)
+            .and_then(|w| w.sessions.iter().find(|m| m.id == n.target.session))
+            .map(|m| m.activity.phase.clone());
+        let category = match phase {
+            Some(crate::activity::Phase::Failed) => "failure",
+            Some(crate::activity::Phase::Permission) => "permission",
+            Some(crate::activity::Phase::Input) => "input",
+            _ => "end",
+        };
+        let enabled = self
+            .notification_settings
+            .task_categories
+            .get(&n.target.task)
+            .and_then(|c| c.get(category))
+            .or_else(|| self.notification_settings.categories.get(category))
+            .copied()
+            .unwrap_or(true);
+        if !enabled
+            || (category == "end"
+                && self.notification_settings.after_check.get(&n.target.task) == Some(&true)
+                && !n.test)
+        {
+            return;
+        }
+        n.silent = self.notification_settings.silent;
+        let muted = self
+            .notification_settings
+            .muted
+            .get(&n.target.task)
+            .copied()
+            .unwrap_or(false);
+        let policy =
+            self.policies
+                .entry(n.target.task.clone())
+                .or_insert(crate::notifications::Policy {
+                    muted,
+                    ..Default::default()
+                });
+        if policy.allow(!self.notification_settings.disabled, n.ending)
+            && let Some(worker) = &self.notifications
+            && worker.tx.try_send(n).is_err()
+        {
+            self.diagnostic
+                .push_back("Notification queue full; result remains pending".into());
+        }
+    }
 }

@@ -17,6 +17,8 @@ pub(crate) enum Zoom {
 
 pub(crate) const COMMANDS: &[(char, &str)] = &[
     ('+', "new_task"),
+    ('g', "round_review"),
+    ('!', "attention"),
     ('[', "previous_task"),
     (']', "next_task"),
     ('v', "agent_layout"),

@@ -136,9 +136,12 @@ pub fn git_status(root: &Path) -> Result<Git> {
     ))
 }
 pub(crate) fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
+    git_output_timeout(root, args, Duration::from_secs(5))
+}
+pub(crate) fn git_output_timeout(root: &Path, args: &[&str], timeout: Duration) -> Result<Vec<u8>> {
     let mut command = Command::new("git");
     command
-        .args(["--no-optional-locks", "-C"])
+        .args(["--literal-pathspecs", "--no-optional-locks", "-C"])
         .arg(root)
         .args(args)
         .stdout(Stdio::piped())
@@ -162,7 +165,7 @@ pub(crate) fn git_output(root: &Path, args: &[&str]) -> Result<Vec<u8>> {
         if let Some(s) = child.try_wait()? {
             break s;
         }
-        if start.elapsed() > Duration::from_secs(5) {
+        if start.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
             bail!("Git status timed out");

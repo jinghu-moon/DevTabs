@@ -115,6 +115,43 @@ pub fn text(root: &Path, args: &[&str]) -> Result<String> {
         .trim_end_matches(['\r', '\n'])
         .to_owned())
 }
+/// Complete paths, independent of the truncated project-pulse hotspot ranking.
+pub fn changed_paths(task: &Task) -> Result<std::collections::BTreeSet<PathBuf>> {
+    let mut paths = std::collections::BTreeSet::new();
+    for args in [
+        vec![
+            "diff",
+            "--name-only",
+            "-z",
+            "--no-renames",
+            task.base.as_str(),
+            "HEAD",
+            "--",
+        ],
+        vec!["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"],
+        vec!["ls-files", "--others", "--exclude-standard", "-z"],
+    ] {
+        let bytes = git(&task.checkout, &args)?;
+        for p in bytes.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+            paths.insert(PathBuf::from(std::str::from_utf8(p)?));
+        }
+        ensure!(
+            paths.len() <= 200_000,
+            "Task path coverage exceeded budget; overlap unknown"
+        );
+    }
+    Ok(paths)
+}
+pub fn overlaps(tasks: &[Task]) -> Result<BTreeMap<PathBuf, Vec<String>>> {
+    let mut all = BTreeMap::<PathBuf, Vec<String>>::new();
+    for task in tasks {
+        for path in changed_paths(task)? {
+            all.entry(path).or_default().push(task.id.clone());
+        }
+    }
+    all.retain(|_, tasks| tasks.len() > 1);
+    Ok(all)
+}
 impl Catalog {
     pub fn load(home: &Path) -> Result<Self> {
         use std::io::Read;

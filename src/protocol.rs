@@ -31,9 +31,28 @@ pub struct SessionInfo {
     pub command: CommandStatus,
     #[serde(default)]
     pub placement: crate::presentation::Placement,
+    #[serde(default)]
+    pub activity: Box<crate::activity::State>,
 }
 #[derive(Serialize, Deserialize)]
 pub enum Request {
+    Check {
+        workspace: String,
+        task: String,
+        spec: Option<crate::checks::Spec>,
+        initialize: bool,
+    },
+    CheckStatus {
+        task: String,
+    },
+    Notifications {
+        action: crate::notifications::Action,
+    },
+    Review {
+        workspace: String,
+        task: String,
+        action: crate::rounds::service::Action,
+    },
     StartRole {
         workspace: String,
         task: String,
@@ -142,6 +161,9 @@ pub struct Update {
 }
 #[derive(Serialize, Deserialize)]
 pub enum Response {
+    Check(Box<Option<crate::checks::Report>>),
+    Notifications(Box<crate::notifications::View>),
+    Review(Box<crate::rounds::service::View>),
     TaskPlan(Box<crate::tasks::Plan>),
     TaskOperation(Box<crate::tasks::Operation>),
     Host { pid: u32 },
@@ -172,7 +194,19 @@ fn endpoint_for(home: &std::path::Path, instance: Option<&std::ffi::OsStr>, buil
 }
 
 fn transfer(stream: &mut Stream, bytes: &mut [u8], write: bool) -> Result<()> {
-    let start = Instant::now();
+    transfer_until(
+        stream,
+        bytes,
+        write,
+        Instant::now() + Duration::from_secs(15),
+    )
+}
+fn transfer_until(
+    stream: &mut Stream,
+    bytes: &mut [u8],
+    write: bool,
+    deadline: Instant,
+) -> Result<()> {
     let mut offset = 0;
     while offset < bytes.len() {
         let mut available = bytes.len() - offset;
@@ -195,10 +229,7 @@ fn transfer(stream: &mut Stream, bytes: &mut [u8], write: bool) -> Result<()> {
                 return Err(std::io::Error::last_os_error()).context("Read host pipe");
             }
             if count == 0 {
-                anyhow::ensure!(
-                    start.elapsed() < Duration::from_secs(15),
-                    "Session host read timed out"
-                );
+                anyhow::ensure!(Instant::now() < deadline, "Session host read timed out");
                 std::thread::sleep(Duration::from_millis(2));
                 continue;
             }
@@ -221,7 +252,7 @@ fn transfer(stream: &mut Stream, bytes: &mut [u8], write: bool) -> Result<()> {
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
                 ) =>
             {
-                if start.elapsed() > Duration::from_secs(15) {
+                if Instant::now() >= deadline {
                     bail!("Session host timed out");
                 }
                 std::thread::sleep(Duration::from_millis(2));
@@ -278,6 +309,26 @@ pub(crate) fn disconnected(error: &anyhow::Error) -> bool {
                 | std::io::ErrorKind::UnexpectedEof
         )
     })
+}
+
+/// Dedicated hook transport never accepts ordinary large RPC frames.
+pub fn send_short<T: Serialize>(stream: &mut Stream, value: &T) -> Result<()> {
+    let mut bytes = serde_json::to_vec(value)?;
+    anyhow::ensure!(bytes.len() <= 1024 * 1024, "Hook frame too large");
+    let deadline = Instant::now() + Duration::from_millis(1200);
+    let mut length = (bytes.len() as u32).to_le_bytes();
+    transfer_until(stream, &mut length, true, deadline)?;
+    transfer_until(stream, &mut bytes, true, deadline)
+}
+pub fn receive_short<T: DeserializeOwned>(stream: &mut Stream) -> Result<T> {
+    let deadline = Instant::now() + Duration::from_millis(1200);
+    let mut length = [0; 4];
+    transfer_until(stream, &mut length, false, deadline)?;
+    let n = u32::from_le_bytes(length) as usize;
+    anyhow::ensure!(n <= 1024 * 1024, "Hook frame too large");
+    let mut bytes = vec![0; n];
+    transfer_until(stream, &mut bytes, false, deadline)?;
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 #[cfg(test)]

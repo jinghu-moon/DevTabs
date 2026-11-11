@@ -26,6 +26,7 @@ use std::{
 use worker::{Action, Detail, Edit, Reply, Workers};
 #[derive(Clone)]
 enum Command {
+    Attention,
     Open,
     Diagnostics,
     CopyPath,
@@ -88,6 +89,9 @@ enum Input {
 }
 #[derive(Clone)]
 enum Dialog {
+    Attention {
+        selected: usize,
+    },
     Input(Input, String),
     Settings {
         path: PathBuf,
@@ -1162,6 +1166,7 @@ impl Overview {
             ("open", "Enter", Command::Open, available),
             ("options", "Alt+Enter", Command::Options, available),
             ("overview.diagnostics", "", Command::Diagnostics, available),
+            ("review.inbox", "!", Command::Attention, true),
             ("overview.copy_path", "Ctrl+C", Command::CopyPath, available),
             ("overview.reset_draft", "", Command::ResetDraft, available),
             ("overview.new", "", Command::NewSession, available),
@@ -1462,6 +1467,7 @@ impl Overview {
                     self.dashboard.summary_cache = None;
                 }
             }
+            Command::Attention => self.dialog = Some(Dialog::Attention { selected: 0 }),
             Command::Diagnostics => self.dialog = Some(Dialog::Diagnostics),
             Command::Help => self.dialog = Some(Dialog::Help),
             Command::Presets => self.dialog = Some(Dialog::Presets { selected: 0 }),
@@ -1816,6 +1822,35 @@ impl Overview {
                 return Ok(Outcome::Stay);
             }
             match &mut dialog {
+                Dialog::Attention { selected } => {
+                    let pending = self.attention();
+                    match key.code {
+                        KeyCode::Down => {
+                            *selected = (*selected + 1).min(pending.len().saturating_sub(1))
+                        }
+                        KeyCode::Up => *selected = selected.saturating_sub(1),
+                        KeyCode::Enter => {
+                            if let Some((target, _)) = pending.get(*selected)
+                                && let Some(work) = self
+                                    .workspaces
+                                    .values()
+                                    .flatten()
+                                    .find(|w| w.id == target.workspace)
+                            {
+                                let mut options = work.options.clone();
+                                options.workspace = Some(work.id.clone());
+                                options.navigation = Some(Box::new(crate::tasks::Navigation {
+                                    project: work.project.clone(),
+                                    workspace: work.id.clone(),
+                                    task: target.task.clone(),
+                                    session: target.session.clone(),
+                                }));
+                                return Ok(Outcome::Current(Box::new(options)));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
                 Dialog::Help => {
                     keep = false;
                 }
@@ -2311,6 +2346,7 @@ impl Overview {
                 }
             }
             KeyCode::Left | KeyCode::Right => Some(Command::Group),
+            KeyCode::Char('!') => Some(Command::Attention),
             KeyCode::F(1) => Some(Command::Help),
             KeyCode::Char('a' | 'A') if ctrl && key.modifiers.contains(KeyModifiers::SHIFT) => {
                 Some(Command::SelectAll)
@@ -2781,3 +2817,29 @@ pub(crate) fn present_workspace(id: &str, options: &Options) -> Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+impl Overview {
+    fn attention(&self) -> Vec<(crate::notifications::Target, crate::activity::State)> {
+        let mut rows = self
+            .workspaces
+            .values()
+            .flatten()
+            .flat_map(|w| {
+                w.sessions.iter().flat_map(|s| {
+                    crate::notifications::pending(
+                        &crate::notifications::Target {
+                            workspace: w.id.clone(),
+                            task: s.task.task_id.clone(),
+                            session: s.id.clone(),
+                            run: s.task.run_id.clone(),
+                            result: s.activity.result,
+                        },
+                        &s.activity,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        crate::notifications::sort_pending(&mut rows);
+        rows
+    }
+}

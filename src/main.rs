@@ -9,6 +9,16 @@ fn run() -> Result<()> {
     let mut args = std::env::args_os().skip(1);
     if let Some(first) = args.next() {
         match first.to_string_lossy().as_ref() {
+            "__check-child" => {
+                let job = args.next().unwrap_or_default();
+                let code =
+                    devtabs::checks::child(&job.to_string_lossy(), &args.collect::<Vec<_>>())?;
+                std::process::exit(code);
+            }
+            "__hook" => {
+                devtabs::hooks::helper(&args.next().unwrap_or_default().to_string_lossy());
+                return Ok(());
+            }
             "__host" => {
                 let code = devtabs::platform::run_host(args.collect())?;
                 std::process::exit(code);
