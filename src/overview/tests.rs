@@ -251,10 +251,12 @@ fn instance_selection_survives_host_reordering_and_disappearance_cannot_launch()
     let mut app = overview();
     let path = app.path().unwrap();
     let make = |id: &str| crate::protocol::WorkspaceInfo {
+        tasks: vec![],
         id: id.into(),
         project: path.clone(),
         options: app.options_for(&path),
         sessions: vec![crate::protocol::SessionInfo {
+            task: Box::default(),
             id: format!("{id}-agent"),
             name: "Agent".into(),
             shell_pid: Some(1),

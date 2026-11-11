@@ -847,7 +847,7 @@ fn read_cache(path: &Path, key: &str, stamp: &[u64]) -> Option<Cached> {
         .filter(|c| c.path == key && c.stamp == stamp)
 }
 fn cache_stamp(root: &Path) -> Vec<u64> {
-    [
+    let mut stamp: Vec<u64> = [
         root.to_path_buf(),
         root.join(".git/HEAD"),
         root.join(".git/index"),
@@ -861,7 +861,11 @@ fn cache_stamp(root: &Path) -> Vec<u64> {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map_or(0, |t| t.as_nanos().min(u64::MAX as u128) as u64)
     })
-    .collect()
+    .collect();
+    if let Ok(repo) = crate::tasks::Repository::discover(root) {
+        stamp.extend(repo.stamp());
+    }
+    stamp
 }
 pub fn cached(root: &Path, generation: &Arc<AtomicU64>, ticket: u64) -> Stats {
     cached_at(root, &crate::config::home(), generation, ticket, false)

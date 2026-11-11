@@ -110,6 +110,106 @@ fn wait(label: &str, mut f: impl FnMut() -> bool) {
 fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
+
+#[test]
+fn running_dirty_task_can_add_an_isolated_task_without_restarting_or_crossing_input() {
+    let h = Harness::new();
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&h.root)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "NUL")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Fixture"]);
+    git(&["config", "user.email", "fixture@localhost"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["config", "core.autocrlf", "false"]);
+    fs::write(h.root.join("same.txt"), "base").unwrap();
+    git(&["add", "same.txt"]);
+    git(&["commit", "-m", "base"]);
+    let w = h.open(&["--composition", "agent-only"]);
+    wait("A starts", || h.info(&w.id).sessions[0].shell_pid.is_some());
+    let before = h.info(&w.id);
+    fs::write(h.root.join("same.txt"), "A dirty").unwrap();
+    let target = h.root.with_extension("isolated-task");
+    struct Cleanup(PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _target = Cleanup(target.clone());
+    let Response::TaskPlan(plan) = h
+        .rpc(Request::PlanTask {
+            workspace: w.id.clone(),
+            source: w.tasks[0].id.clone(),
+            name: "Feature B".into(),
+            base: "HEAD".into(),
+            path: Some(target.clone()),
+        })
+        .unwrap()
+    else {
+        panic!("plan")
+    };
+    assert!(matches!(
+        h.rpc(Request::AddTask {
+            workspace: w.id.clone(),
+            operation: plan.operation.clone()
+        })
+        .unwrap(),
+        Response::TaskOperation(_)
+    ));
+    wait("B attached", || h.info(&w.id).tasks.len() == 2);
+    let info = h.info(&w.id);
+    assert_eq!(info.sessions[0].id, before.sessions[0].id);
+    assert_eq!(info.sessions[0].shell_pid, before.sessions[0].shell_pid);
+    assert_ne!(info.sessions[0].task.task_id, info.sessions[1].task.task_id);
+    assert_eq!(info.sessions[1].task.role, devtabs::tasks::Role::Agent);
+    assert_eq!(fs::read_to_string(target.join("same.txt")).unwrap(), "base");
+    for (index, client, value) in [(0, "A-client", "A-only"), (1, "B-client", "B-only")] {
+        h.rpc(Request::Attach {
+            workspace: w.id.clone(),
+            session: info.sessions[index].id.clone(),
+            client: client.into(),
+            takeover: false,
+            floating: None,
+            rows: 24,
+            cols: 90,
+        })
+        .unwrap();
+        h.rpc(Request::Input {
+            workspace: w.id.clone(),
+            session: info.sessions[index].id.clone(),
+            client: client.into(),
+            bytes: format!(
+                "[IO.File]::WriteAllText((Join-Path (Get-Location) 'route.txt'), '{value}')\r"
+            )
+            .into_bytes(),
+        })
+        .unwrap();
+    }
+    wait("A input", || {
+        fs::read_to_string(h.root.join("route.txt")).is_ok_and(|s| s == "A-only")
+    });
+    wait("B input", || {
+        fs::read_to_string(target.join("route.txt")).is_ok_and(|s| s == "B-only")
+    });
+    assert_eq!(
+        fs::read_to_string(h.root.join("same.txt")).unwrap(),
+        "A dirty"
+    );
+    h.rpc(Request::Close { workspace: w.id }).unwrap();
+}
 #[test]
 fn agent_only_creates_exactly_one_pty_and_roundtrips_recovery() {
     let h = Harness::new();

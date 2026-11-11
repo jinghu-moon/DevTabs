@@ -20,6 +20,7 @@ use std::{
 
 struct Managed {
     id: String,
+    task: crate::tasks::Binding,
     name: String,
     session: Session,
     owner: Option<(String, Instant)>,
@@ -30,6 +31,7 @@ struct Workspace {
     id: String,
     options: Options,
     sessions: Vec<Managed>,
+    tasks: Vec<crate::tasks::Task>,
     finished: Option<Instant>,
     view_ready: bool,
 }
@@ -40,6 +42,7 @@ impl Workspace {
             project: self.options.project.clone(),
             options: self.options.clone(),
             sessions: self.sessions.iter().map(Managed::info).collect(),
+            tasks: self.tasks.clone(),
         }
     }
 }
@@ -49,6 +52,7 @@ impl Managed {
         let s = self.session.state();
         SessionInfo {
             id: self.id.clone(),
+            task: Box::new(self.task.clone()),
             name: self.name.clone(),
             shell_pid: s.shell_pid,
             status: s.status.clone(),
@@ -231,6 +235,9 @@ pub fn serve() -> Result<()> {
                             // History I/O must never hold the host's session/input mutex.
                             options.resolve_latest();
                         }
+                        if let Some(response) = task_request(&state, &request)? {
+                            return Ok(response);
+                        }
                         let mut host = state
                             .lock()
                             .map_err(|_| anyhow::anyhow!("Host state unavailable"))?;
@@ -322,6 +329,9 @@ impl Host {
     fn handle(&mut self, request: Request) -> Result<Response> {
         let _perf = crate::perf::span(crate::perf::Metric::HostRequest);
         match request {
+            Request::PlanTask { .. } | Request::AddTask { .. } | Request::TaskOperation { .. } => {
+                anyhow::bail!("Task operation must run outside host input lock")
+            }
             Request::Layout { workspace, layout } => {
                 let work = self
                     .workspaces
@@ -377,55 +387,19 @@ impl Host {
                     return Ok(Response::Workspace(Box::new(work.info())));
                 }
                 let id = uuid::Uuid::new_v4().to_string();
-                let mut sessions = Vec::new();
-                for index in 0..options.terminal_count() {
-                    let sid = uuid::Uuid::new_v4().to_string();
-                    let name = if index == 0 {
-                        "Agent".into()
-                    } else if index == 1 {
-                        "Debug".into()
-                    } else {
-                        options.extra_sessions[index - 2].name.clone()
-                    };
-                    let directory = if index >= 2 {
-                        options.extra_sessions[index - 2]
-                            .directory
-                            .clone()
-                            .unwrap_or_else(|| options.project.clone())
-                    } else {
-                        options.project.clone()
-                    };
-                    let directory = if directory.is_relative() {
-                        options.project.join(directory)
-                    } else {
-                        directory
-                    };
-                    let control = config::home().join("runtime").join(format!("{sid}.json"));
-                    let args = managed_args(&options, index, &control)?;
-                    let mut session = Session::spawn(Spawn {
-                        id: index,
-                        executable: &std::env::current_exe()?,
-                        shell: &options.shell,
-                        args: &args,
-                        project: &directory,
-                        rows: 32,
-                        cols: 100,
-                        history: usize::from(options.history),
-                    })?;
-                    session.control = Some(control);
-                    sessions.push(Managed {
-                        id: sid,
-                        name,
-                        session,
-                        owner: None,
-                        stop: None,
-                        placement: Placement::Docked,
-                    });
-                }
+                let task = {
+                    let _lock = config::ConfigLock::acquire()?;
+                    let mut catalog = crate::tasks::Catalog::load(&config::home())?;
+                    let task = catalog.main_task(&options)?;
+                    catalog.save(&config::home())?;
+                    task
+                };
+                let sessions = spawn_task(&task)?;
                 let workspace = Workspace {
                     id: id.clone(),
                     options,
                     sessions,
+                    tasks: vec![task],
                     finished: None,
                     view_ready: false,
                 };
@@ -676,6 +650,196 @@ impl Host {
                 Ok(Response::Ok)
             }
         }
+    }
+}
+
+fn spawn_task(task: &crate::tasks::Task) -> Result<Vec<Managed>> {
+    use crate::tasks::{Binding, Role};
+    let options = &task.options;
+    let mut sessions = Vec::new();
+    for index in 0..options.terminal_count() {
+        let id = uuid::Uuid::new_v4().to_string();
+        let (role, name, directory) = match index {
+            0 => (Role::Agent, "Agent".into(), task.cwd.clone()),
+            1 => (Role::Debug, "Debug".into(), task.cwd.clone()),
+            i => {
+                let extra = &options.extra_sessions[i - 2];
+                (
+                    Role::Extra,
+                    extra.name.clone(),
+                    extra.directory.clone().unwrap_or_else(|| task.cwd.clone()),
+                )
+            }
+        };
+        let directory = if directory.is_relative() {
+            task.cwd.join(directory)
+        } else {
+            directory
+        };
+        let directory = dunce::canonicalize(&directory)?;
+        anyhow::ensure!(
+            directory.starts_with(dunce::canonicalize(&task.checkout)?),
+            "Terminal cwd leaves task checkout"
+        );
+        let control = config::home().join("runtime").join(format!("{id}.json"));
+        let args = managed_args(options, index, &control)?;
+        let mut session = Session::spawn(Spawn {
+            id: index,
+            executable: &std::env::current_exe()?,
+            shell: &options.shell,
+            args: &args,
+            project: &directory,
+            rows: 32,
+            cols: 100,
+            history: usize::from(options.history),
+        })?;
+        session.control = Some(control);
+        sessions.push(Managed {
+            id,
+            task: Binding {
+                task_id: task.id.clone(),
+                run_id: uuid::Uuid::new_v4().to_string(),
+                role,
+                initial_cwd: directory,
+            },
+            name,
+            session,
+            owner: None,
+            stop: None,
+            placement: Placement::Docked,
+        });
+    }
+    Ok(sessions)
+}
+
+fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Response>> {
+    use crate::tasks::{Catalog, Operation};
+    match request {
+        Request::PlanTask {
+            workspace,
+            source,
+            name,
+            base,
+            path,
+        } => {
+            {
+                let host = state
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                let work = host
+                    .workspaces
+                    .get(workspace)
+                    .context("Unknown workspace")?;
+                anyhow::ensure!(
+                    work.tasks.iter().any(|t| &t.id == source),
+                    "Source task not in workspace"
+                );
+            }
+            let _lock = config::ConfigLock::acquire()?;
+            let mut catalog = Catalog::load(&config::home())?;
+            let mut plan = catalog.plan(source, name, base, path.clone())?;
+            plan.workspace = Some(workspace.clone());
+            catalog.operations.insert(
+                plan.operation.clone(),
+                Operation {
+                    plan: plan.clone(),
+                    phase: "Prepared".into(),
+                    error: None,
+                },
+            );
+            catalog.save(&config::home())?;
+            Ok(Some(Response::TaskPlan(Box::new(plan))))
+        }
+        Request::TaskOperation { operation } => {
+            let catalog = Catalog::load(&config::home())?;
+            Ok(Some(Response::TaskOperation(Box::new(
+                catalog
+                    .operations
+                    .get(operation)
+                    .context("Unknown task operation")?
+                    .clone(),
+            ))))
+        }
+        Request::AddTask {
+            workspace,
+            operation,
+        } => {
+            let _lock = config::ConfigLock::acquire()?;
+            let mut catalog = Catalog::load(&config::home())?;
+            let pending = catalog
+                .operations
+                .values()
+                .filter(|o| matches!(o.phase.as_str(), "Creating" | "Spawning"))
+                .count();
+            let op = catalog
+                .operations
+                .get_mut(operation)
+                .context("Unknown prepared task")?;
+            anyhow::ensure!(
+                op.plan.workspace.as_ref() == Some(workspace),
+                "Task operation belongs to another workspace"
+            );
+            if matches!(op.phase.as_str(), "Creating" | "Spawning" | "Attached") {
+                return Ok(Some(Response::TaskOperation(Box::new(op.clone()))));
+            }
+            anyhow::ensure!(pending < 64, "Task operation queue full");
+            anyhow::ensure!(
+                op.phase == "Prepared",
+                "Task failed; inspect operation before retry"
+            );
+            let plan = op.plan.clone();
+            op.phase = "Creating".into();
+            let response = op.clone();
+            catalog.save(&config::home())?;
+            let state = state.clone();
+            let workspace = workspace.clone();
+            let worker = thread::Builder::new()
+                .name("devtabs-create-task".into())
+                .spawn(move || {
+                    let result = (|| -> Result<()> {
+                        let task = {
+                            let _lock = config::ConfigLock::acquire()?;
+                            let mut c = Catalog::load(&config::home())?;
+                            let task = c.create(&config::home(), &plan)?;
+                            c.operations.get_mut(&plan.operation).unwrap().phase =
+                                "Spawning".into();
+                            c.save(&config::home())?;
+                            task
+                        };
+                        let sessions = spawn_task(&task)?;
+                        let mut host = state
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                        let work = host
+                            .workspaces
+                            .get_mut(&workspace)
+                            .context("Workspace closed; task resources retained")?;
+                        if !work.tasks.iter().any(|t| t.id == task.id) {
+                            work.tasks.push(task);
+                            work.sessions.extend(sessions);
+                        }
+                        Ok(())
+                    })();
+                    if let Ok(_lock) = config::ConfigLock::acquire()
+                        && let Ok(mut c) = Catalog::load(&config::home())
+                        && let Some(op) = c.operations.get_mut(&plan.operation)
+                    {
+                        op.phase = if result.is_ok() { "Attached" } else { "Failed" }.into();
+                        op.error = result.err().map(|e| format!("{e:#}"));
+                        let _ = c.save(&config::home());
+                    }
+                });
+            if let Err(error) = worker {
+                let op = catalog.operations.get_mut(operation).unwrap();
+                op.phase = "Failed".into();
+                op.error = Some(format!("Cannot start task worker: {error}"));
+                let op = op.clone();
+                catalog.save(&config::home())?;
+                return Ok(Some(Response::TaskOperation(Box::new(op))));
+            }
+            Ok(Some(Response::TaskOperation(Box::new(response))))
+        }
+        _ => Ok(None),
     }
 }
 

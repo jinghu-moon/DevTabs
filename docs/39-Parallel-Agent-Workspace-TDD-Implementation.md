@@ -1,6 +1,6 @@
 # 并行 Agent 工作区 TDD 实施任务
 
-状态：实施中；阶段 0 自动验证完成，其余阶段待实施。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
+状态：实施中；阶段 0、A 隔离后端自动验证完成，B–E 待实施。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
 
 本文是整个文档 37 的实施计划，覆盖 0–E 阶段、通知及每轮文件变化记录，不仅是一个通知子功能。任务按实际证据更新状态，不修改真实 Agent 配置或发送系统通知；历史构建的结果不替代实施当天基线。
 
@@ -35,7 +35,7 @@ DevTabs 不调用 AI 生成记忆、总结或任务分解。文件改动是范�
 
 每阶段记录在隔离的 `artifacts/<build-or-run>/parallel-workspace/`，至少包含：源码树指纹/dirty 清单、工具链与系统版本、命令/退出码、RED/GREEN 日志、机器与夹具参数、性能原始值及结论。目录为实施时创建的输出约定，当前不存在不代表缺失测试结果。
 
-每个任务状态只有待实施、RED 已确认、GREEN、重构完成、等待真机、已验收；可以用任务 ID 关联外部日志，但不能仅勾选任务而无证据。自动化完成与用户真机通过分栏记录，不自动提交/推送。优化仅在正确性不退化且同条件数据有收益时保留，回退只涉及该次优化的已确认改动，不重置整个脏工作区。
+每个任务状态只有待实施、RED 已确认、GREEN、重构完成、等待真机、已验收；可以用任务 ID 关联外部日志，但不能仅勾选任务而无证据。自动化完成与用户真机通过分栏记录，提交/推送遵循用户最新授权：每完成一个阶段提交并推送。优化仅在正确性不退化且同条件数据有收益时保留，回退只涉及该次优化的已确认改动，不重置整个脏工作区。
 
 ## 3. 依赖顺序与首个交付
 
@@ -112,11 +112,11 @@ flowchart LR
 
 ## 6. 阶段 A：任务身份与最小隔离闭环
 
-- [ ] **A01 — 身份及角色。** RED：同项目的 A/B、40 条历史和重排后的 Agent/Debug 被错误复用/路由；GREEN：任务稳定 ID、conversation 绑定、显式 role 与 Agent run 身份进入宿主快照/协议；REFACTOR：删除会话 0/1 角色推断，保留终端 ID 与租约语义。拟测 `tests/parallel_tasks.rs`。
-- [ ] **A02 — Git 拓扑与缓存。** RED：linked worktree 的 `.git` 文件、模块 cwd、独立 index 或公共 packed refs 变化不能正确识别/失效；GREEN：通过 Git 解析 checkout/git/common dir，分开历史与 checkout 缓存；REFACTOR：移除只读 `<root>/.git/HEAD` 的假设。拟测 `tests/task_worktrees.rs` 及现有 `project_pulse`。
-- [ ] **A03 — 冻结基准与创建事务。** RED：A dirty 时建 B 改动 A、确认后 A 新提交改变 B 基准、重复确认建两次；GREEN：操作 ID、创建意图、冻结提交、独立分支/worktree与查询；REFACTOR：Git 操作与 UI/输入锁分开。无 HEAD、来源不明、路径/分支冲突返回具体失败。
-- [ ] **A04 — 受管会话路由。** RED：双 shell 的 cwd/输入/停止跨任务、复用错误 Agent、按角色打开 Debug 重复创建；GREEN：task/workspace/session 校验和每任务 Agent/Debug 启动；REFACTOR：复用现有 Input/Poll/Resize，不另造并行终端通道。拟测 `tests/parallel_workspace_windows.rs`。
-- [ ] **A05 — 崩溃/局部失败对账。** RED：创建后崩溃误删外部目录、超时重试重复创建、B 失败导致 A 停止；GREEN：持久阶段记录、资源所有权和保守查询/恢复；REFACTOR：只有本次确定创建且未被使用的资源允许回滚。使用真实临时 Git 与子进程故障注入。
+- [x] **A01 — 身份及角色。** RED：同项目的 A/B、40 条历史和重排后的 Agent/Debug 被错误复用/路由；GREEN：任务稳定 ID、conversation 绑定、显式 role 与 Agent run 身份进入宿主快照/协议；REFACTOR：删除会话 0/1 角色推断，保留终端 ID 与租约语义。拟测 `tests/parallel_tasks.rs`。
+- [x] **A02 — Git 拓扑与缓存。** RED：linked worktree 的 `.git` 文件、模块 cwd、独立 index 或公共 packed refs 变化不能正确识别/失效；GREEN：通过 Git 解析 checkout/git/common dir，分开历史与 checkout 缓存；REFACTOR：移除只读 `<root>/.git/HEAD` 的假设。拟测 `tests/task_worktrees.rs` 及现有 `project_pulse`。
+- [x] **A03 — 冻结基准与创建事务。** RED：A dirty 时建 B 改动 A、确认后 A 新提交改变 B 基准、重复确认建两次；GREEN：操作 ID、创建意图、冻结提交、独立分支/worktree与查询；REFACTOR：Git 操作与 UI/输入锁分开。无 HEAD、来源不明、路径/分支冲突返回具体失败。
+- [x] **A04 — 受管会话路由。** RED：双 shell 的 cwd/输入/停止跨任务、复用错误 Agent、按角色打开 Debug 重复创建；GREEN：task/workspace/session 校验和每任务 Agent/Debug 启动；REFACTOR：复用现有 Input/Poll/Resize，不另造并行终端通道。拟测 `tests/parallel_workspace_windows.rs`。
+- [x] **A05 — 崩溃/局部失败对账。** RED：创建后崩溃误删外部目录、超时重试重复创建、B 失败导致 A 停止；GREEN：持久阶段记录、资源所有权和保守查询/恢复；REFACTOR：只有本次确定创建且未被使用的资源允许回滚。使用真实临时 Git 与子进程故障注入。
 
 阶段退出：两个真实 worktree＋双 shell 独立；源 A 的文件/index/HEAD、PID 和草稿不变；B 失败可查询，不以启动两个窗口代替隔离。
 

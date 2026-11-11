@@ -353,6 +353,7 @@ mod tests {
             focus_events: true,
             win32_input: true,
             info: SessionInfo {
+                task: Box::default(),
                 id: "s".into(),
                 name: "Debug".into(),
                 shell_pid: Some(123),

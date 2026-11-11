@@ -19,10 +19,12 @@ pub struct WorkspaceInfo {
     pub project: PathBuf,
     pub options: Options,
     pub sessions: Vec<SessionInfo>,
+    pub tasks: Vec<crate::tasks::Task>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionInfo {
     pub id: String,
+    pub task: Box<crate::tasks::Binding>,
     pub name: String,
     pub shell_pid: Option<u32>,
     pub status: Status,
@@ -32,6 +34,20 @@ pub struct SessionInfo {
 }
 #[derive(Serialize, Deserialize)]
 pub enum Request {
+    PlanTask {
+        workspace: String,
+        source: String,
+        name: String,
+        base: String,
+        path: Option<PathBuf>,
+    },
+    AddTask {
+        workspace: String,
+        operation: String,
+    },
+    TaskOperation {
+        operation: String,
+    },
     Layout {
         workspace: String,
         layout: crate::launch::Layout,
@@ -119,6 +135,8 @@ pub struct Update {
 }
 #[derive(Serialize, Deserialize)]
 pub enum Response {
+    TaskPlan(Box<crate::tasks::Plan>),
+    TaskOperation(Box<crate::tasks::Operation>),
     Host { pid: u32 },
     Ok,
     Error(String),
@@ -143,7 +161,7 @@ fn endpoint_for(home: &std::path::Path, instance: Option<&std::ffi::OsStr>, buil
     crate::config::key(home).hash(&mut hash);
     instance.hash(&mut hash);
     // Matching package versions do not imply matching development builds.
-    format!("DevTabs-v5-{build}-{:016x}", hash.finish())
+    format!("DevTabs-v6-{build}-{:016x}", hash.finish())
 }
 
 fn transfer(stream: &mut Stream, bytes: &mut [u8], write: bool) -> Result<()> {

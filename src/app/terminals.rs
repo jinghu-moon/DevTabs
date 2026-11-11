@@ -464,6 +464,7 @@ mod tests {
         let sessions = (0..8)
             .map(|i| {
                 Client::hidden(crate::protocol::SessionInfo {
+                    task: Box::default(),
                     id: format!("s{i}"),
                     name: format!("终端 {i} with a long name"),
                     shell_pid: Some(i),
@@ -813,6 +814,7 @@ mod tests {
         app.sessions[0].info.placement = Placement::Docked;
         app.sidebar = Some(sidebar);
         let work = WorkspaceInfo {
+            tasks: vec![],
             id: app.workspace_id.clone(),
             project: root.clone(),
             options: app.options.clone(),

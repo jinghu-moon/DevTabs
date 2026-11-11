@@ -50,7 +50,7 @@ impl Composition {
 #[command(
     name = "devtabs",
     version,
-    long_version = concat!(env!("CARGO_PKG_VERSION"), "\nbuild ", env!("DEVTABS_BUILD_ID"), "\nIPC DevTabs-v5"),
+    long_version = concat!(env!("CARGO_PKG_VERSION"), "\nbuild ", env!("DEVTABS_BUILD_ID"), "\nIPC DevTabs-v6"),
     about = "Agent and Debug together in a Windows terminal"
 )]
 pub struct Options {

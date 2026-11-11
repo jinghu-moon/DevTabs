@@ -26,6 +26,7 @@ pub mod selection;
 pub mod session;
 pub mod sidebar;
 pub mod task_runtime;
+pub mod tasks;
 pub mod terminal;
 pub mod ui;
 pub mod windows;
