@@ -33,6 +33,7 @@ pub struct Report {
     pub elapsed_ms: u64,
 }
 pub fn run(task: &str, result: u64, root: &Path, spec: &Spec) -> Result<Report> {
+    let _lease = crate::lifecycle::lease(&crate::config::home(), task, false, false)?;
     run_with_executable(task, result, root, spec, &std::env::current_exe()?)
 }
 pub fn run_with_executable(
@@ -232,6 +233,7 @@ pub fn child(job: &str, args: &[std::ffi::OsString]) -> Result<i32> {
     Ok(command.status()?.code().unwrap_or(1))
 }
 pub fn initialize(task: &str, root: &Path, home: &Path) -> Result<()> {
+    let _lease = crate::lifecycle::lease(home, task, false, false)?;
     initialize_with_executable(task, root, home, &std::env::current_exe()?)
 }
 pub fn initialize_with_executable(task: &str, root: &Path, home: &Path, exe: &Path) -> Result<()> {

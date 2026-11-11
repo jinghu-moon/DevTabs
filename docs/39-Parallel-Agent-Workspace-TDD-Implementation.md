@@ -1,6 +1,6 @@
 # 并行 Agent 工作区 TDD 实施任务
 
-状态：实施中；阶段 0、A、B、C、D 开发路径自动验证完成，E 待实施；Provider/Windows 真机项等待用户验证。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
+状态：阶段 0–E 开发实现与最终自动门禁完成；V01 的 U01–U07 仍等待用户真机验收。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
 
 本文是整个文档 37 的实施计划，覆盖 0–E 阶段、通知及每轮文件变化记录，不仅是一个通知子功能。任务按实际证据更新状态，不修改真实 Agent 配置或发送系统通知；历史构建的结果不替代实施当天基线。
 
@@ -91,7 +91,7 @@ flowchart LR
 | 单文件内容快照 | 8 MiB | 保存可用元信息，旧内容不可用则不生成伪 diff |
 | 单轮额外内容 / 单任务 / 全局存储 | 128 MiB / 512 MiB / 2 GiB | 先回收无引用过期轮次；仍满则部分/停采，不删除查看中或采集中内容 |
 | 每任务保留历史 | 最近 20 个逻辑轮；报告版本也计字节预算 | 最老可回收轮次先失效，活跃引用占满则停止新增而非无限增长 |
-| 单次候选/路径输出 | 200,000 路径、64 MiB 输出，任一先到 | 明确路径不完整，不能推导完整零差异 |
+| 单次候选/路径输出 | 200,000 路径、单次 Git 输出 8 MiB，任一先到 | 明确路径不完整，不能推导完整零差异 |
 | 采集总截止时间 | 每侧 5 秒；Git 子命令共享该侧剩余预算 | 终止所属子进程，保留已知范围并标部分；不续跑无限后台任务 |
 | Git 并发 / 文件采集 worker | 各全局最多 2；同仓库写操作串行 | 有界排队，按 task 合并可替代读请求；创建/清理意图不可丢弃 |
 | 等待采集请求 / watcher 路径候选 | 全局 64 / 每任务 4,096 | 显示背压/监听遗漏；差异模式核对路径，观察模式标不完整 |
@@ -136,7 +136,7 @@ flowchart LR
 - [x] **C02 — 返回目标。** RED：点“← 总览”停止后台或选回错误任务，再进入新建 Agent；GREEN：携带 project/workspace/task/session 返回目标，揭示被过滤对象；REFACTOR：点击与 Ctrl+G → P 同一路由，返回与关闭入口区分。
 - [x] **C03 — 持久化与局部恢复。** RED：B 断连时恢复重启 A/存活 Debug、重启宿主后把旧 PID 当存活、精确 resume 串 cwd；GREEN：任务权威记录、布局、run 与恢复验证，错误 schema 保留原文件并失败；REFACTOR：删除重复 task 定义/猜测兼容路径，不自动续跑 Debug。
 
-阶段退出：0–C 主路径完成，单 Agent/历史/总览/预览仍通过；用户可在此验收首个隔离同屏体验。D/E 全部保持待实施直到各自通过。
+阶段退出：0–C 主路径完成，单 Agent/历史/总览/预览仍通过；用户可在此验收首个隔离同屏体验。D/E 的当前实施与真机状态见本文各阶段及文档 40。
 
 ## 9. 阶段 D：文件记录、审阅与通知
 
@@ -174,9 +174,11 @@ D 阶段退出：手动/Git/非 Git 审阅、受支持自动事件、Windows 通
 
 ## 10. 阶段 E：合并、归档与清理
 
-- [ ] **E01 — 受控 fast-forward。** RED：目标 dirty/HEAD 变化仍合并、非 FF 自动 rebase/squash、检查过期仍当验证通过；GREEN：显式源/目标和检查范围、执行前重验、只支持确认的 FF；REFACTOR：复用 Git 事务/锁，其他情况提供任务终端处理入口，不替用户提交/fetch。
-- [ ] **E02 — 归档与资源保护。** RED：有运行命令/草稿/未合并/ignored 本地成果仍清理，原 checkout 被当任务目录删除；GREEN：归档与清理分开、所有权及使用/文件/合并检查、清理摘要与明确确认；REFACTOR：外部采用资源默认只解除关联，不删除。
-- [ ] **E03 — 部分成功与重试。** RED：目录移除成功但分支删除失败显示全成功，超时再试误删重建资源；GREEN：操作日志、步骤结果、当前资源重新校验和幂等查询；REFACTOR：与 A05 共享事务事实，不加入强制 remove/reset 兜底。拟测 `tests/task_cleanup.rs`。
+开发入口已完成；FF 采用保守资源锁：双方受管终端先停止，避免后台命令在复核后改写。清理只锁来源，目标任务可以继续运行；来源草稿须先解决并分离前端。锁只覆盖 DevTabs，同一数据目录跨宿主有效，不能约束外部 Git/编辑器。普通 Git 命令失败保留具体 stderr 与持久步骤，用户可查询重试；没有 force 兜底。
+
+- [x] **E01 — 受控 fast-forward。** RED：目标 dirty/HEAD 变化仍合并、非 FF 自动 rebase/squash、检查过期仍当验证通过；GREEN：显式源/目标和检查范围、执行前重验、只支持确认的 FF；REFACTOR：复用 Git 事务/锁，其他情况提供任务终端处理入口，不替用户提交/fetch。
+- [x] **E02 — 归档与资源保护。** RED：有运行命令/草稿/未合并/ignored 本地成果仍清理，原 checkout 被当任务目录删除；GREEN：归档与清理分开、所有权及使用/文件/合并检查、清理摘要与明确确认；REFACTOR：外部采用资源默认只解除关联，不删除。
+- [x] **E03 — 部分成功与重试。** RED：目录移除成功但分支删除失败显示全成功，超时再试误删重建资源；GREEN：操作日志、步骤结果、当前资源重新校验和幂等查询；REFACTOR：与 A05 共享事务事实，不加入强制 remove/reset 兜底。实际测试见 `tests/task_lifecycle.rs` 与 `tests/workspace_windows.rs`。
 
 阶段退出：资源保护有效，Git 拒绝时保留用户成果，错误可重试/可解释。后台 Agent 报告完成永远不是合并或删除授权。
 
@@ -216,16 +218,16 @@ cargo clippy --workspace --all-targets --target-dir target/i18n-check -- -D warn
 cargo fmt --all --check
 ```
 
-目标 suite 创建后，按测试名运行，示例并非现在就存在的测试入口：
+以下为实际存在的目标 suite，可按测试名缩小运行范围：
 
 ```powershell
-# A04 创建 suite 后：双 shell/任务路由
-cargo test --test parallel_workspace_windows --target-dir target/perf -- --test-threads=1
+# A04：双 shell/任务路由
+cargo test --test workspace_windows --target-dir target/perf -- --test-threads=1
 
-# D03/D04 创建 suite 后：本轮 Git 真值和增量行为
+# D03/D04：本轮 Git 真值和增量行为
 cargo test --test round_git --target-dir target/perf -- --test-threads=1
 
-# D13 创建 suite 后：纯时钟策略，不弹真实系统通知
+# D13：纯时钟策略，不弹真实系统通知
 cargo test --test notification_policy --target-dir target/perf -- --test-threads=1
 ```
 
@@ -271,6 +273,6 @@ cargo test --release --test performance --target-dir target/parallel-release rel
 | U06 提醒/检查 | 待处理查看、静音、单次订阅、延后后开始新轮、检查后代码再变 | 无过期补发、旧已读不清新结果、检查过期可见 |
 | U07 结束流程 | 审阅后 FF、失败拒绝、含 ignored 成果的清理、部分成功重试 | 用户成果受保护，结果可解释，不自动提交/强制清理 |
 
-- [ ] **V01 — 完整交付核对。** 收集各阶段 RED/GREEN/重构与性能证据、现有完整回归及 U01–U07；更新实现验证文档、README/帮助/支持矩阵和构建清单。所有待实现入口隐藏；无法验收的 Provider/Windows 组合标未验证，相关任务保持等待真机，不用文档打勾代替结果。
+- [ ] **V01 — 完整交付核对（自动交付证据已整理；U01–U07 等待用户真机）。** 收集各阶段 RED/GREEN/重构与性能证据、现有完整回归及 U01–U07；更新实现验证文档、README/帮助/支持矩阵和构建清单。所有待实现入口隐藏；无法验收的 Provider/Windows 组合标未验证，相关任务保持等待真机，不用文档打勾代替结果。
 
 本方案完成的条件是 0–E 全部任务按证据关闭，48 项行为有可追溯覆盖、性能上界有效、既有能力未退化，用户真机验证的支持组合明确。允许分阶段发布开发构建，不允许把 0–C 或 mock 通知通过解释为全部交付。实施文档交付本身只表示计划可执行，不表示生产代码和测试已经完成。

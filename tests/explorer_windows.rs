@@ -118,18 +118,37 @@ fn isolated(name: &str, run: impl FnOnce()) {
         return;
     }
     let home = Fixture::new();
-    let out = Process::new(std::env::current_exe().unwrap())
+    let stdout = home.path("stdout.log");
+    let stderr = home.path("stderr.log");
+    let mut child = Process::new(std::env::current_exe().unwrap())
         .args(["--exact", name, "--nocapture"])
         .env("DEVTABS_EXPLORER_TEST", "1")
         .env("DEVTABS_HOME", &home.0)
         .env("DEVTABS_PERF_DIR", home.path("perf"))
-        .output()
+        .stdout(fs::File::create(&stdout).unwrap())
+        .stderr(fs::File::create(&stderr).unwrap())
+        .spawn()
         .unwrap();
+    let until = Instant::now() + Duration::from_secs(40);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= until {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "Isolated explorer fixture timed out: {name}\n{}",
+                fs::read_to_string(&stderr).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
     assert!(
-        out.status.success(),
+        status.success(),
         "{}\n{}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
+        fs::read_to_string(stdout).unwrap_or_default(),
+        fs::read_to_string(stderr).unwrap_or_default()
     );
 }
 fn search(worker: &Worker, id: u64, query: &str, scope: Scope) -> explorer::Search {

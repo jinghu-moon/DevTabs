@@ -106,8 +106,19 @@ impl App {
         options.view = view.clone();
         options.image_protocol = image_protocol;
         options.image_cell_size = image_cell_size;
+        let view_leases = info
+            .tasks
+            .iter()
+            .map(|t| {
+                Ok((
+                    t.id.clone(),
+                    crate::lifecycle::lease(&crate::config::home(), &t.id, true, false)?,
+                ))
+            })
+            .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
         let mut app = Self {
             parallel: parallel::State {
+                view_leases: Some(view_leases),
                 tasks: info.tasks,
                 ..Default::default()
             },
@@ -766,6 +777,7 @@ impl App {
                 KeyCode::Char('+') => self.new_task(),
                 KeyCode::Char('g') => self.open_review(false),
                 KeyCode::Char('!') => self.open_review(true),
+                KeyCode::Char('m' | 'M') => self.open_resources(),
                 KeyCode::Char('c' | 'C') => self.toggle_task_pins(),
                 KeyCode::Char('e' | 'E') => self.replace_pinned_task(),
                 KeyCode::Char('[') => self.select_task(-1),

@@ -36,6 +36,9 @@ pub struct SessionInfo {
 }
 #[derive(Serialize, Deserialize)]
 pub enum Request {
+    Lifecycle {
+        action: crate::lifecycle::Action,
+    },
     Check {
         workspace: String,
         task: String,
@@ -161,6 +164,8 @@ pub struct Update {
 }
 #[derive(Serialize, Deserialize)]
 pub enum Response {
+    Lifecycle(Box<crate::lifecycle::Operation>),
+    TaskCatalog(Box<crate::tasks::Catalog>),
     Check(Box<Option<crate::checks::Report>>),
     Notifications(Box<crate::notifications::View>),
     Review(Box<crate::rounds::service::View>),

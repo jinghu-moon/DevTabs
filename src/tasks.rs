@@ -62,6 +62,8 @@ pub struct Operation {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
+    #[serde(default)]
+    pub resources: BTreeMap<String, String>,
     pub tasks: BTreeMap<String, Task>,
     pub operations: BTreeMap<String, Operation>,
 }
@@ -374,6 +376,10 @@ impl Catalog {
                 "Module leaves task checkout"
             );
             self.tasks.insert(plan.task.id.clone(), plan.task.clone());
+            self.resources.insert(
+                plan.task.id.clone(),
+                crate::lifecycle::identity(&plan.task.checkout)?,
+            );
             Ok(plan.task.clone())
         })();
         let op = self.operations.get_mut(&plan.operation).unwrap();

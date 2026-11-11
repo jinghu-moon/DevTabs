@@ -14,6 +14,12 @@ use ratatui::{
 use std::sync::mpsc;
 #[derive(Default)]
 pub struct State {
+    pub resources: bool,
+    pub catalog: Vec<crate::tasks::Task>,
+    pub target: usize,
+    pub operation: Option<crate::lifecycle::Operation>,
+    pub require_check: bool,
+    pub archive_pending: bool,
     pub open: bool,
     pub inbox: bool,
     pub task: String,
@@ -36,6 +42,7 @@ pub struct State {
 }
 impl App {
     pub(super) fn open_review(&mut self, inbox: bool) {
+        self.parallel.review.resources = false;
         self.parallel.review.open = true;
         self.parallel.review.inbox = inbox;
         self.parallel.review.task = self.parallel.context.clone();
@@ -50,6 +57,19 @@ impl App {
         } else {
             self.review_action(Action::List);
         }
+    }
+    pub(super) fn open_resources(&mut self) {
+        let s = &mut self.parallel.review;
+        s.open = true;
+        s.resources = true;
+        s.inbox = false;
+        s.task = self.parallel.context.clone();
+        s.error.clear();
+        s.operation = None;
+        s.archive_pending = false;
+        self.review_request(Request::Lifecycle {
+            action: crate::lifecycle::Action::List,
+        });
     }
     fn review_request(&mut self, request: Request) {
         if self.parallel.review.pending.is_some() {
@@ -84,6 +104,27 @@ impl App {
                 Ok(result) => {
                     s.pending = None;
                     match result {
+                        Ok(Response::TaskCatalog(c)) => {
+                            s.catalog = c
+                                .tasks
+                                .into_values()
+                                .filter(|t| {
+                                    t.id != s.task
+                                        && !t.archived
+                                        && self
+                                            .parallel
+                                            .tasks
+                                            .iter()
+                                            .find(|t| t.id == s.task)
+                                            .is_some_and(|source| source.project == t.project)
+                                })
+                                .collect();
+                            s.target = s.target.min(s.catalog.len().saturating_sub(1));
+                        }
+                        Ok(Response::Lifecycle(op)) => {
+                            s.operation = Some(*op);
+                            s.error.clear();
+                        }
                         Ok(Response::Review(v)) => {
                             s.marks_pending = true;
                             let selected = s.data.records.get(s.round).map(|r| r.id.clone());
@@ -228,6 +269,83 @@ impl App {
                 s.editing_scope = false;
             } else {
                 s.open = false;
+            }
+            return;
+        }
+        if s.resources {
+            use crate::lifecycle::Action as L;
+            if s.pending.is_some() {
+                return;
+            }
+            let action = match key.code {
+                KeyCode::Down => {
+                    s.target = (s.target + 1).min(s.catalog.len().saturating_sub(1));
+                    s.operation = None;
+                    s.archive_pending = false;
+                    None
+                }
+                KeyCode::Up => {
+                    s.target = s.target.saturating_sub(1);
+                    s.operation = None;
+                    s.archive_pending = false;
+                    None
+                }
+                KeyCode::Char('m' | 'd') => {
+                    s.archive_pending = false;
+                    s.catalog.get(s.target).map(|t| L::Plan {
+                        source: s.task.clone(),
+                        target: t.id.clone(),
+                        cleanup: key.code == KeyCode::Char('d'),
+                        require_check: s.require_check,
+                    })
+                }
+                KeyCode::Char('p') => {
+                    s.require_check = !s.require_check;
+                    s.operation = None;
+                    None
+                }
+                KeyCode::Char('a') => {
+                    s.archive_pending = true;
+                    s.operation = None;
+                    None
+                }
+                KeyCode::Char('l') => Some(L::List),
+                KeyCode::Char('q') => s.operation.as_ref().map(|op| L::Query {
+                    operation: op.id.clone(),
+                }),
+                KeyCode::Char('y') => {
+                    if let Some(op) = &s.operation {
+                        let result = std::env::current_exe()
+                            .map_err(anyhow::Error::from)
+                            .and_then(|exe| {
+                                crate::files::copy(format!(
+                                    "& '{}' task apply '{}' --confirm '{}'",
+                                    exe.display().to_string().replace('\'', "''"),
+                                    op.id,
+                                    op.id
+                                ))
+                            });
+                        if let Err(e) = result {
+                            s.error = e.to_string();
+                        }
+                    }
+                    None
+                }
+                KeyCode::Enter if s.archive_pending => {
+                    s.archive_pending = false;
+                    Some(L::Archive {
+                        task: s.task.clone(),
+                        confirm: s.task.clone(),
+                    })
+                }
+                KeyCode::Enter => s.operation.as_ref().map(|op| L::Apply {
+                    operation: op.id.clone(),
+                    confirm: op.id.clone(),
+                }),
+                _ => None,
+            };
+            if let Some(action) = action {
+                self.review_request(Request::Lifecycle { action });
             }
             return;
         }
@@ -497,6 +615,10 @@ impl App {
 }
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let s = &app.parallel.review;
+    if s.open && s.resources {
+        draw_resources(frame, app);
+        return;
+    }
     let area = frame.area();
     if !s.open {
         let text = format!(
@@ -705,4 +827,89 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         )));
     }
     frame.render_widget(Paragraph::new(lines), inner);
+}
+fn draw_resources(frame: &mut Frame, app: &App) {
+    let s = &app.parallel.review;
+    let r = frame.area().inner(ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 2,
+    });
+    crate::ui::clear_popup(frame, r);
+    let block = Block::bordered().title(crate::i18n::t("lifecycle.title"));
+    let inner = block.inner(r);
+    frame.render_widget(block, r);
+    let mut lines = vec![
+        Line::from(crate::i18n::t("lifecycle.keys").into_owned()),
+        Line::from(format!(
+            "{}: {}",
+            crate::i18n::t("lifecycle.source"),
+            s.task
+        )),
+        Line::from(format!(
+            "{}: {}",
+            crate::i18n::t("lifecycle.check"),
+            s.require_check
+        )),
+    ];
+    if s.pending.is_some() {
+        lines.push(Line::from(crate::i18n::t("parallel.working").into_owned()));
+    }
+    if !s.error.is_empty() {
+        lines.push(Line::styled(
+            crate::preview::safe_text(&s.error),
+            Style::default().fg(Color::Red),
+        ));
+    }
+    if s.archive_pending {
+        lines.push(Line::styled(
+            crate::i18n::t("lifecycle.archive_confirm").into_owned(),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    if let Some(op) = &s.operation {
+        lines.push(Line::from(format!(
+            "{:?} · {} → {} · {}",
+            op.kind, op.source.name, op.target.name, op.phase
+        )));
+        lines.push(Line::from(format!(
+            "{} → {}",
+            &op.target_head[..op.target_head.len().min(12)],
+            &op.source_head[..op.source_head.len().min(12)]
+        )));
+        lines.push(Line::from(crate::preview::safe_text(
+            &op.source.checkout.display().to_string(),
+        )));
+        lines.push(Line::from(format!("{} · {}", op.source.branch, op.id)));
+        lines.push(Line::from(
+            crate::i18n::t(if op.check.is_some() {
+                "lifecycle.checked"
+            } else {
+                "lifecycle.unchecked"
+            })
+            .into_owned(),
+        ));
+        if let Some(e) = &op.error {
+            lines.push(Line::styled(
+                crate::preview::safe_text(e),
+                Style::default().fg(Color::Red),
+            ));
+        }
+        lines.push(Line::styled(
+            crate::i18n::t("lifecycle.confirm").into_owned(),
+            Style::default().fg(Color::Yellow),
+        ));
+    } else {
+        for (i, t) in s.catalog.iter().enumerate().take(12) {
+            lines.push(Line::from(crate::preview::safe_text(&format!(
+                "{} {} · {}",
+                if i == s.target { "▸" } else { " " },
+                t.name,
+                t.branch
+            ))));
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(lines).scroll((s.scroll.min(u16::MAX as usize) as u16, 0)),
+        inner,
+    );
 }

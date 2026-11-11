@@ -582,5 +582,14 @@
   "review.stale": "Stale result",
   "review.bound": "Bound to recorded code revision",
   "review.check_passed": "Configured check passed for this revision",
-  "review.check_failed": "Configured check failed or timed out"
+  "review.check_failed": "Configured check failed or timed out",
+  "lifecycle.title": "Task resources · merge / archive / cleanup",
+  "lifecycle.keys": "↑/↓ target · m plan FF · d plan cleanup · p require check · a archive · Enter confirm · q query · y copy apply command · Esc",
+  "lifecycle.source": "Source task",
+  "lifecycle.check": "Require passing source check",
+  "lifecycle.archive_confirm": "Archive this task? Enter confirms. Directory, branch, terminals and file history remain.",
+  "lifecycle.checked": "Source check bound to this code revision; integrated target is not checked",
+  "lifecycle.unchecked": "Check not required; this is not acceptance",
+  "lifecycle.confirm": "Enter applies this summary. Before cleanup resolve drafts, close source terminals and detach related views; y copies the command for a separate shell.",
+  "chrome.command.task_resources": "Task merge and archive"
 }

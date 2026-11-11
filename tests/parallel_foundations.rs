@@ -1,4 +1,44 @@
 mod support;
+#[test]
+#[cfg(windows)]
+fn isolated_job_releases_descendant_output_pipes_when_the_wrapper_is_terminated() {
+    use std::io::{Read, Write};
+    let f = support::Fixture::new();
+    let marker = f.0.join("started");
+    let job = devtabs::platform::Job::new(0).unwrap();
+    let script = format!(
+        "$null=[Console]::ReadLine(); & pwsh.exe -NoProfile -Command \"[IO.File]::WriteAllText('{}','ready'); Start-Sleep -Seconds 60\"",
+        marker.display().to_string().replace('\'', "''")
+    );
+    let mut command = Command::new("pwsh.exe");
+    command
+        .args(["-NoProfile", "-Command", &script])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    let mut child = support::ChildGuard::spawn(&mut command);
+    job.assign(&child.0).unwrap();
+    child.0.stdin.take().unwrap().write_all(b"go\n").unwrap();
+    let mut pipe = child.0.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = vec![];
+        let _ = pipe.read_to_end(&mut bytes);
+        let _ = tx.send(());
+    });
+    let until = std::time::Instant::now() + Duration::from_secs(5);
+    while !marker.exists() {
+        assert!(
+            std::time::Instant::now() < until,
+            "descendant did not start"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    job.terminate().unwrap();
+    assert!(child.wait(Duration::from_secs(3)).unwrap().is_some());
+    rx.recv_timeout(Duration::from_secs(3))
+        .expect("Descendant must release inherited pipes");
+}
 use devtabs::task_runtime::{Budget, Limits, RevisionGate};
 use std::{
     process::{Command, Stdio},

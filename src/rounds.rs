@@ -140,6 +140,7 @@ impl Recorder {
         mode: Mode,
         late: bool,
     ) -> Result<Record> {
+        let _perf = crate::perf::span(crate::perf::Metric::RoundBegin);
         let _writer = crate::config::ConfigLock::acquire_at(&self.home)?;
         id(task)?;
         id(run)?;
@@ -201,6 +202,7 @@ impl Recorder {
         Ok(r)
     }
     pub fn finish(&self, mut r: Record) -> Result<Record> {
+        let _perf = crate::perf::span(crate::perf::Metric::RoundEnd);
         let _writer = crate::config::ConfigLock::acquire_at(&self.home)?;
         ensure!(r.ended.is_none(), "Round already ended");
         let mut cap = self.capture(&r.task)?;
@@ -476,6 +478,7 @@ impl Recorder {
         Ok(Content::Blob(self.put(&bytes, cap)?))
     }
     fn put(&self, bytes: &[u8], cap: &mut Capture) -> Result<String> {
+        let _perf = crate::perf::span(crate::perf::Metric::RoundStore);
         ensure!(
             bytes.len() <= self.limits.file,
             "File content budget exceeded"
@@ -637,6 +640,7 @@ impl Recorder {
         Ok(records)
     }
     pub fn diff(&self, c: &Change) -> Result<String> {
+        let _perf = crate::perf::span(crate::perf::Metric::RoundDiff);
         ensure!(c.reason.is_none(), "{}", c.reason.as_deref().unwrap_or(""));
         let before = c
             .before

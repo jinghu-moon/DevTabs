@@ -16,6 +16,7 @@ pub mod i18n;
 pub mod input;
 pub mod install;
 pub mod launch;
+pub mod lifecycle;
 pub mod notifications;
 pub mod overview;
 pub mod perf;

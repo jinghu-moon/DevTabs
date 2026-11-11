@@ -145,14 +145,22 @@ pub(crate) fn git_output_timeout(root: &Path, args: &[&str], timeout: Duration) 
         .arg(root)
         .args(args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .stdin(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x08000000);
     }
+    #[cfg(windows)]
+    let job = crate::platform::Job::new(0)?;
     let mut child = command.spawn().context("Start git status")?;
+    #[cfg(windows)]
+    if let Err(e) = job.assign(&child) {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(e);
+    }
     let pipe = child.stdout.take().context("Git output")?;
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -160,25 +168,47 @@ pub(crate) fn git_output_timeout(root: &Path, args: &[&str], timeout: Duration) 
             .read_to_end(&mut bytes)
             .map(|_| bytes)
     });
+    let stderr = child.stderr.take().context("Git diagnostic")?;
+    let errors = thread::spawn(move || {
+        let mut bytes = vec![];
+        for chunk in std::io::Read::bytes(std::io::BufReader::new(stderr)) {
+            let b = chunk?;
+            if bytes.len() < 16384 {
+                bytes.push(b);
+            }
+        }
+        Ok::<_, std::io::Error>(bytes)
+    });
     let start = Instant::now();
     let status = loop {
         if let Some(s) = child.try_wait()? {
             break s;
         }
         if start.elapsed() > timeout {
+            #[cfg(windows)]
+            let _ = job.terminate();
             let _ = child.kill();
             let _ = child.wait();
             bail!("Git status timed out");
         }
         thread::sleep(Duration::from_millis(10));
     };
+    #[cfg(windows)]
+    {
+        let _ = job.terminate();
+    }
     let bytes = reader
         .join()
         .map_err(|_| anyhow::anyhow!("Git reader failed"))??;
     ensure!(bytes.len() <= 8 * 1024 * 1024, "Git output exceeds 8 MiB");
+    let errors = errors
+        .join()
+        .map_err(|_| anyhow::anyhow!("Git diagnostic reader failed"))??;
     ensure!(
         status.success(),
-        "Git unavailable or this project is not a repository"
+        "Git rejected operation ({}): {}",
+        status,
+        crate::preview::safe_text(&String::from_utf8_lossy(&errors))
     );
     Ok(bytes)
 }

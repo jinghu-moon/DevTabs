@@ -18,6 +18,7 @@ macro_rules! metrics {
     };
 }
 metrics! {
+    RoundBegin=>"round.begin",RoundEnd=>"round.end",RoundDiff=>"round.diff",RoundStore=>"round.store",TaskLifecycle=>"task.lifecycle",
     FloatingFirstFrame => "terminal.floating_first_frame", FloatingOpen => "terminal.panel_open", FloatingAttach => "terminal.floating_attach",
     OverviewStats => "overview.stats", OverviewHistory => "overview.history", OverviewGit => "overview.git", OverviewLaunch => "overview.launch",
     ProjectIndex => "project.index", ProjectSearch => "project.fuzzy_search", ProjectGit => "project.git_status", ProjectChange => "project.file_operation",

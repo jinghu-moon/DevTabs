@@ -124,6 +124,20 @@ mod windows {
             }
             Ok(())
         }
+        pub fn assign(&self, child: &std::process::Child) -> Result<()> {
+            use std::os::windows::io::AsRawHandle;
+            if unsafe {
+                AssignProcessToJobObject(
+                    self.handle.as_raw_handle() as HANDLE,
+                    child.as_raw_handle() as HANDLE,
+                )
+            } == 0
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("Assign isolated Git process to job");
+            }
+            Ok(())
+        }
         pub fn terminate_commands(&self, shell: u32) -> Result<()> {
             use windows_sys::Win32::System::Threading::{
                 OpenProcess, PROCESS_TERMINATE, TerminateProcess,

@@ -19,6 +19,7 @@ pub(crate) const COMMANDS: &[(char, &str)] = &[
     ('+', "new_task"),
     ('g', "round_review"),
     ('!', "attention"),
+    ('m', "task_resources"),
     ('[', "previous_task"),
     (']', "next_task"),
     ('v', "agent_layout"),

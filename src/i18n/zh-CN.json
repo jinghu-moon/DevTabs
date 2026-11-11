@@ -582,5 +582,14 @@
   "review.stale": "结果已过期",
   "review.bound": "仅对应记录的代码版本",
   "review.check_passed": "该版本的已配置检查通过",
-  "review.check_failed": "已配置检查失败或超时"
+  "review.check_failed": "已配置检查失败或超时",
+  "lifecycle.title": "任务资源 · 合并 / 归档 / 清理",
+  "lifecycle.keys": "↑/↓ 目标 · m 准备 FF · d 准备清理 · p 检查要求 · a 归档 · Enter 确认 · q 查询 · y 复制执行命令 · Esc",
+  "lifecycle.source": "来源任务",
+  "lifecycle.check": "要求来源检查通过",
+  "lifecycle.archive_confirm": "确认归档此任务？Enter 确认。保留目录、分支、终端与文件历史。",
+  "lifecycle.checked": "来源检查已绑定此代码版本；目标集成结果尚未检查",
+  "lifecycle.unchecked": "未要求检查，不表示验收通过",
+  "lifecycle.confirm": "Enter 执行以上摘要。清理须先解决草稿、关闭来源终端并分离相关前端；可按 y 复制命令到独立 shell。",
+  "chrome.command.task_resources": "任务合并与归档"
 }

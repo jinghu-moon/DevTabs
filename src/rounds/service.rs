@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, mpsc};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Action {
+    Seal,
     Begin { scope: Vec<PathBuf> },
     End,
     List,
@@ -30,6 +31,7 @@ struct Observation {
     overflow: Arc<std::sync::atomic::AtomicBool>,
 }
 pub struct Service {
+    leases: BTreeMap<String, std::fs::File>,
     recorder: Recorder,
     active: BTreeMap<String, (Record, Option<Observation>)>,
     pinned: BTreeMap<String, Instant>,
@@ -37,6 +39,7 @@ pub struct Service {
 impl Service {
     pub fn new(home: PathBuf) -> Self {
         Self {
+            leases: BTreeMap::new(),
             recorder: Recorder::new(home),
             active: BTreeMap::new(),
             pinned: BTreeMap::new(),
@@ -52,11 +55,30 @@ impl Service {
     ) -> Result<View> {
         let result = (|| -> Result<View> {
             match action {
+                Action::Seal => {
+                    if self.active.get(task).is_some_and(|(r, _)| r.run == run) {
+                        return self.act(task, run, root, Action::End, late);
+                    }
+                    Ok(View::default())
+                }
                 Action::Begin { scope } => {
                     ensure!(
                         !self.active.contains_key(task),
                         "A recording is already active"
                     );
+                    let lease = if uuid::Uuid::parse_str(task).is_ok() {
+                        Some(crate::lifecycle::lease(
+                            self.recorder
+                                .home
+                                .parent()
+                                .context("History root missing")?,
+                            task,
+                            false,
+                            false,
+                        )?)
+                    } else {
+                        None
+                    };
                     self.pinned
                         .retain(|_, at| at.elapsed() < Duration::from_secs(600));
                     self.recorder
@@ -78,18 +100,24 @@ impl Service {
                     };
                     let r = self.recorder.begin(task, run, root, mode, late)?;
                     self.active.insert(task.into(), (r, observer));
+                    if let Some(lease) = lease {
+                        self.leases.insert(task.into(), lease);
+                    }
                     Ok(View {
                         records: self.recorder.list(task)?,
                         ..View::default()
                     })
                 }
                 Action::End => {
-                    let (mut r, obs) =
-                        self.active.remove(task).context("No recording is active")?;
+                    let (r, obs) = self
+                        .active
+                        .get_mut(task)
+                        .context("No recording is active")?;
                     ensure!(r.run == run, "Recording belongs to an earlier Agent run");
                     if let Some(o) = obs {
-                        drain(&mut r, &o);
+                        drain(r, o);
                     }
+                    let mut r = r.clone();
                     let r = if r.mode == Mode::Observe {
                         r.ended = Some(crate::config::now());
                         r.revision += 1;
@@ -100,6 +128,8 @@ impl Service {
                     } else {
                         self.recorder.finish(r)?
                     };
+                    self.active.remove(task);
+                    self.leases.remove(task);
                     let mut view = View {
                         records: self.recorder.list(task)?,
                         ..View::default()
@@ -206,6 +236,7 @@ impl Service {
             }
         })();
         result.map(|mut v| {
+            v.busy = self.active.contains_key(task);
             v.records.truncate(20);
             if v.paths.is_empty()
                 && let Some(r) = v.records.first()
@@ -413,6 +444,17 @@ impl Worker {
             root,
             action: None,
             automatic: Some((begin, fresh, result)),
+            reply: tx,
+        })
+    }
+    pub fn seal(&self, task: String, run: String, root: PathBuf) -> Result<()> {
+        let (tx, _) = mpsc::sync_channel(1);
+        self.submit(Job {
+            task,
+            run,
+            root,
+            action: Some(Action::Seal),
+            automatic: None,
             reply: tx,
         })
     }

@@ -30,6 +30,7 @@ pub struct LayoutState {
 }
 #[derive(Default)]
 pub struct State {
+    pub view_leases: Option<BTreeMap<String, std::fs::File>>,
     pub review: super::review::State,
     pub tasks: Vec<Task>,
     pub context: String,

@@ -111,6 +111,142 @@ fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
 #[test]
+fn cleanup_rejects_live_task_terminals_without_hanging_or_stopping_the_other_task() {
+    let h = Harness::new();
+    fs::create_dir_all(h.root.join("data")).unwrap();
+    struct OwnedServer(std::process::Child, Option<PathBuf>);
+    impl Drop for OwnedServer {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+            if let Some(p) = &self.1 {
+                let _ = fs::remove_dir_all(p);
+            }
+        }
+    }
+    let mut server = OwnedServer(
+        h.command()
+            .arg("__serve")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+        None,
+    );
+    wait("isolated host", || h.rpc(Request::Ping).is_ok());
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&h.root)
+            .args(args)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "NUL")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "fixture"]);
+    git(&["config", "user.email", "fixture@localhost"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    git(&["config", "core.autocrlf", "false"]);
+    fs::write(h.root.join("a"), "base").unwrap();
+    git(&["add", "a"]);
+    git(&["commit", "-m", "base"]);
+    let w = h.open(&["--composition", "agent-only"]);
+    wait("A ready", || h.info(&w.id).sessions[0].shell_pid.is_some());
+    let before = h.info(&w.id).sessions[0].shell_pid;
+    let target = h
+        .root
+        .with_file_name(format!("DevTabs-cleanup-{}", uuid::Uuid::new_v4()));
+    let Response::TaskPlan(p) = h
+        .rpc(Request::PlanTask {
+            workspace: w.id.clone(),
+            source: w.tasks[0].id.clone(),
+            name: "cleanup fixture B".into(),
+            base: "HEAD".into(),
+            path: Some(target.clone()),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    server.1 = Some(target);
+    h.rpc(Request::AddTask {
+        workspace: w.id.clone(),
+        operation: p.operation.clone(),
+    })
+    .unwrap();
+    wait("B ready", || {
+        h.info(&w.id).tasks.len() == 2
+            && h.info(&w.id).sessions.iter().all(|s| s.shell_pid.is_some())
+    });
+    let Response::Lifecycle(op) = h
+        .rpc(Request::Lifecycle {
+            action: devtabs::lifecycle::Action::Plan {
+                source: p.task.id.clone(),
+                target: w.tasks[0].id.clone(),
+                cleanup: true,
+                require_check: false,
+            },
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    let at = Instant::now();
+    let error = h
+        .rpc(Request::Lifecycle {
+            action: devtabs::lifecycle::Action::Apply {
+                operation: op.id.clone(),
+                confirm: op.id.clone(),
+            },
+        })
+        .err()
+        .unwrap();
+    assert!(
+        error
+            .to_string()
+            .contains("Close all source task terminals"),
+        "{error:#}"
+    );
+    assert!(at.elapsed() < Duration::from_secs(3));
+    assert_eq!(h.info(&w.id).sessions[0].shell_pid, before);
+    assert!(op.source.checkout.is_dir());
+    h.rpc(Request::Lifecycle {
+        action: devtabs::lifecycle::Action::Close {
+            task: op.source.id.clone(),
+            confirm: op.source.id.clone(),
+        },
+    })
+    .unwrap();
+    wait("B exits", || {
+        h.info(&w.id)
+            .sessions
+            .iter()
+            .filter(|s| s.task.task_id == op.source.id)
+            .all(|s| s.status != devtabs::session::Status::Running)
+    });
+    let Response::Lifecycle(done) = h
+        .rpc(Request::Lifecycle {
+            action: devtabs::lifecycle::Action::Apply {
+                operation: op.id.clone(),
+                confirm: op.id.clone(),
+            },
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(done.phase, "Complete");
+    assert!(!op.source.checkout.exists());
+    assert_eq!(h.info(&w.id).sessions[0].shell_pid, before);
+}
+#[test]
 fn managed_hook_events_are_bound_to_run_deduplicated_and_old_ack_cannot_clear_new_result() {
     let h = Harness::new();
     let w = h.open(&["--composition", "agent-only"]);
@@ -227,6 +363,20 @@ fn managed_hook_events_are_bound_to_run_deduplicated_and_old_ack_cannot_clear_ne
         "Fixture must not register or send real notifications"
     );
     h.rpc(Request::Close { workspace: w.id }).unwrap();
+    let recorder = devtabs::rounds::Recorder::new(h.root.join("data/history"));
+    let until = Instant::now() + Duration::from_secs(3);
+    while recorder
+        .list(&task)
+        .unwrap()
+        .iter()
+        .any(|r| r.ended.is_none())
+    {
+        assert!(
+            Instant::now() < until,
+            "Closing the managed terminal must seal its active recording and release resource leases"
+        );
+        thread::sleep(Duration::from_millis(10));
+    }
 }
 
 #[test]
@@ -1150,10 +1300,22 @@ fn killed_frontend_reconnects_without_restarting_shells() {
         h.info(&id).sessions.iter().all(|s| s.shell_pid.is_some())
     });
     let before = h.info(&id);
+    wait("frontend draft guard", || {
+        before
+            .tasks
+            .iter()
+            .all(|t| devtabs::lifecycle::lease(&h.root.join("data"), &t.id, true, true).is_err())
+    });
     child.kill().unwrap();
     child.wait().unwrap();
     drop(pair.master);
     drain.join().unwrap();
+    for task in &before.tasks {
+        assert!(
+            devtabs::lifecycle::lease(&h.root.join("data"), &task.id, true, true).is_ok(),
+            "A killed frontend must release draft guards without a host restart"
+        );
+    }
     assert_eq!(
         h.info(&id).sessions[0].shell_pid,
         before.sessions[0].shell_pid

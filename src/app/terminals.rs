@@ -48,6 +48,16 @@ impl App {
     pub(super) fn sync_presentations(&mut self, work: &WorkspaceInfo) -> Result<bool> {
         let mut moved = false;
         let mut changed = false;
+        if let Some(leases) = &mut self.parallel.view_leases {
+            for t in &work.tasks {
+                if !leases.contains_key(&t.id) {
+                    leases.insert(
+                        t.id.clone(),
+                        crate::lifecycle::lease(&crate::config::home(), &t.id, true, false)?,
+                    );
+                }
+            }
+        }
         self.parallel.tasks = work.tasks.clone();
         for info in &work.sessions {
             let Some(i) = self.sessions.iter().position(|s| s.info.id == info.id) else {
@@ -748,6 +758,35 @@ mod tests {
         assert_eq!(std::fs::read_to_string(root.join("src/a")).unwrap(), "new");
         drop(app);
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn resource_archive_requires_explicit_confirmation_and_escape_keeps_focus() {
+        let mut app = app();
+        let focus = app.focus;
+        app.parallel.review.open = true;
+        app.parallel.review.resources = true;
+        app.parallel.review.task = "task".into();
+        app.review_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+        assert!(app.parallel.review.archive_pending);
+        assert!(app.parallel.review.pending.is_none());
+        assert!(app.parallel.review.operation.is_none());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|f| super::super::review::draw(f, &app))
+            .unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(!text.contains("lifecycle.archive_confirm"));
+        app.review_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(!app.parallel.review.open);
+        assert_eq!(app.focus, focus);
+        assert!(app.parallel.review.pending.is_none());
     }
     fn app() -> App {
         let sessions = (0..8)

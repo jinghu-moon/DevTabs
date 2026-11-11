@@ -229,3 +229,17 @@ devtabs overlap '<TaskA>' '<TaskB>'  # 完整成果路径交集；查询不完�
 ```
 
 `.devtabs.toml` 可配置 `prepare` 命令数组及 `check`，每条命令使用 `argv`、`cwd`、`env`、`timeout_ms`；均为显式本地命令，不从 Agent 文字提取。初始化成功步骤按 task/命令摘要记录，失败重试跳过已成功步骤。检查使用独立受管进程，显示退出码、耗时及代码变化后的过期状态，不向 Agent/Debug 输入命令。详见 [实施证据与真机清单](docs/40-Parallel-Agent-Workspace-Verification.md)。
+
+`Ctrl+G → M` 打开「任务合并与归档」：选择目标，`m` 准备 fast-forward 摘要、`p` 切换是否要求来源检查、`d` 准备清理、`a` 准备归档，Enter 明确确认，`q` 查持久进度。合并双方必须停止受管终端（保留视图草稿）；清理须先保存/放弃草稿、关闭来源终端，再分离相关前端。`y` 可复制已准备操作的执行命令到独立 shell，不自动执行。来源与目标 HEAD/路径/资源身份变化会拒绝旧操作。
+
+```powershell
+devtabs task list
+devtabs task merge '<SourceTask>' '<TargetTask>' --require-check  # 只准备、打印摘要及 OperationId
+devtabs task cleanup '<SourceTask>' '<MergedIntoTask>'  # 只准备，包含 ignored 文件保护
+devtabs task close '<TaskId>' --confirm '<TaskId>'  # 明确终止本任务所有终端，其他任务保留
+devtabs task apply '<OperationId>' --confirm '<OperationId>'  # 确认后重新验证并执行
+devtabs task show '<OperationId>'  # 失败/部分成功查询
+devtabs task archive '<TaskId>' --confirm '<TaskId>'  # 仅归档，不删除目录或停止终端
+```
+
+清理仅处理有持久创建所有权的隔离 worktree，要求已合入指定目标且无 tracked/untracked/ignored 内容；只调用普通 `git worktree remove` 与 `git branch -d`。原项目、外部采用目录和重建资源受到保护。目录移除与分支删除分步记录，失败保留真实阶段；原操作重试不删除后来重建的同名目录/分支。检查通过仅对来源代码版本有效，合入目标后仍需独立测试。外部编辑器、Git 和其他工具不受 DevTabs 锁控制，执行前应停止其并发写入。

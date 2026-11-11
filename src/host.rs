@@ -19,6 +19,7 @@ use std::{
 };
 
 struct Managed {
+    resource_lease: Option<std::fs::File>,
     round_at: Option<Instant>,
     token: String,
     activity: crate::activity::State,
@@ -58,6 +59,21 @@ impl Workspace {
     }
 }
 impl Managed {
+    fn retire(&mut self, records: Option<&crate::rounds::service::Worker>) -> Result<()> {
+        if !self.session.running() && self.resource_lease.is_some() {
+            if self.task.role == crate::tasks::Role::Agent
+                && let Some(records) = records
+            {
+                records.seal(
+                    self.task.task_id.clone(),
+                    self.task.run_id.clone(),
+                    self.task.initial_cwd.clone(),
+                )?;
+            }
+            self.resource_lease.take();
+        }
+        Ok(())
+    }
     fn info(&self) -> SessionInfo {
         self.session.refresh_command();
         let s = self.session.state();
@@ -93,6 +109,7 @@ impl Managed {
 }
 #[derive(Default)]
 struct Host {
+    maintenance: std::collections::HashSet<String>,
     ledger: crate::notifications::Ledger,
     checking: std::collections::HashSet<String>,
     notifications: Option<crate::notifications::Worker>,
@@ -366,15 +383,15 @@ pub fn serve() -> Result<()> {
             for n in notices {
                 host.notify(n);
             }
+            let changed = !activity_updates.is_empty();
             for (t, s) in activity_updates {
                 if let Err(e) = host.ledger.insert(t, s) {
                     host.diagnostic.push_back(e.to_string());
                 }
             }
-            let ledger = host.ledger.bytes();
             drop(host);
-            if let Ok(bytes) = ledger {
-                config::atomic_write(&config::home().join("activity.json"), &bytes)?;
+            if changed {
+                persist_notification_state(&state, true, false)?;
             }
             if !bindings.is_empty() {
                 let _lock = config::ConfigLock::acquire()?;
@@ -493,8 +510,12 @@ pub fn serve() -> Result<()> {
                 last_sweep = Instant::now();
                 host.floating.expire();
                 let mut expired = vec![];
+                let records = host.records.clone();
                 for work in host.workspaces.values_mut() {
                     for m in &mut work.sessions {
+                        if let Err(e) = m.retire(records.as_ref()) {
+                            eprintln!("Recording finalization pending: {e:#}");
+                        }
                         if m.placement == Placement::Floating
                             && m.owner
                                 .as_ref()
@@ -550,6 +571,56 @@ pub fn serve() -> Result<()> {
     Ok(())
 }
 impl Host {
+    fn guard_session(&self, workspace: &str, session: &str) -> Result<()> {
+        let m = self
+            .workspaces
+            .get(workspace)
+            .and_then(|w| w.sessions.iter().find(|m| m.id == session))
+            .context("Session missing")?;
+        anyhow::ensure!(
+            !self.maintenance.contains(&m.task.task_id),
+            "Task resource operation is in progress"
+        );
+        Ok(())
+    }
+    fn lifecycle_guard(&self, op: &crate::lifecycle::Operation) -> Result<()> {
+        for id in [&op.source.id, &op.target.id] {
+            anyhow::ensure!(
+                !self.maintenance.contains(id)
+                    && !self.checking.contains(id)
+                    && !self.starting.keys().any(|k| k.contains(id)),
+                "Task has a managed operation in progress"
+            );
+        }
+        for w in self.workspaces.values() {
+            for m in &w.sessions {
+                if m.task.task_id == op.source.id
+                    || matches!(op.kind, crate::lifecycle::Kind::FastForward)
+                        && m.task.task_id == op.target.id
+                {
+                    m.session.refresh_command();
+                    let s = m.session.state();
+                    anyhow::ensure!(
+                        !matches!(
+                            s.command,
+                            crate::session::CommandStatus::Starting
+                                | crate::session::CommandStatus::Running
+                        ),
+                        "Stop related managed commands before applying"
+                    );
+                    if matches!(op.kind, crate::lifecycle::Kind::Cleanup)
+                        && m.task.task_id == op.source.id
+                    {
+                        anyhow::ensure!(
+                            s.status != crate::session::Status::Running,
+                            "Close all source task terminals before cleanup"
+                        );
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
     fn managed(&mut self, workspace: &str, session: &str) -> Result<&mut Managed> {
         self.workspaces
             .get_mut(workspace)
@@ -562,7 +633,8 @@ impl Host {
     fn handle(&mut self, request: Request) -> Result<Response> {
         let _perf = crate::perf::span(crate::perf::Metric::HostRequest);
         match request {
-            Request::Check { .. }
+            Request::Lifecycle { .. }
+            | Request::Check { .. }
             | Request::CheckStatus { .. }
             | Request::Notifications { .. }
             | Request::Review { .. }
@@ -647,8 +719,11 @@ impl Host {
                                 .get(id)
                                 .context("Recovery task missing from catalog")?
                                 .clone();
+                            if task.archived {
+                                continue;
+                            }
                             anyhow::ensure!(
-                                !task.archived && task.cwd.is_dir(),
+                                task.cwd.is_dir(),
                                 "Task archived or directory missing; resources retained"
                             );
                             if task.owned {
@@ -661,6 +736,7 @@ impl Host {
                             }
                             tasks.push(task);
                         }
+                        anyhow::ensure!(!tasks.is_empty(), "All recovery tasks are archived");
                         tasks
                     } else {
                         vec![catalog.main_task(&options)?]
@@ -735,6 +811,7 @@ impl Host {
                 rows,
                 cols,
             } => {
+                self.guard_session(&workspace, &session)?;
                 crate::perf::add(crate::perf::Count::TerminalAttaches, 1);
                 let _attach_perf =
                     floating.map(|_| crate::perf::span(crate::perf::Metric::FloatingAttach));
@@ -833,6 +910,7 @@ impl Host {
                     bytes.len() <= crate::input::MAX_PASTE + 100000,
                     "Input too large"
                 );
+                self.guard_session(&workspace, &session)?;
                 let m = self.managed(&workspace, &session)?;
                 m.check(&client)?;
                 m.session.send(bytes)?;
@@ -888,6 +966,16 @@ impl Host {
                         workspace: workspace.clone(),
                         session: m.id.clone(),
                     });
+                    let binding = m.task.clone();
+                    drop(m);
+                    if binding.role == crate::tasks::Role::Agent
+                        && let Some(records) = &self.records
+                        && let Err(e) =
+                            records.seal(binding.task_id, binding.run_id, binding.initial_cwd)
+                    {
+                        self.diagnostic
+                            .push_back(format!("Recording finalization failed: {e:#}"));
+                    }
                 }
                 Ok(Response::Ok)
             }
@@ -915,6 +1003,7 @@ impl Host {
                 session,
                 source,
             } => {
+                self.guard_session(&workspace, &session)?;
                 let m = self.managed(&workspace, &session)?;
                 m.session.run_command(source)?;
                 m.stop = None;
@@ -999,6 +1088,7 @@ fn spawn_task_filtered(
                 None
             },
         )?;
+        let resource_lease = crate::lifecycle::lease(&config::home(), &task.id, false, false)?;
         let mut session = Session::spawn(Spawn {
             id: index,
             executable: &std::env::current_exe()?,
@@ -1011,6 +1101,7 @@ fn spawn_task_filtered(
         })?;
         session.control = Some(control);
         sessions.push(Managed {
+            resource_lease: Some(resource_lease),
             round_at: None,
             token,
             activity: Default::default(),
@@ -1034,6 +1125,130 @@ fn spawn_task_filtered(
 fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Response>> {
     use crate::tasks::{Catalog, Operation};
     match request {
+        Request::Lifecycle { action } => {
+            use crate::lifecycle::Action as L;
+            let home = config::home();
+            let response = match action {
+                L::List => Response::TaskCatalog(Box::new(Catalog::load(&home)?)),
+                L::Plan {
+                    source,
+                    target,
+                    cleanup,
+                    require_check,
+                } => Response::Lifecycle(Box::new(crate::lifecycle::plan(
+                    &home,
+                    source,
+                    target,
+                    *cleanup,
+                    *require_check,
+                )?)),
+                L::Query { operation } => {
+                    Response::Lifecycle(Box::new(crate::lifecycle::load(&home, operation)?))
+                }
+                L::Close { task, confirm } => {
+                    anyhow::ensure!(task == confirm, "Confirm the exact task ID");
+                    let host = state
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                    anyhow::ensure!(
+                        !host.maintenance.contains(task),
+                        "Task resource operation is in progress"
+                    );
+                    let mut found = false;
+                    for w in host.workspaces.values() {
+                        for m in &w.sessions {
+                            if m.task.task_id == *task {
+                                m.session.terminate()?;
+                                found = true;
+                            }
+                        }
+                    }
+                    anyhow::ensure!(found, "No live task terminals");
+                    Response::Ok
+                }
+                L::Archive { task, confirm } => {
+                    anyhow::ensure!(task == confirm, "Confirm the exact task ID");
+                    let task = crate::lifecycle::archive(&home, task)?;
+                    let mut host = state
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                    for w in host.workspaces.values_mut() {
+                        if let Some(t) = w.tasks.iter_mut().find(|t| t.id == task.id) {
+                            t.archived = true;
+                        }
+                    }
+                    Response::Ok
+                }
+                L::Apply { operation, confirm } => {
+                    anyhow::ensure!(
+                        operation == confirm,
+                        "Confirm the exact operation ID after reviewing its summary"
+                    );
+                    let op = crate::lifecycle::load(&home, operation)?;
+                    if op.phase == "Complete" {
+                        return Ok(Some(Response::Lifecycle(Box::new(op))));
+                    }
+                    let ids = if matches!(op.kind, crate::lifecycle::Kind::Cleanup) {
+                        vec![op.source.id.clone()]
+                    } else {
+                        vec![op.source.id.clone(), op.target.id.clone()]
+                    };
+                    let records = {
+                        let mut host = state
+                            .lock()
+                            .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                        let records = host.records.clone();
+                        for w in host.workspaces.values_mut() {
+                            for m in &mut w.sessions {
+                                m.retire(records.as_ref())?;
+                            }
+                        }
+                        host.lifecycle_guard(&op)?;
+                        for id in &ids {
+                            host.maintenance.insert(id.clone());
+                        }
+                        host.records.clone()
+                    };
+                    let result = (|| -> Result<_> {
+                        if let Some(worker) = records {
+                            for t in [&op.source, &op.target]
+                                .into_iter()
+                                .filter(|t| ids.contains(&t.id))
+                            {
+                                let v = worker.request(
+                                    t.id.clone(),
+                                    String::new(),
+                                    t.checkout.clone(),
+                                    crate::rounds::service::Action::List,
+                                )?;
+                                anyhow::ensure!(
+                                    !v.busy,
+                                    "End the active recording before applying resource operations"
+                                );
+                            }
+                        }
+                        crate::lifecycle::execute(&home, operation)
+                    })();
+                    let mut host = state
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                    for id in &ids {
+                        host.maintenance.remove(id);
+                    }
+                    if result.is_ok() && matches!(op.kind, crate::lifecycle::Kind::Cleanup) {
+                        for w in host.workspaces.values_mut() {
+                            for t in &mut w.tasks {
+                                if t.id == op.source.id {
+                                    t.archived = true;
+                                }
+                            }
+                        }
+                    }
+                    Response::Lifecycle(Box::new(result?))
+                }
+            };
+            Ok(Some(response))
+        }
         Request::CheckStatus { task } => {
             anyhow::ensure!(uuid::Uuid::parse_str(task).is_ok(), "Invalid task ID");
             let path = config::home().join("checks").join(format!("{task}.json"));
@@ -1076,7 +1291,9 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                     .lock()
                     .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
                 anyhow::ensure!(
-                    host.checking.len() < 2 && !host.checking.contains(task),
+                    host.checking.len() < 2
+                        && !host.checking.contains(task)
+                        && !host.maintenance.contains(task),
                     "Check worker busy"
                 );
                 let w = host
@@ -1138,6 +1355,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                                 m.task.task_id == task
                                     && m.task.role == crate::tasks::Role::Agent
                                     && m.activity.result == result
+                                    && m.task.run_id == report.run
                             })
                         })
                     {
@@ -1161,16 +1379,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                             urgent: report.exit != Some(0),
                             silent: host.notification_settings.silent,
                         };
-                        if !host.notification_settings.disabled
-                            && host
-                                .policies
-                                .entry(task.clone())
-                                .or_default()
-                                .allow(true, true)
-                            && let Some(worker) = &host.notifications
-                        {
-                            let _ = worker.tx.try_send(notice);
-                        }
+                        host.notify_checked(notice);
                     }
                     host.diagnostic.push_back(match outcome {
                         Ok(()) => "Managed check ended; view its bound revision".into(),
@@ -1316,21 +1525,11 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                         .map_err(|_| anyhow::anyhow!("Notification queue full"))?;
                 }
             }
-            let settings = if save {
-                Some(serde_json::to_vec(&host.notification_settings)?)
-            } else {
-                None
-            };
-            let ledger = if matches!(action, Action::Ack { .. }) {
-                Some(host.ledger.bytes()?)
-            } else {
-                None
-            };
             let mut view = host.notification_view();
             view.navigation = navigation;
             drop(host);
-            if let Some(bytes) = ledger {
-                config::atomic_write(&config::home().join("activity.json"), &bytes)?;
+            if save || matches!(action, Action::Ack { .. }) {
+                persist_notification_state(state, matches!(action, Action::Ack { .. }), save)?;
             }
             if matches!(action, Action::Diagnostics) {
                 for provider in ["codex", "claude"] {
@@ -1339,10 +1538,6 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                             .push(crate::hooks::diagnostic(provider, &path));
                     }
                 }
-            }
-            if let Some(bytes) = settings {
-                let _lock = config::ConfigLock::acquire()?;
-                config::atomic_write(&config::home().join("notifications.json"), &bytes)?;
             }
             Ok(Some(Response::Notifications(Box::new(view))))
         }
@@ -1355,6 +1550,10 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                 let host = state
                     .lock()
                     .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+                anyhow::ensure!(
+                    !host.maintenance.contains(task),
+                    "Task resource operation is in progress"
+                );
                 let w = host
                     .workspaces
                     .get(workspace)
@@ -1549,6 +1748,10 @@ fn start_role(
         let mut host = state
             .lock()
             .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+        anyhow::ensure!(
+            !host.maintenance.contains(task_id),
+            "Task resource operation is in progress"
+        );
         if let Some(id) = host.starting.get(&key) {
             let id = id.clone();
             drop(host);
@@ -1806,7 +2009,18 @@ impl Host {
                 .collect(),
         }
     }
-    fn notify(&mut self, mut n: crate::notifications::Notice) {
+    fn notify(&mut self, n: crate::notifications::Notice) {
+        self.enqueue_notice(n, None);
+    }
+    fn notify_checked(&mut self, n: crate::notifications::Notice) {
+        let category = if n.urgent { "failure" } else { "end" };
+        self.enqueue_notice(n, Some(category));
+    }
+    fn enqueue_notice(
+        &mut self,
+        mut n: crate::notifications::Notice,
+        check_category: Option<&str>,
+    ) {
         if self.notification_routes.len() >= 1024 {
             self.notification_routes.retain(|_, client| {
                 self.workspaces.values().any(|w| {
@@ -1832,12 +2046,12 @@ impl Host {
             .get(&n.target.workspace)
             .and_then(|w| w.sessions.iter().find(|m| m.id == n.target.session))
             .map(|m| m.activity.phase.clone());
-        let category = match phase {
+        let category = check_category.unwrap_or(match phase {
             Some(crate::activity::Phase::Failed) => "failure",
             Some(crate::activity::Phase::Permission) => "permission",
             Some(crate::activity::Phase::Input) => "input",
             _ => "end",
-        };
+        });
         let enabled = self
             .notification_settings
             .task_categories
@@ -1849,7 +2063,8 @@ impl Host {
         if !enabled
             || (category == "end"
                 && self.notification_settings.after_check.get(&n.target.task) == Some(&true)
-                && !n.test)
+                && !n.test
+                && check_category.is_none())
         {
             return;
         }
@@ -1875,4 +2090,30 @@ impl Host {
                 .push_back("Notification queue full; result remains pending".into());
         }
     }
+}
+
+// Snapshot after serializing writers: an older ACK cannot overwrite a newer event on disk.
+fn persist_notification_state(
+    state: &Arc<Mutex<Host>>,
+    activity: bool,
+    settings: bool,
+) -> Result<()> {
+    static WRITER: Mutex<()> = Mutex::new(());
+    let _writer = WRITER.lock().unwrap_or_else(|p| p.into_inner());
+    let host = state
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
+    let activity = activity.then(|| host.ledger.bytes()).transpose()?;
+    let settings = settings
+        .then(|| serde_json::to_vec(&host.notification_settings))
+        .transpose()?;
+    drop(host);
+    if let Some(bytes) = activity {
+        config::atomic_write(&config::home().join("activity.json"), &bytes)?;
+    }
+    if let Some(bytes) = settings {
+        let _lock = config::ConfigLock::acquire()?;
+        config::atomic_write(&config::home().join("notifications.json"), &bytes)?;
+    }
+    Ok(())
 }

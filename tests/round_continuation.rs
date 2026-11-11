@@ -51,3 +51,19 @@ fn observed_stop_versions_keep_the_same_capture_window_when_provider_continues()
         latest.started
     );
 }
+#[test]
+fn wrong_run_cannot_end_or_discard_the_current_manual_recording() {
+    let f = support::Fixture::new();
+    let root = f.0.join("project");
+    std::fs::create_dir(&root).unwrap();
+    let mut s = Service::new(f.0.join("history"));
+    s.act("task", "run", &root, Action::Begin { scope: vec![] }, false)
+        .unwrap();
+    assert!(s.act("task", "old-run", &root, Action::End, false).is_err());
+    assert!(
+        s.act("task", "run", &root, Action::List, false)
+            .unwrap()
+            .busy
+    );
+    assert!(s.act("task", "run", &root, Action::End, false).is_ok());
+}

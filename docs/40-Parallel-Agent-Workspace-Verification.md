@@ -68,3 +68,61 @@ RED：`parallel_foundations` 中超预算接收与旧 generation 覆盖两个行
 支持边界：Claude 无可靠 turn ID 的版本只能给受限报告语义；不猜文本/静默/上下文压缩。特殊 filter/LFS/工作树编码不执行外部转换并标限制。Windows 通知需要显式身份注册，未打包 exe 的真实展示、进程内回调存活及普通/提升权限、多个 WT 标签的精确激活分别待用户验证；宿主关闭后的旧通知不冷启动。损坏/失联旧 run 不伪装为新 run 的结果；历史文件可用记录入口读取。
 
 阶段 D 门禁：完整 workspace 404 通过、0 失败、29 忽略（新增显式性能夹具为第 29 项）；其后小幅修订通过 lib＋round_state/round_git/round_continuation 128 项，以及真实 hook/多前端路由目标测试。最终 Clippy `-D warnings`、fmt、diff-check 通过。真机状态仍为等待用户验证。
+
+## 阶段 E：fast-forward、归档与资源清理
+
+实现 E01–E03：显式来源/目标，确认前冻结两端 HEAD、分支、目录及资源身份，可选择要求已通过的来源代码版本检查。只执行 FF，不 commit/stash/rebase/fetch；忽略文件碰撞使用 `--no-overwrite-ignore` 保护。执行前后重验，Git 的具体拒绝原因进入操作日志。来源检查不等于目标集成结果通过。
+
+工作区 `Ctrl+G → M` 和 `devtabs task` 均提供入口。归档只标记状态，目录/分支/终端/历史保留，恢复时跳过已归档任务而不阻断其他任务。准备摘要与执行分开，必须 Enter 或精确 `--confirm <OperationId>`。FF 要求双方受管终端先停止，清理要求来源终端退出、无受管检查/记录/资源事务，相关前端分离以保护可见和隐藏草稿；复制命令后在独立 shell 执行。操作系统共享/独占文件锁覆盖同一数据目录的其他 DevTabs 宿主，进程退出自动释放；不承诺阻止外部 Git/编辑器写入。
+
+清理只认可创建事务＋目录创建身份＋Git 管理目录/common dir；原 checkout、外部资源默认只归档。Git `status --ignored` 验证 tracked/untracked/ignored 成果，确认 source HEAD 已进入指定目标。普通 worktree remove 后持久保存 DirectoryRemoved，再普通 branch -d；锁冲突可显示 DeletingBranch＋错误，查询/重试重新验证目录不存在及分支创建/修改身份。同提交重建分支、同路径重建目录均拒绝；已完成操作重试直接返回原结果，不碰新资源。
+
+证据 `artifacts/parallel-workspace/stage-E/`：`red.log` 为尚未实现行为失败；`live-guard-red` 暴露持有会话状态锁时重复加锁导致 RPC 超时，`live-guard-green` 验证修复后及时拒绝且 A PID 不变；`independent-cleanup-red` 暴露错误锁住仍运行的目标 A，调整清理只锁待删除来源后，关闭 B 即可完成清理而 A 保持运行；`diagnostic-red` 暴露 Git 锁失败被通用“非仓库”掩盖，改为有界 stderr 并保留实际原因。
+
+七项真实临时 Git 测试覆盖 dirty/HEAD 竞争/非 FF、ignored 成果与碰撞、原项目保护、来源检查过期、分支锁部分成功、重建路径/分支及其他宿主资源锁；TestBackend 验证归档必须二次确认、Esc 不改变焦点。shell fixture 验证运行中拒绝、显式关闭 B 后清理成功且 A PID 不变，自动化未使用真实 Provider/WT。
+
+此前完整门禁 413 通过、0 失败、29 忽略；最后涉及 Git 错误与清理锁范围的改动完成后重新运行最终门禁，结果以下方最终构建记录为准。Windows/Provider 真机项由用户执行，尚未记录通过。
+
+阶段 E 最后回归同时修复了两处跨功能边界：受管检查和活跃记录也持有资源共享锁；错误 run 的 End 先校验再取记录，采集失败保留可重试活动与锁。对应 `record-guard-red/green`。新增 opt-in 性能指标 `round.begin/end/diff/store`、`task.lifecycle`，沿用有界聚合，不保存文件名或输入正文。普通检查完成提醒也按同一全局/类别/静音策略发送，并复核原 run。
+
+### 用户真机门禁
+
+| 组 | 本次自动化 | 用户真机 |
+| --- | --- | --- |
+| U01 同屏隔离/草稿/返回 | TestBackend＋双 ConPTY shell | 待用户 |
+| U02 Provider/信任/子 Agent/Stop 继续 | 官方载荷＋受管 helper shell fixture；无真实 Provider | 待用户核对安装版本与信任 |
+| U03 Git 轮次/历史 | dirty、commit、CRLF、GC、内容真值 | 待用户 UI 审阅 |
+| U04 非 Git 观察/限定快照 | 真实 watcher、范围/配额/丢失前态 | 待用户 UI 审阅 |
+| U05 Windows 通知/激活 | 纯队列/策略＋原前端路由；不注册/真发 | 普通/Administrator、免打扰、WT 多标签均待用户 |
+| U06 策略/检查 | 可控时钟、结果确认、独立 Job、超时/过期 | 待用户 |
+| U07 合并/清理 | 临时 Git、资源锁、部分成功及重建资源拒绝 | 待用户 UI 确认 |
+
+因此开发任务交付与真实组合验收分开：V01 的自动证据完成后仍保留 U01–U07 未验收状态，不以文档打勾替用户测试，也不发送真实通知或改写真实 hooks 来补齐。
+
+10 万干净跟踪文件＋5 dirty＋2 untracked 夹具已实际运行（`100k-performance.log`）：1/2/4 个任务依次准备 Git 基线耗时 773/1535/3010 ms，每个基线仅 7 个例外，CAS 总对象也仅 7 个，不复制十万干净文件。另测 5 文件非 Git 范围快照 15 ms、事件观察准备 95 ms，仅记录各自能力成本，不作为同精度性能对比；夹具创建和清理共约 206 秒，不计入基线采集耗时。本组只验证资源与正确性，不声称有 p95/内存峰值结论。
+
+最终回归发现并修复 Git 包装进程退出后后代持有管道的问题：每次 Git 命令进入专有 Windows Job，退出/超时清理该子树后才收集输出。`git-job-descendants` 用 fixture 启动实际子/孙 shell，验证终止后输出管道关闭；`git-job-regression` 文件树 21 通过。原来的挂起完整回归在确认 fixture 进程身份后解除；其运行结果不作为最终门禁。一次同 target 的新编译与旧测试进程重叠导致 LNK1104，已保留 `complete-tests.log`，待旧进程结束后串行重新执行，后续补测关闭自动记录和前端锁释放后，最终以 `completion-tests.log` 为准。
+
+结果/通知策略落盘先串行化写入，再读取宿主最新状态，避免旧 ACK 的磁盘快照覆盖新事件；复制操作命令使用当前 exe 的绝对路径及 PowerShell 单引号转义，保证仍连接同一构建宿主。日志/测试载荷和测试图均未混入提交。
+
+关闭记录的真实 RED/GREEN：`close-record-red` 验证关闭工作区后仍残留 active manifest，`close-record-green` 验证独立 helper 产生的同一 run 在终端退出后被 worker 封存。终端退出与 Apply 的检查共用 retire 路径，避免提前释放终端锁而遗漏记录锁；队列满保留可重试的退役标记。工作区整体关闭在销毁对应会话 Job 后提交封存，不阻塞宿主输入锁执行 Git/快照 I/O。
+
+草稿保护的锁由前端进程自身持有，覆盖该前端已加载的全部任务（含隐藏任务），不依赖宿主的过期 client 清单；强杀前端后由 OS 自动释放，避免“已死前端”永久阻止清理。`frontend-lease-lifetime` 在真实 ConPTY 前端存活时验证独占锁被拒绝，杀前端后验证草稿锁释放，同时原 shell PID 保持不变，再重连。正常退出仍先经过已有保存/放弃/取消检查。
+
+文件树 fixture 的外层 `.output()` 在子进程已退出时仍可能等待继承管道 EOF；改为 fixture 文件日志捕获并设置 40 秒截止，原有状态和内容断言保留。`bounded-explorer.log` 专项 21 通过、0 失败、1 忽略；Git 子孙进程清理测试独立保留。此前挂起回归不计通过，最终完整门禁单独记录。
+
+### 最终自动门禁与测试构建
+
+阶段 0–E 开发实现完成，最终源码完整回归 `completion-tests.log` 实际退出码 0：43 个 suite 汇总 415 通过、0 失败、30 忽略；包含文档测试。忽略项保留原来的环境/性能前提，不计作通过；十万文件与存储优化负载已按前述命令独立运行。Clippy `--workspace --all-targets -- -D warnings`、`cargo fmt --all --check`、`git diff --check` 均通过，Release 构建及 `--version`、`task --help` 安全 CLI 检查通过。最新日志为 `completion-clippy.log`、`completion-release.log`，不再引用较早构建的回归作为最终证据。
+
+本机构建：`artifacts/DevTabs-0.4.0-parallel-workspace/devtabs.exe`，版本 0.4.0，build `c2265ce355c5258d`，IPC v6，23,428,608 bytes，SHA-256 `2604e43a0bf8e1429763998ebc6234efabfb741ba6379ae0deff1b917cc688b0`。产物旁 `build-manifest.json` 与证据目录 `source-manifest.json` 保存构建/源码指纹，后者覆盖 src/tests/crates/vendor 和 Cargo/build 输入；产物与本机日志不纳入 Git。
+
+已分阶段提交推送：0 `93a683c`、A `7689ef4`、B `777bb59`、C `c3a02c3`、D `9a69944`；E 随本次最终交付提交。没有将用户个人图片、根目录参考脚本或个人测试文档纳入提交。
+
+用户真机入口（从项目根目录运行；独立数据目录，不自动安装 hooks/注册通知）：
+
+```powershell
+.\artifacts\DevTabs-0.4.0-parallel-workspace\devtabs.exe --project . --agent codex --layout float --composition agent-only --new-instance --data-dir .\artifacts\parallel-workspace\manual
+```
+
+`Ctrl+G → +` 新建隔离任务；`Ctrl+G → g` 审阅轮次；`Ctrl+G → !` 待处理与通知策略；`Ctrl+G → M` 合并/归档/清理。Provider hooks/信任、Windows 横幅与回调、WT 标签激活和实际渲染仍按 U01–U07 验收，未自动测试真实组合，不声明整体验收已完成。

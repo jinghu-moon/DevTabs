@@ -15,6 +15,10 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Action {
+    Task {
+        #[command(subcommand)]
+        action: TaskCommand,
+    },
     Overlap {
         tasks: Vec<String>,
     },
@@ -85,6 +89,38 @@ enum Action {
         no_path: bool,
     },
     Bench,
+}
+#[derive(Subcommand)]
+enum TaskCommand {
+    Close {
+        task: String,
+        #[arg(long)]
+        confirm: String,
+    },
+    List,
+    Merge {
+        source: String,
+        target: String,
+        #[arg(long)]
+        require_check: bool,
+    },
+    Cleanup {
+        source: String,
+        target: String,
+    },
+    Apply {
+        operation: String,
+        #[arg(long)]
+        confirm: String,
+    },
+    Show {
+        operation: String,
+    },
+    Archive {
+        task: String,
+        #[arg(long)]
+        confirm: String,
+    },
 }
 #[derive(Subcommand)]
 enum RecordCommand {
@@ -195,6 +231,7 @@ pub fn dispatch() -> Result<bool> {
         "install",
         "uninstall",
         "bench",
+        "task",
         "overlap",
     ]
     .contains(&first.as_str())
@@ -203,6 +240,37 @@ pub fn dispatch() -> Result<bool> {
     }
     let cli = Cli::parse();
     match cli.action {
+        Action::Task { action } => {
+            use crate::lifecycle::Action as L;
+            let action = match action {
+                TaskCommand::List => L::List,
+                TaskCommand::Merge {
+                    source,
+                    target,
+                    require_check,
+                } => L::Plan {
+                    source,
+                    target,
+                    require_check,
+                    cleanup: false,
+                },
+                TaskCommand::Cleanup { source, target } => L::Plan {
+                    source,
+                    target,
+                    require_check: false,
+                    cleanup: true,
+                },
+                TaskCommand::Apply { operation, confirm } => L::Apply { operation, confirm },
+                TaskCommand::Show { operation } => L::Query { operation },
+                TaskCommand::Archive { task, confirm } => L::Archive { task, confirm },
+                TaskCommand::Close { task, confirm } => L::Close { task, confirm },
+            };
+            crate::host::ensure()?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&protocol::rpc(Request::Lifecycle { action })?)?
+            );
+        }
         Action::Overlap { tasks } => {
             let catalog = crate::tasks::Catalog::load(&config::home())?;
             let selected = tasks
