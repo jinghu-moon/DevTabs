@@ -80,6 +80,11 @@ impl Track {
     }
 }
 impl Sidebar {
+    pub(super) fn scrollbar_hit(&self, point: (u16, u16)) -> bool {
+        self.tracks()
+            .iter()
+            .any(|track| track.rect.contains(point.into()))
+    }
     fn tracks(&self) -> Vec<Track> {
         let mut tracks = Vec::new();
         if let Some(rect) = self.geometry.tree {
@@ -105,7 +110,7 @@ impl Sidebar {
         {
             let inner = self.document_area().expect("preview area");
             let (total, page, position, bytes, target) = if d.editing {
-                let Some(e) = &d.editor else {
+                let Some(e) = d.editor() else {
                     return tracks;
                 };
                 (
@@ -115,7 +120,7 @@ impl Sidebar {
                     false,
                     Target::Editor,
                 )
-            } else if let Some(r) = &d.rendered {
+            } else if let Some(r) = d.rendered() {
                 if d.markdown && !r.complete {
                     let page = d
                         .screen_rows(inner.height as usize)
@@ -157,7 +162,7 @@ impl Sidebar {
                 });
             }
             if !d.editing
-                && let Some(r) = &d.rendered
+                && let Some(r) = d.rendered()
             {
                 let total = d
                     .screen_rows(inner.height as usize)
@@ -179,7 +184,7 @@ impl Sidebar {
                 }
             }
             if d.editing
-                && let Some(e) = &d.editor
+                && let Some(e) = d.editor()
             {
                 let page = inner.width.saturating_sub(e.area.line_number_width()) as usize;
                 let total = e
@@ -282,7 +287,7 @@ impl Sidebar {
                     self.focus = Focus::Tree;
                 }
                 Target::Editor => {
-                    if let Some(e) = self.document.as_mut().and_then(|d| d.editor.as_mut()) {
+                    if let Some(e) = self.document.as_mut().and_then(|d| d.editor_mut()) {
                         let old = e.area.scroll_offset().0 as usize;
                         let delta = (value as i64 - old as i64)
                             .clamp(i16::MIN as i64, i16::MAX as i64)
@@ -292,7 +297,7 @@ impl Sidebar {
                     }
                 }
                 Target::EditorHorizontal => {
-                    if let Some(e) = self.document.as_mut().and_then(|d| d.editor.as_mut()) {
+                    if let Some(e) = self.document.as_mut().and_then(|d| d.editor_mut()) {
                         let old = e.area.scroll_offset().1 as usize;
                         let delta = (value as i64 - old as i64)
                             .clamp(i16::MIN as i64, i16::MAX as i64)

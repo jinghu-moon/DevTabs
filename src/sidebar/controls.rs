@@ -20,23 +20,69 @@ pub(super) enum Panel {
 }
 impl Sidebar {
     pub(super) fn command_enabled(&self, command: Command) -> bool {
+        if self.read_only
+            && matches!(
+                command,
+                Command::Edit
+                    | Command::Save
+                    | Command::Cut
+                    | Command::Paste
+                    | Command::Undo
+                    | Command::Redo
+                    | Command::NewFile
+                    | Command::NewDirectory
+                    | Command::Rename
+                    | Command::Trash
+            )
+        {
+            return false;
+        }
         let d = self.document.as_ref();
+        if d.is_some_and(Document::is_image)
+            && matches!(
+                command,
+                Command::Edit
+                    | Command::Save
+                    | Command::Undo
+                    | Command::Redo
+                    | Command::Cut
+                    | Command::Paste
+                    | Command::Find
+                    | Command::Project
+                    | Command::EndEdit
+                    | Command::Mode
+                    | Command::Outline
+                    | Command::Wrap
+                    | Command::Compare
+                    | Command::Diff
+                    | Command::Goto
+                    | Command::Search
+                    | Command::Bookmark
+                    | Command::CopyContent
+                    | Command::CopySource
+            )
+        {
+            return false;
+        }
         match command {
             Command::Back => self.has_history(false),
             Command::Forward => self.has_history(true),
-            Command::Edit => d.is_some_and(|d| d.loaded.as_ref().is_some_and(|l| l.editable)),
+            Command::Edit => d.is_some_and(|d| d.loaded().is_some_and(|l| l.editable)),
             Command::Mode | Command::Compare => {
-                d.is_some_and(|d| !d.editing && d.loaded.as_ref().is_some_and(|l| l.markdown()))
+                d.is_some_and(|d| !d.editing && d.loaded().as_ref().is_some_and(|l| l.markdown()))
             }
             Command::Outline => d.is_some_and(|d| d.markdown && !d.editing),
             Command::Save => d
-                .and_then(|d| d.editor.as_ref())
+                .and_then(|d| d.editor())
                 .is_some_and(|e| e.dirty() && !e.saving),
             _ => true,
         }
     }
     pub(super) fn command_toggle(&self, command: Command) -> Option<bool> {
         match command {
+            Command::Follow => Some(self.explorer.preferences.follow),
+            Command::Compact => Some(self.files.compact),
+            Command::Modified => Some(self.files.modified_only),
             Command::Maximize => Some(self.tools.maximized),
             Command::Wrap => self.document.as_ref().map(|d| d.view.wrap),
             Command::Compare => self.document.as_ref().map(|d| d.view.compare),
@@ -88,7 +134,7 @@ impl Sidebar {
     fn bookmark_request(&mut self, operation: Operation) -> Result<()> {
         ensure!(
             self.controls.pending.is_none(),
-            "Bookmark operation in progress"
+            crate::i18n::t("ui.bookmark_operation_in_progress")
         );
         self.serial += 1;
         self.io.send(Job::Bookmarks {
@@ -101,6 +147,9 @@ impl Sidebar {
         Ok(())
     }
     pub(super) fn control_command(&mut self, command: Command) -> Result<()> {
+        if !self.command_enabled(command) {
+            return Ok(());
+        }
         self.controls.hover = None;
         match command {
             Command::Info => {
@@ -113,10 +162,15 @@ impl Sidebar {
             Command::Bookmark => {
                 ensure!(
                     self.controls.pending.is_none(),
-                    "Bookmark operation in progress"
+                    crate::i18n::t("ui.bookmark_operation_in_progress")
                 );
-                let d = self.document.as_ref().context("No document")?;
-                let source = d.source_snapshot().context("Wait for file loading")?;
+                let d = self
+                    .document
+                    .as_ref()
+                    .context(crate::i18n::t("ui.no_document"))?;
+                let source = d
+                    .source_snapshot()
+                    .context(crate::i18n::t("ui.wait_for_file_loading"))?;
                 let byte = d.reading_byte().min(source.len());
                 let line = source[..byte].bytes().filter(|&b| b == b'\n').count();
                 let anchor = source
@@ -169,7 +223,7 @@ impl Sidebar {
         if d.loading {
             return;
         }
-        let Some(loaded) = &d.loaded else {
+        let Some(loaded) = d.loaded() else {
             self.controls.jump = None;
             return;
         };
@@ -177,7 +231,7 @@ impl Sidebar {
         let markdown = entry.markdown && loaded.markdown();
         if d.markdown != markdown {
             d.markdown = markdown;
-            d.rendered = None;
+            d.set_rendered(None);
             d.render_pending = false;
             d.render_id = 0;
         }
@@ -198,7 +252,7 @@ impl Sidebar {
                         if matches!(self.controls.panel, Some(Panel::Note(_))) {
                             self.controls.panel = Some(Panel::Bookmarks);
                         }
-                        self.say("Bookmarks loaded / saved", true);
+                        self.say(crate::i18n::t("preview.bookmarks_saved"), true);
                     }
                     Err(e) => {
                         self.controls.error = format!("{e:#}");
@@ -237,7 +291,7 @@ impl Sidebar {
                 Some(Panel::Info) => {
                     if matches!(key.code, KeyCode::Char('c' | 'C')) {
                         files::copy(self.file_information())?;
-                        self.say("Copied file information", true);
+                        self.say(crate::i18n::t("preview.information_copied"), true);
                     }
                 }
                 Some(Panel::Note(entry)) => match key.code {
@@ -309,7 +363,7 @@ impl Sidebar {
         {
             if let Some(d) = &self.document {
                 files::copy(d.path.to_string_lossy().into_owned())?;
-                self.say("Copied absolute path", true);
+                self.say(crate::i18n::t("preview.path_copied"), true);
             }
             return Ok(true);
         }
@@ -387,10 +441,11 @@ impl Sidebar {
                 if d.editing || !self.showing() || event.row != rect.y {
                     return None;
                 }
-                let first = header_buttons(
+                let first = visible_header_buttons(
+                    self.preview_controls(),
                     rect,
                     false,
-                    d.loaded.as_ref().is_some_and(|l| l.markdown()),
+                    d.loaded().is_some_and(|l| l.markdown()),
                     d.markdown,
                 )
                 .iter()
@@ -425,10 +480,10 @@ impl Sidebar {
                 MouseEventKind::Down(MouseButton::Right) => {
                     self.menu = Some(Menu {
                         items: vec![
-                            ("Copy absolute path", Command::CopyAbsolute),
-                            ("Close tab", Command::Close),
-                            ("Close other tabs", Command::CloseOthers),
-                            ("Close tabs to the right", Command::CloseRight),
+                            (crate::i18n::t("legacy_8"), Command::CopyAbsolute),
+                            (crate::i18n::t("ui.close_tab"), Command::Close),
+                            (crate::i18n::t("legacy_39"), Command::CloseOthers),
+                            (crate::i18n::t("legacy_40"), Command::CloseRight),
                         ],
                         selected: 0,
                         target: path,
@@ -442,10 +497,13 @@ impl Sidebar {
     }
     fn file_information(&self) -> String {
         let Some(d) = &self.document else {
-            return "No document".into();
+            return crate::i18n::t("ui.no_document").into();
         };
-        let Some(l) = &d.loaded else {
-            return "File not loaded".into();
+        if let Some(i) = d.image() {
+            return i.information(&d.path, self.image_display);
+        }
+        let Some(l) = d.loaded() else {
+            return crate::i18n::t("ui.file_not_loaded").into();
         };
         let encoding = match l.encoding {
             preview::Encoding::Utf8 => "UTF-8",
@@ -457,16 +515,27 @@ impl Sidebar {
         let modified = l
             .modified
             .map(format_utc)
-            .unwrap_or_else(|| "Unknown".into());
-        format!(
-            "Path: {}\nSize: {} bytes ({:.1} KiB)\nLoaded: {} bytes\nEncoding: {encoding}\nNewline: {newline}\nModified: {modified}\nTruncated: {}\nEditable: {}\n{}\nSnapshot captured at last read/save.\nC Copy information · Esc Close",
-            preview::safe_text(&d.path.to_string_lossy()),
-            l.disk_bytes,
-            l.disk_bytes as f64 / 1024.0,
-            l.bytes.len(),
-            if l.truncated { "Yes" } else { "No" },
-            if l.editable { "Yes" } else { "No" },
-            l.note
+            .unwrap_or_else(|| crate::i18n::t("ui.unknown").into());
+        crate::i18n::format(
+            "preview.file_information",
+            &[
+                ("path", preview::safe_text(&d.path.to_string_lossy())),
+                ("bytes", l.disk_bytes.to_string()),
+                ("kib", format!("{:.1}", l.disk_bytes as f64 / 1024.0)),
+                ("loaded", l.bytes.len().to_string()),
+                ("encoding", encoding.into()),
+                ("newline", newline.into()),
+                ("modified", modified),
+                (
+                    "truncated",
+                    crate::i18n::t(if l.truncated { "ui.yes" } else { "ui.no" }).into_owned(),
+                ),
+                (
+                    "editable",
+                    crate::i18n::t(if l.editable { "ui.yes" } else { "ui.no" }).into_owned(),
+                ),
+                ("note", l.note.clone()),
+            ],
         )
     }
     fn control_popup(&self, area: Rect) -> Rect {
@@ -490,11 +559,13 @@ impl Sidebar {
         // Redraw header states without changing hit geometry.
         if let (Some(rect), Some(d)) = (self.geometry.preview, self.document.as_ref())
             && !d.editing
+            && !d.is_image()
         {
-            for (r, label, c) in header_buttons(
+            for (r, label, c) in visible_header_buttons(
+                self.preview_controls(),
                 rect,
                 false,
-                d.loaded.as_ref().is_some_and(|l| l.markdown()),
+                d.loaded().is_some_and(|l| l.markdown()),
                 d.markdown,
             ) {
                 let enabled = self.command_enabled(c);
@@ -526,9 +597,12 @@ impl Sidebar {
                     Color::Rgb(24, 27, 34)
                 });
             let (title, text) = match panel {
-                Panel::Info => (" File information ", self.file_information()),
+                Panel::Info => (
+                    crate::i18n::t("ui.file_information"),
+                    self.file_information(),
+                ),
                 Panel::Note(e) => (
-                    " Bookmark note ",
+                    crate::i18n::t("ui.bookmark_note"),
                     format!(
                         "{} · Ln {}\n{}\n\nEnter Save · Esc Cancel · {}/256{}\n{}",
                         e.path.file_name().unwrap_or_default().to_string_lossy(),
@@ -536,9 +610,9 @@ impl Sidebar {
                         e.note,
                         e.note.chars().count(),
                         if self.controls.pending.is_some() {
-                            " · Saving…"
+                            crate::i18n::t("ui.saving")
                         } else {
-                            ""
+                            "".into()
                         },
                         self.controls.error
                     ),
@@ -547,7 +621,7 @@ impl Sidebar {
                     let rows = r.height.saturating_sub(4).max(1) as usize;
                     let first = self.controls.selected.saturating_sub(rows - 1);
                     let mut text = if self.controls.pending.is_some() {
-                        "Loading / saving…\n".into()
+                        crate::i18n::t("ui.loading_saving").into()
                     } else {
                         format!(
                             "{} bookmarks · Enter Jump · E Note · Del Delete\n",
@@ -582,10 +656,12 @@ impl Sidebar {
                         text.push('\n');
                     }
                     if self.controls.entries.is_empty() {
-                        text.push_str("No bookmarks. Press B in preview to add one.\n");
+                        text.push_str(&crate::i18n::t(
+                            "ui.no_bookmarks_press_b_in_preview_to_add_one",
+                        ));
                     }
                     text.push_str(&self.controls.error);
-                    (" Reading bookmarks · Esc Close ", text)
+                    (crate::i18n::t("ui.reading_bookmarks_esc_close"), text)
                 }
             };
             let widget = Paragraph::new(preview::safe_text(&text))
@@ -616,7 +692,7 @@ impl Sidebar {
                 ))
                 .wrap(Wrap { trim: false })
                 .style(Style::new().fg(Color::White).bg(Color::Rgb(24, 27, 34)))
-                .block(Block::bordered().title(" Full path ")),
+                .block(Block::bordered().title(crate::i18n::t("ui.full_path"))),
                 r,
             );
         }
@@ -625,7 +701,7 @@ impl Sidebar {
 
 fn format_utc(time: std::time::SystemTime) -> String {
     let Ok(elapsed) = time.duration_since(std::time::UNIX_EPOCH) else {
-        return "Before 1970".into();
+        return crate::i18n::t("ui.before_1970").into();
     };
     let seconds = elapsed.as_secs();
     // Gregorian calendar conversion from days since Unix epoch.

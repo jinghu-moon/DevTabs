@@ -35,14 +35,6 @@ fn run() -> Result<()> {
             _ => {}
         }
     }
-    // Set a caller-specified data location before any worker thread is created.
-    if let Some(index) = std::env::args().position(|arg| arg == "--data-dir")
-        && let Some(path) = std::env::args().nth(index + 1)
-    {
-        unsafe {
-            std::env::set_var("DEVTABS_HOME", path);
-        }
-    }
     if devtabs::cli::dispatch()? {
         return Ok(());
     }
@@ -50,47 +42,74 @@ fn run() -> Result<()> {
     let options = if overview {
         None
     } else {
-        Some(devtabs::cli::resolve(Options::parse())?)
+        let parsed = Options::parse();
+        // Parse structurally so an Agent argument that resembles a DevTabs flag
+        // cannot change the application's data directory.
+        if let Some(path) = &parsed.data_dir {
+            unsafe {
+                std::env::set_var("DEVTABS_HOME", path);
+            }
+        }
+        if parsed.restore || parsed.last {
+            devtabs::recovery::launch_group(&parsed)?;
+            return Ok(());
+        }
+        Some(devtabs::cli::resolve(parsed)?)
     };
+    if let Some(o) = &options
+        && o.workspace.is_none()
+    {
+        devtabs::recovery::remember(std::slice::from_ref(o))?;
+    }
     if let Some(options) = &options
         && options.headless
     {
         devtabs::host::ensure()?;
-        if let devtabs::protocol::Response::Workspace(workspace) =
-            devtabs::protocol::rpc(devtabs::protocol::Request::Open {
-                options: options.clone(),
-            })?
-        {
-            println!("{}", serde_json::to_string(&workspace)?);
+        match devtabs::protocol::rpc(devtabs::protocol::Request::Open {
+            options: Box::new(options.clone()),
+        })? {
+            devtabs::protocol::Response::Workspace(workspace) => {
+                println!("{}", serde_json::to_string(&workspace)?)
+            }
+            devtabs::protocol::Response::Error(error) => anyhow::bail!("{error}"),
+            _ => anyhow::bail!("Unexpected host response"),
         }
         return Ok(());
     }
-    #[cfg(windows)]
-    let _debug_lease = if options.as_ref().and_then(|o| o.view.as_deref()) == Some("debug-shared") {
-        let start = std::time::Instant::now();
-        loop {
-            if let Some(lease) = devtabs::windows::WindowLease::shared_debug()? {
-                break Some(lease);
-            }
-            if start.elapsed() > std::time::Duration::from_secs(4) {
-                return Ok(());
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-    } else {
-        None
-    };
-    let mut terminal = ratatui::try_init()?;
+    if let Some(options) = &options
+        && options.new_window
+        && options.workspace.is_none()
+    {
+        devtabs::overview::launch_tab(options)?;
+        return Ok(());
+    }
+    let config = devtabs::config::Config::load()?;
+    devtabs::i18n::set(
+        options
+            .as_ref()
+            .and_then(|o| o.language)
+            .unwrap_or(config.language),
+    );
+    devtabs::appearance::set(config.theme);
+    let _setup = ratatui::try_init()?;
+    let mut terminal =
+        devtabs::image_output::Terminal::new(ratatui::backend::CrosstermBackend::new(
+            devtabs::image_output::Writer::new(std::io::stdout()),
+        ))?;
     let _guard = TerminalGuard::enter()?;
     let mut next = options;
+    let mut overview_origin = None;
     loop {
         let chosen = match next.take() {
             Some(options) => Some(options),
-            None => devtabs::overview::run(&mut terminal)?,
+            None => devtabs::overview::run_from(&mut terminal, overview_origin.take())?,
         };
         let Some(options) = chosen else {
             return Ok(());
         };
+        if options.workspace.is_none() {
+            devtabs::recovery::remember(std::slice::from_ref(&options))?;
+        }
         let size = terminal.size()?;
         let mut app = App::new(
             options,
@@ -98,7 +117,9 @@ fn run() -> Result<()> {
             ratatui::layout::Rect::new(0, 0, size.width, size.height),
         )?;
         app::run(&mut terminal, &mut app)?;
+        terminal.clear()?;
         if app.return_overview {
+            overview_origin = Some(app.options.clone());
             continue;
         }
         return Ok(());

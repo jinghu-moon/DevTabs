@@ -21,6 +21,7 @@ pub struct Remote {
     queue: SyncSender<Pending>,
     stop: Arc<std::sync::atomic::AtomicBool>,
     refresh: Arc<std::sync::atomic::AtomicBool>,
+    size: (u16, u16),
 }
 struct Pending {
     request: Request,
@@ -45,10 +46,21 @@ impl Remote {
         cols: u16,
         takeover: bool,
     ) -> Result<Self> {
+        Self::attach_view(workspace, info, rows, cols, takeover, None)
+    }
+    pub fn attach_view(
+        workspace: &str,
+        info: SessionInfo,
+        rows: u16,
+        cols: u16,
+        takeover: bool,
+        floating: Option<u64>,
+    ) -> Result<Self> {
         let client = uuid::Uuid::new_v4().to_string();
         let start = Instant::now();
         loop {
             match protocol::rpc(Request::Attach {
+                floating,
                 takeover,
                 workspace: workspace.into(),
                 session: info.id.clone(),
@@ -108,6 +120,20 @@ impl Remote {
                                 }
                             }
                         }
+                        if matches!(pending.request, Request::Resize { .. }) {
+                            while let Ok(next) = receiver.try_recv() {
+                                if matches!(next.request, Request::Resize { .. }) {
+                                    pending = next;
+                                } else {
+                                    dispatch(pending, &thread_state);
+                                    pending = next;
+                                    break;
+                                }
+                            }
+                        }
+                        if thread_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                            break;
+                        }
                         dispatch(pending, &thread_state);
                     }
                     Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -151,6 +177,7 @@ impl Remote {
             queue,
             stop,
             refresh,
+            size: (rows, cols),
         })
     }
     pub fn state(&self) -> MutexGuard<'_, State> {
@@ -194,13 +221,18 @@ impl Remote {
         Ok(rx)
     }
     pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
+        if self.size == (rows, cols) {
+            return Ok(());
+        }
         self.enqueue(Request::Resize {
             workspace: self.workspace.clone(),
             session: self.info.id.clone(),
             client: self.client.clone(),
             rows,
             cols,
-        })
+        })?;
+        self.size = (rows, cols);
+        Ok(())
     }
     pub fn terminate(&self) -> Result<()> {
         protocol::rpc(Request::Close {
@@ -326,6 +358,7 @@ mod tests {
                 shell_pid: Some(123),
                 status: Status::Running,
                 command: CommandStatus::Idle,
+                placement: crate::presentation::Placement::Docked,
             },
             error: None,
         }

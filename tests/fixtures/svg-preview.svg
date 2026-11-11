@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540" viewBox="0 0 960 540">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#9333ea"/>
+    </linearGradient>
+    <clipPath id="window"><rect x="55" y="65" width="850" height="400" rx="32"/></clipPath>
+  </defs>
+  <g clip-path="url(#window)">
+    <rect width="960" height="540" fill="url(#sky)"/>
+    <circle cx="800" cy="135" r="90" fill="#fcd34d" opacity="0.8"/>
+    <path d="M0 480 L240 140 L440 390 L640 180 L960 500 Z" fill="#0f172a" opacity="0.6"/>
+    <path d="M60 480 L350 235 L600 460 L780 285 L960 500 Z" fill="#f8fafc" opacity="0.35"/>
+    <text x="110" y="160" font-family="sans-serif" font-size="48" font-weight="bold" fill="white">DevTabs SVG</text>
+    <text x="110" y="215" font-family="sans-serif" font-size="24" fill="white">Vector preview · gradients · clipping · alpha</text>
+    <rect x="110" y="285" width="240" height="90" rx="16" fill="white" opacity="0.9"/>
+    <text x="135" y="342" font-family="sans-serif" font-size="30" fill="#1e293b">Agent + Debug</text>
+  </g>
+  <path d="M55 490 H905" stroke="#38bdf8" stroke-width="2" stroke-dasharray="8 6"/>
+</svg>

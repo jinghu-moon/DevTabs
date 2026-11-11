@@ -68,7 +68,7 @@ fn rendered(s: &mut Sidebar, path: &Path) {
         pump(s);
         s.document
             .as_ref()
-            .is_some_and(|d| d.path == path && d.rendered.is_some())
+            .is_some_and(|d| d.path == path && d.rendered().is_some())
     });
 }
 
@@ -107,7 +107,7 @@ fn layout_examples_and_all_boundary_combinations() {
                         let p = sidebar::panels(Rect::new(0, 0, w, h), split, side, preview);
                         if let Some(a) = p.agent {
                             assert!(a.width >= 62);
-                            assert!(a.bottom() <= h - 2);
+                            assert_eq!(a.bottom(), h - 1, "exactly one global footer row");
                             let sum = p.tree.map_or(0, |r| r.width)
                                 + a.width
                                 + p.debug.map_or(0, |r| r.width)
@@ -233,14 +233,7 @@ fn markdown_modes_search_and_async_navigation_keep_latest_file() {
     rendered(&mut s, &b);
     let d = s.document.as_ref().unwrap();
     assert!(d.markdown);
-    assert!(
-        d.rendered
-            .as_ref()
-            .unwrap()
-            .plain
-            .join("\n")
-            .contains("中文标题")
-    );
+    assert!(d.rendered().unwrap().plain.join("\n").contains("中文标题"));
     s.key(key(KeyCode::Char('/'))).unwrap();
     s.paste("文本").unwrap();
     s.key(key(KeyCode::Enter)).unwrap();
@@ -251,20 +244,10 @@ fn markdown_modes_search_and_async_navigation_keep_latest_file() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| !r.markdown)
     });
-    assert!(
-        s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .unwrap()
-            .plain[0]
-            .contains("# 中文标题")
-    );
+    assert!(s.document.as_ref().unwrap().rendered().unwrap().plain[0].contains("# 中文标题"));
 }
 
 #[test]
@@ -304,7 +287,7 @@ fn drag_from_tree_survives_overlay_transition_and_never_targets_debug() {
     let (_, action) = s
         .mouse(mouse(MouseEventKind::Up(MouseButton::Left), 60, 10))
         .unwrap();
-    assert!(matches!(action,Action::Insert(ref path) if path==&p));
+    assert!(matches!(action,Action::Insert(ref paths) if paths==&vec![p.clone()]));
     assert!(matches!(s.gesture, Gesture::Idle));
     assert_eq!(s.focus, Focus::Terminal);
     s.gesture = Gesture::Dragging { path: p };
@@ -335,13 +318,12 @@ fn watch_refresh_preserves_scroll_and_keeps_stale_content_on_delete() {
         s.document
             .as_ref()
             .unwrap()
-            .loaded
-            .as_ref()
+            .loaded()
             .is_some_and(|l| l.source.as_ref() == "replacement\n")
     });
     until("replacement rendered", || {
         pump(&mut s);
-        s.document.as_ref().unwrap().rendered.is_some()
+        s.document.as_ref().unwrap().rendered().is_some()
     });
     assert_eq!(s.document.as_ref().unwrap().offset().0, 0);
     fs::remove_file(&p).unwrap();
@@ -353,8 +335,7 @@ fn watch_refresh_preserves_scroll_and_keeps_stale_content_on_delete() {
         s.document
             .as_ref()
             .unwrap()
-            .loaded
-            .as_ref()
+            .loaded()
             .unwrap()
             .source
             .as_ref(),

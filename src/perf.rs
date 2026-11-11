@@ -18,6 +18,11 @@ macro_rules! metrics {
     };
 }
 metrics! {
+    FloatingFirstFrame => "terminal.floating_first_frame", FloatingOpen => "terminal.panel_open", FloatingAttach => "terminal.floating_attach",
+    OverviewStats => "overview.stats", OverviewHistory => "overview.history", OverviewGit => "overview.git", OverviewLaunch => "overview.launch",
+    ProjectIndex => "project.index", ProjectSearch => "project.fuzzy_search", ProjectGit => "project.git_status", ProjectChange => "project.file_operation",
+    ImageOutput => "output.write", ImageFlush => "output.flush", ImageSvgRender => "image.svg_render",
+    ImageRead => "image.read", ImageInspect => "image.inspect_dimensions", ImageDecode => "image.decode_orient", ImageResize => "image.crop_alpha_resize", ImageEncode => "image.quantize_encode", ImageQueueWait => "image.request_wait", ImageSlice => "image.slice_prepare",
     Frame => "ui.frame_and_flush", Ui => "ui.compose", Input => "ui.input_dispatch",
     Tick => "sidebar.tick", Watch => "files.watch_reconcile",
     TreeItems => "tree.build_items", TreeRender => "tree.widget_render", TreeBlit => "tree.copy_viewport", TreeMerge => "tree.merge_batch",
@@ -30,6 +35,10 @@ metrics! {
     Rpc => "ipc.rpc", RpcPoll => "ipc.poll", RemoteApply => "terminal.apply_snapshot",
     HostRequest => "host.request", HostSnapshot => "host.snapshot", TerminalParse => "terminal.parse",
     OverviewFilter => "overview.filter", OverviewFrame => "overview.frame_and_flush", Discovery => "overview.discovery_benchmark",
+    OverviewInputToFrame => "overview.input_to_frame",
+    OverviewSourceScan => "overview.stats_source_scan",
+    OverviewDiskScan => "overview.stats_disk_scan",
+    OverviewStatsGit => "overview.stats_git",
 }
 const BUCKETS: usize = 64;
 struct Counter {
@@ -132,6 +141,123 @@ pub fn record(metric: Metric, elapsed: Duration) {
         COUNTERS[metric as usize].record(elapsed.as_nanos().min(u64::MAX as u128) as u64);
     }
 }
+#[derive(Clone, Copy)]
+#[repr(usize)]
+pub enum Count {
+    OverviewContextHits,
+    OverviewStale,
+    OverviewCanceled,
+    OverviewHistoryBytes,
+    FloatingFailures,
+    TerminalAttaches,
+    TerminalDetaches,
+    TerminalResizes,
+    TerminalFrameBytes,
+    ImageInspections,
+    ImageCacheHits,
+    ImageCacheMisses,
+    ImageDecodes,
+    ImageEncodes,
+    ImageStale,
+    ImageReplaced,
+    ImageTransfers,
+    ImageBytes,
+    ImageClears,
+    ImageFallbacks,
+    ImageClips,
+    ImageCompositionHits,
+}
+const COUNT_NAMES: &[&str] = &[
+    "overview.context_cache_hits",
+    "overview.stale_results",
+    "overview.canceled_requests",
+    "overview.history_read_bytes",
+    "terminal.window_failures",
+    "terminal.attaches",
+    "terminal.detaches",
+    "terminal.resizes",
+    "terminal.frame_bytes",
+    "image.inspections",
+    "image.source_cache_hits",
+    "image.source_cache_misses",
+    "image.decodes",
+    "image.encodes",
+    "image.stale_results",
+    "image.replaced_requests",
+    "image.transfers",
+    "image.output_bytes",
+    "image.clears",
+    "image.fallbacks",
+    "image.clips",
+    "image.composition_cache_hits",
+];
+static COUNTS: [AtomicU64; COUNT_NAMES.len()] = [const { AtomicU64::new(0) }; COUNT_NAMES.len()];
+pub fn add(counter: Count, value: u64) {
+    if enabled() {
+        COUNTS[counter as usize].fetch_add(value, Relaxed);
+    }
+}
+#[derive(Clone, Copy)]
+#[repr(usize)]
+pub enum Gauge {
+    SourcePixels,
+    TargetPixels,
+    SourceBytes,
+    TargetBytes,
+    CacheBytes,
+}
+const GAUGE_NAMES: &[&str] = &[
+    "image.source_pixels",
+    "image.target_pixels",
+    "image.source_bytes",
+    "image.target_bytes",
+    "image.cache_bytes",
+];
+static VALUES: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+static PEAKS: [AtomicU64; 5] = [const { AtomicU64::new(0) }; 5];
+pub fn gauge(gauge: Gauge, value: u64) {
+    if enabled() {
+        VALUES[gauge as usize].store(value, Relaxed);
+        PEAKS[gauge as usize].fetch_max(value, Relaxed);
+    }
+}
+#[derive(Serialize)]
+pub struct GaugeValue {
+    pub name: &'static str,
+    pub current: u64,
+    pub peak: u64,
+}
+#[derive(Serialize)]
+pub struct Memory {
+    pub working_set_bytes: u64,
+    pub peak_working_set_bytes: u64,
+}
+#[cfg(windows)]
+pub fn memory() -> Option<Memory> {
+    use windows_sys::Win32::System::{
+        ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS},
+        Threading::GetCurrentProcess,
+    };
+    let mut m = PROCESS_MEMORY_COUNTERS::default();
+    m.cb = std::mem::size_of_val(&m) as u32;
+    if unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut m, m.cb) } != 0 {
+        Some(Memory {
+            working_set_bytes: m.WorkingSetSize as u64,
+            peak_working_set_bytes: m.PeakWorkingSetSize as u64,
+        })
+    } else {
+        None
+    }
+}
+#[cfg(not(windows))]
+pub fn memory() -> Option<Memory> {
+    None
+}
+#[derive(Serialize)]
+pub struct Quantity {
+    pub name: &'static str,
+    pub value: u64,
+}
 #[derive(Serialize)]
 pub struct Timing {
     pub name: &'static str,
@@ -153,6 +279,9 @@ pub struct Report {
     pub enabled: bool,
     pub semantics: &'static str,
     pub timings: Vec<Timing>,
+    pub counts: Vec<Quantity>,
+    pub gauges: Vec<GaugeValue>,
+    pub process_memory: Option<Memory>,
 }
 pub fn snapshot() -> Report {
     let mut timings = Vec::new();
@@ -176,12 +305,30 @@ pub fn snapshot() -> Report {
     }
     timings.sort_by(|a, b| b.total_ms.total_cmp(&a.total_ms));
     Report {
-        schema: 1,
+        schema: 2,
         pid: std::process::id(),
         version: env!("CARGO_PKG_VERSION"),
         uptime_seconds: config().started.elapsed().as_secs_f64(),
         enabled: enabled(),
         semantics: "inclusive wall-clock time; nested/thread totals overlap; power-of-two percentile upper bounds; relaxed live snapshots are approximate; queue rejection counts are not durations",
+        counts: COUNT_NAMES
+            .iter()
+            .zip(COUNTS.iter())
+            .map(|(name, c)| Quantity {
+                name,
+                value: c.load(Relaxed),
+            })
+            .collect(),
+        process_memory: enabled().then(memory).flatten(),
+        gauges: GAUGE_NAMES
+            .iter()
+            .enumerate()
+            .map(|(i, name)| GaugeValue {
+                name,
+                current: VALUES[i].load(Relaxed),
+                peak: PEAKS[i].load(Relaxed),
+            })
+            .collect(),
         timings,
     }
 }

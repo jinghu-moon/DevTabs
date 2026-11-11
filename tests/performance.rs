@@ -30,7 +30,7 @@ fn measure(name: &str, iterations: usize, mut f: impl FnMut()) -> serde_json::Va
 }
 fn ready(s: &mut Sidebar) {
     let start = Instant::now();
-    while s.document.as_ref().is_none_or(|d| d.rendered.is_none()) {
+    while s.document.as_ref().is_none_or(|d| d.rendered().is_none()) {
         s.tick(true);
         assert!(start.elapsed() < Duration::from_secs(15));
         std::thread::sleep(Duration::from_millis(1));

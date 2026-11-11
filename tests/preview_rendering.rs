@@ -195,7 +195,7 @@ fn sidebar_async_preview_mode_switch_editor_and_search_keep_visible_styles() {
             sidebar.tick(true);
             let d = sidebar.document.as_ref().unwrap();
             if !d.loading
-                && d.rendered
+                & d.rendered()
                     .as_ref()
                     .is_some_and(|r| r.markdown == d.markdown)
             {
@@ -253,8 +253,7 @@ fn sidebar_async_preview_mode_switch_editor_and_search_keep_visible_styles() {
             .document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .unwrap()
             .markdown
     );
@@ -286,8 +285,7 @@ fn sidebar_async_preview_mode_switch_editor_and_search_keep_visible_styles() {
             .document
             .as_ref()
             .unwrap()
-            .editor
-            .as_ref()
+            .editor()
             .is_some_and(|e| e.highlight.is_some())
         {
             break;

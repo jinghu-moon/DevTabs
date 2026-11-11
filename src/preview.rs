@@ -364,12 +364,20 @@ pub struct SourceSegment {
 }
 #[derive(Clone, Debug)]
 pub struct RowSource {
+    pub image: Option<ImageRow>,
     pub kind: RowKind,
     pub segments: Vec<SourceSegment>,
     /// Fixed viewport decoration on a code header; excluded from text and source selection.
     pub code_language: Option<Arc<str>>,
     pub code_copy: Option<Arc<str>>,
     pub table: Option<TableRow>,
+}
+#[derive(Clone, Debug)]
+pub struct ImageRow {
+    pub source: std::ops::Range<usize>,
+    pub destination: Arc<str>,
+    pub offset: u16,
+    pub height: u16,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct TableRow {
@@ -460,6 +468,13 @@ impl Rendered {
 pub fn render(source: &str, path: &Path, markdown: bool, width: u16, light: bool) -> Rendered {
     render_shared(Arc::from(source), path, markdown, width, light)
 }
+pub(crate) fn markdown_summary(
+    source: &str,
+    width: u16,
+    light: bool,
+) -> Vec<ratatui::text::Line<'static>> {
+    markdown::summary(source, usize::from(width), light)
+}
 pub(crate) fn render_shared(
     source: Arc<str>,
     path: &Path,
@@ -527,6 +542,7 @@ fn render_internal(
                 }
                 let display = safe_text(raw);
                 RowSource {
+                    image: None,
                     kind: RowKind::Code,
                     code_language: None,
                     code_copy: None,
@@ -620,3 +636,4 @@ pub fn truncate_name(name: &str, width: usize) -> String {
     }
     format!("{head}…{tail}")
 }
+pub mod image;

@@ -43,7 +43,7 @@ fn ready(s: &mut Sidebar) {
     wait(s, |s| {
         s.document
             .as_ref()
-            .is_some_and(|d| !d.loading && d.rendered.is_some())
+            .is_some_and(|d| !d.loading && d.rendered().is_some())
     });
 }
 fn key(s: &mut Sidebar, k: KeyCode) {
@@ -82,16 +82,11 @@ fn maximize_restores_layout_and_keeps_reading_position() {
     s.activate_reading(preview::ReadingAction::Link("#part-10".into()))
         .unwrap();
     wait(&mut s, |s| {
-        s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .is_some_and(|r| {
-                r.plain
-                    .get(s.document.as_ref().unwrap().offset().0)
-                    .is_some_and(|v| v == "Part 10")
-            })
+        s.document.as_ref().unwrap().rendered().is_some_and(|r| {
+            r.plain
+                .get(s.document.as_ref().unwrap().offset().0)
+                .is_some_and(|v| v == "Part 10")
+        })
     });
     let original = s.geometry;
     key(&mut s, KeyCode::Char('z'));
@@ -115,11 +110,10 @@ fn wrapping_preserves_code_source_copy_colors_and_can_be_disabled() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| r.projection.is_some())
     });
-    let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+    let r = s.document.as_ref().unwrap().rendered().unwrap();
     assert_eq!(s.document.as_ref().unwrap().offset().1, 0);
     assert!(
         r.plain
@@ -142,7 +136,7 @@ fn wrapping_preserves_code_source_copy_colors_and_can_be_disabled() {
     let d = s.document.as_mut().unwrap();
     d.selection = Some(((code[0], 0), (*code.last().unwrap(), usize::MAX)));
     assert_eq!(d.selected_text().as_deref(), Some(body));
-    let r = d.rendered.as_ref().unwrap();
+    let r = d.rendered().unwrap();
     let pair = r
         .projection
         .as_ref()
@@ -172,8 +166,7 @@ fn wrapping_preserves_code_source_copy_colors_and_can_be_disabled() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| r.projection.is_none())
     });
 }
@@ -192,8 +185,7 @@ fn source_code_wrapping_keeps_highlights_when_scrolling() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| !r.markdown)
     });
     key(&mut s, KeyCode::Char('w'));
@@ -201,8 +193,7 @@ fn source_code_wrapping_keeps_highlights_when_scrolling() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| r.projection.is_some())
     });
     s.document.as_mut().unwrap().scroll[0].0 = 100;
@@ -210,8 +201,7 @@ fn source_code_wrapping_keeps_highlights_when_scrolling() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .unwrap()
             .window
             .as_ref()
@@ -330,16 +320,11 @@ fn outline_opens_on_current_section_and_truncates_long_titles() {
     s.activate_reading(preview::ReadingAction::Link("#section-30".into()))
         .unwrap();
     wait(&mut s, |s| {
-        s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .is_some_and(|r| {
-                r.plain
-                    .get(s.document.as_ref().unwrap().offset().0)
-                    .is_some_and(|l| l == "Section 30")
-            })
+        s.document.as_ref().unwrap().rendered().is_some_and(|r| {
+            r.plain
+                .get(s.document.as_ref().unwrap().offset().0)
+                .is_some_and(|l| l == "Section 30")
+        })
     });
     key(&mut s, KeyCode::Char('t'));
     assert!(text(&draw(&mut s)).contains(">   Section 30"));
@@ -400,8 +385,7 @@ fn file_diff_shows_external_changes_without_modifying_disk() {
         s.document
             .as_ref()
             .unwrap()
-            .loaded
-            .as_ref()
+            .loaded()
             .is_some_and(|l| l.source.contains("new line"))
     });
     key(&mut s, KeyCode::Char('d'));
@@ -431,19 +415,12 @@ fn file_diff_handles_clean_editor_reload_and_unsaved_conflicts() {
         wait(&mut s, |s| {
             let d = s.document.as_ref().unwrap();
             if dirty {
-                d.editor.as_ref().unwrap().conflict
+                d.editor().unwrap().conflict
             } else {
-                d.loaded.as_ref().unwrap().source.contains("disk line")
+                d.loaded().unwrap().source.contains("disk line")
             }
         });
-        let local = s
-            .document
-            .as_ref()
-            .unwrap()
-            .editor
-            .as_ref()
-            .unwrap()
-            .source();
+        let local = s.document.as_ref().unwrap().editor().unwrap().source();
         s.menu();
         let m = s.menu.as_mut().unwrap();
         m.selected = m
@@ -464,13 +441,7 @@ fn file_diff_handles_clean_editor_reload_and_unsaved_conflicts() {
         );
         key(&mut s, KeyCode::Esc);
         assert_eq!(
-            s.document
-                .as_ref()
-                .unwrap()
-                .editor
-                .as_ref()
-                .unwrap()
-                .source(),
+            s.document.as_ref().unwrap().editor().unwrap().source(),
             local
         );
         assert_eq!(s.dirty(), dirty);
@@ -594,26 +565,17 @@ fn wrapped_markdown_and_source_comparison_keep_large_open_lazy() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| r.projection.is_some())
     });
-    let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+    let r = s.document.as_ref().unwrap().rendered().unwrap();
     assert!(!r.complete);
     assert!(r.plain.len() < 300);
     key(&mut s, KeyCode::Char('v'));
     wait(&mut s, |s| {
         text(&draw_immutable(s)).contains("## Heading 0")
     });
-    assert!(
-        !s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .unwrap()
-            .complete
-    );
+    assert!(!s.document.as_ref().unwrap().rendered().unwrap().complete);
 }
 
 #[test]
@@ -825,8 +787,7 @@ fn reading_history_supports_files_goto_search_forward_and_new_branch() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| !r.markdown)
     });
     let goto = |s: &mut Sidebar, n: &str| {
@@ -927,8 +888,7 @@ fn diff_hunks_navigate_and_patch_remains_exact() {
         s.document
             .as_ref()
             .unwrap()
-            .loaded
-            .as_ref()
+            .loaded()
             .unwrap()
             .source
             .contains("second change")
@@ -977,13 +937,7 @@ fn file_information_uses_disk_metadata_and_blocks_preview_input() {
     key(&mut s, KeyCode::Char('i'));
     assert!(text(&draw(&mut s)).contains("Truncated: Yes"));
     assert_eq!(
-        s.document
-            .as_ref()
-            .unwrap()
-            .loaded
-            .as_ref()
-            .unwrap()
-            .disk_bytes,
+        s.document.as_ref().unwrap().loaded().unwrap().disk_bytes,
         (preview::MAX_BYTES + 10) as u64
     );
 }
@@ -1018,8 +972,7 @@ fn bookmarks_survive_sidebar_restart_edit_delete_and_source_shifts() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| !r.markdown)
     });
     key(&mut s, KeyCode::Char('g'));
@@ -1126,15 +1079,7 @@ fn deferred_markdown_search_records_history_after_search_prompt_closes() {
             .collect::<String>()
     );
     let mut s = f.open(&source);
-    assert!(
-        !s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .unwrap()
-            .complete
-    );
+    assert!(!s.document.as_ref().unwrap().rendered().unwrap().complete);
     key(&mut s, KeyCode::Char('/'));
     s.paste("needle-at-tail").unwrap();
     key(&mut s, KeyCode::Enter);
@@ -1182,4 +1127,36 @@ fn more_and_tab_context_menus_support_mouse_selection() {
     assert!(s.menu.is_none());
     assert_eq!(s.document.as_ref().unwrap().path, other);
     assert!(!text(&draw(&mut s)).contains('×'));
+}
+
+#[test]
+fn clean_active_tab_has_no_dirty_marker_and_progress_stays_on_preview_edge() {
+    let f = Fixture::new();
+    let mut s = f.open("# First\n\nReading body\n");
+    fs::write(f.0.join("other.md"), "# Other\n").unwrap();
+    s.open(f.0.join("other.md"), true).unwrap();
+    ready(&mut s);
+    let b = draw(&mut s);
+    let rect = s.geometry.preview.unwrap();
+    let row = |y| {
+        (rect.x..rect.right())
+            .map(|x| b[(x, y)].symbol())
+            .collect::<String>()
+    };
+    assert!(
+        !row(rect.y + 2).contains('●'),
+        "active selection is not an unsaved change"
+    );
+    assert!(row(rect.bottom() - 1).contains("Markdown"));
+    s.focus = devtabs::sidebar::Focus::Terminal;
+    let b = draw(&mut s);
+    let header = (rect.x..rect.right())
+        .map(|x| b[(x, rect.y)].symbol())
+        .collect::<String>();
+    assert!(
+        !header.contains("[E]") && !header.contains("[Z]"),
+        "blurred actions should be hidden: {header}"
+    );
+    assert!(header.contains("More") || header.contains("更多"));
+    assert!(header.contains("other.md"));
 }

@@ -1,24 +1,35 @@
 pub mod app;
+pub mod appearance;
 pub mod bench;
 pub mod bookmarks;
 pub mod cli;
 pub mod config;
 pub mod editor;
 pub mod events;
+pub mod explorer;
 pub mod files;
 pub mod host;
+pub mod i18n;
 pub mod input;
 pub mod install;
 pub mod launch;
 pub mod overview;
 pub mod perf;
 pub mod platform;
+pub mod presentation;
 pub mod preview;
+pub mod project_profile;
 pub mod protocol;
+pub mod recovery;
 pub mod remote;
 pub mod selection;
 pub mod session;
 pub mod sidebar;
+pub mod task_runtime;
 pub mod terminal;
 pub mod ui;
 pub mod windows;
+
+pub mod image_output;
+
+rust_i18n::i18n!("src/i18n", fallback = "en-US");

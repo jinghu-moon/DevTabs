@@ -1,3 +1,4 @@
+use crate::presentation::{Floating, Placement, Target};
 use crate::{
     config,
     launch::Options,
@@ -23,12 +24,14 @@ struct Managed {
     session: Session,
     owner: Option<(String, Instant)>,
     stop: Option<Instant>,
+    placement: Placement,
 }
 struct Workspace {
     id: String,
     options: Options,
     sessions: Vec<Managed>,
     finished: Option<Instant>,
+    view_ready: bool,
 }
 impl Workspace {
     fn info(&self) -> WorkspaceInfo {
@@ -50,6 +53,7 @@ impl Managed {
             shell_pid: s.shell_pid,
             status: s.status.clone(),
             command: s.command.clone(),
+            placement: self.placement,
         }
     }
     fn own(&mut self, client: &str, takeover: bool) -> Result<()> {
@@ -74,7 +78,7 @@ impl Managed {
 #[derive(Default)]
 struct Host {
     workspaces: HashMap<String, Workspace>,
-    debug: Option<String>,
+    floating: Floating,
     shutdown: bool,
 }
 
@@ -158,6 +162,21 @@ pub fn ensure() -> Result<()> {
         thread::sleep(Duration::from_millis(50));
     }
 }
+/// Read-only status polling can outlive the host's empty-workspace timeout.
+/// Reconnect once per poll, in the background worker; never launch a workspace.
+pub fn workspaces() -> Result<Vec<WorkspaceInfo>> {
+    let response = match protocol::rpc(Request::List) {
+        Err(error) if protocol::disconnected(&error) => {
+            ensure().context("Reconnect DevTabs host")?;
+            protocol::rpc(Request::List)?
+        }
+        result => result?,
+    };
+    match response {
+        Response::Workspaces(workspaces) => Ok(workspaces),
+        _ => anyhow::bail!("Invalid host response"),
+    }
+}
 pub fn serve() -> Result<()> {
     let name = protocol::endpoint();
     eprintln!("Host {} listening at {}", std::process::id(), name);
@@ -201,10 +220,17 @@ pub fn serve() -> Result<()> {
         }
         match listener.accept() {
             Ok(mut stream) => {
+                // A visible overview polls even with no workspaces. Idle means
+                // no clients, so retain the empty host while it is being used.
+                empty = Instant::now();
                 let state = state.clone();
                 handles.push(thread::spawn(move || {
                     let result = (|| -> Result<Response> {
-                        let request = protocol::receive(&mut stream)?;
+                        let mut request = protocol::receive(&mut stream)?;
+                        if let Request::Open { options } = &mut request {
+                            // History I/O must never hold the host's session/input mutex.
+                            options.resolve_latest();
+                        }
                         let mut host = state
                             .lock()
                             .map_err(|_| anyhow::anyhow!("Host state unavailable"))?;
@@ -225,21 +251,49 @@ pub fn serve() -> Result<()> {
             let mut host = state.lock().unwrap_or_else(|p| p.into_inner());
             if last_sweep.elapsed() >= Duration::from_secs(1) {
                 last_sweep = Instant::now();
+                host.floating.expire();
+                let mut expired = vec![];
+                for work in host.workspaces.values_mut() {
+                    for m in &mut work.sessions {
+                        if m.placement == Placement::Floating
+                            && m.owner
+                                .as_ref()
+                                .is_none_or(|(_, at)| at.elapsed() > Duration::from_secs(3))
+                        {
+                            m.placement = Placement::Collapsed;
+                            m.owner = None;
+                            expired.push(Target {
+                                workspace: work.id.clone(),
+                                session: m.id.clone(),
+                            });
+                        }
+                    }
+                }
+                for target in expired {
+                    host.floating.remove(&target);
+                }
+
                 host.workspaces.retain(|_, w| {
                     if w.sessions.iter().any(|s| s.session.running()) {
                         w.finished = None;
                         true
                     } else {
-                        w.finished.get_or_insert_with(Instant::now).elapsed()
+                        if w.finished.get_or_insert_with(Instant::now).elapsed()
                             < Duration::from_secs(3)
+                        {
+                            true
+                        } else if let Err(e) = crate::recovery::remove(&w.id) {
+                            eprintln!("Remove completed launch record: {e:#}");
+                            true
+                        } else {
+                            false
+                        }
                     }
                 });
-                if host
-                    .debug
-                    .as_ref()
-                    .is_some_and(|id| !host.workspaces.contains_key(id))
+                if let Some(ticket) = host.floating.target()
+                    && !host.workspaces.contains_key(&ticket.target.workspace)
                 {
-                    host.debug = None;
+                    host.floating.remove(&ticket.target);
                 }
             }
             if host.shutdown {
@@ -273,9 +327,12 @@ impl Host {
                     .workspaces
                     .get_mut(&workspace)
                     .context("Unknown workspace")?;
+                crate::recovery::update_layout(&workspace, layout)?;
                 work.options.layout = layout;
                 for session in &mut work.sessions {
-                    session.owner = None;
+                    if session.placement == Placement::Docked {
+                        session.owner = None;
+                    }
                 }
                 Ok(Response::Ok)
             }
@@ -285,11 +342,20 @@ impl Host {
             Request::List => Ok(Response::Workspaces(
                 self.workspaces.values().map(Workspace::info).collect(),
             )),
-            Request::Open { mut options } => {
+            Request::Open { options } => {
+                let mut options = *options;
                 if let Some(id) = &options.workspace {
-                    return Ok(Response::Workspace(
+                    return Ok(Response::Workspace(Box::new(
                         self.workspaces.get(id).context("Unknown workspace")?.info(),
-                    ));
+                    )));
+                }
+                if let Some(old) = &options.recovery_id
+                    && let Some(work) = self
+                        .workspaces
+                        .values()
+                        .find(|w| w.options.recovery_id.as_ref() == Some(old))
+                {
+                    return Ok(Response::Workspace(Box::new(work.info())));
                 }
                 options.validate()?;
                 config::Config::update(|c| {
@@ -308,11 +374,11 @@ impl Host {
                         })
                         .min_by_key(|w| (w.options.new_instance, w.id.clone()))
                 {
-                    return Ok(Response::Workspace(work.info()));
+                    return Ok(Response::Workspace(Box::new(work.info())));
                 }
                 let id = uuid::Uuid::new_v4().to_string();
                 let mut sessions = Vec::new();
-                for index in 0..2 + options.extra_sessions.len() {
+                for index in 0..options.terminal_count() {
                     let sid = uuid::Uuid::new_v4().to_string();
                     let name = if index == 0 {
                         "Agent".into()
@@ -353,6 +419,7 @@ impl Host {
                         session,
                         owner: None,
                         stop: None,
+                        placement: Placement::Docked,
                     });
                 }
                 let workspace = Workspace {
@@ -360,12 +427,45 @@ impl Host {
                     options,
                     sessions,
                     finished: None,
+                    view_ready: false,
                 };
+                crate::recovery::register(&id, &workspace.options)?;
                 let info = workspace.info();
                 self.workspaces.insert(id, workspace);
-                Ok(Response::Workspace(info))
+                Ok(Response::Workspace(Box::new(info)))
+            }
+            Request::ViewReady { workspace } => {
+                let work = self
+                    .workspaces
+                    .get_mut(&workspace)
+                    .context("Unknown workspace")?;
+                let first = !work.view_ready;
+                work.view_ready = true;
+                Ok(Response::FirstView(first))
+            }
+            Request::PrepareFloat { target } => {
+                self.managed(&target.workspace, &target.session)?;
+                let plan = self.floating.prepare(target);
+                Ok(Response::FloatPlan(plan))
+            }
+            Request::FloatingTarget => Ok(Response::Floating(self.floating.target())),
+            Request::CancelFloat { revision } => {
+                self.floating.cancel(revision);
+                Ok(Response::Ok)
+            }
+            Request::Present { target, placement } => {
+                anyhow::ensure!(
+                    placement != Placement::Floating,
+                    "Use PrepareFloat before attaching a floating view"
+                );
+                let m = self.managed(&target.workspace, &target.session)?;
+                m.placement = placement;
+                m.owner = None;
+                self.floating.remove(&target);
+                Ok(Response::Ok)
             }
             Request::Attach {
+                floating,
                 takeover,
                 workspace,
                 session,
@@ -373,8 +473,42 @@ impl Host {
                 rows,
                 cols,
             } => {
+                crate::perf::add(crate::perf::Count::TerminalAttaches, 1);
+                let _attach_perf =
+                    floating.map(|_| crate::perf::span(crate::perf::Metric::FloatingAttach));
+                let target = Target {
+                    workspace: workspace.clone(),
+                    session: session.clone(),
+                };
+                if let Some(revision) = floating {
+                    self.floating.validate(&target, revision)?;
+                    let moving = self.floating.is_pending(revision);
+                    if !moving {
+                        self.managed(&workspace, &session)?.own(&client, false)?;
+                    }
+                    // Validate dimensions before taking the source view's lease.
+                    self.managed(&workspace, &session)?
+                        .session
+                        .resize(rows, cols)?;
+                    if let Some(old) = self.floating.commit()
+                        && old.target != target
+                        && let Ok(m) = self.managed(&old.target.workspace, &old.target.session)
+                    {
+                        m.placement = Placement::Collapsed;
+                        m.owner = None;
+                    }
+                    let m = self.managed(&workspace, &session)?;
+                    m.placement = Placement::Floating;
+                    m.own(&client, moving)?;
+                } else {
+                    let m = self.managed(&workspace, &session)?;
+                    anyhow::ensure!(
+                        m.placement == Placement::Docked,
+                        "Session is collapsed or displayed in a floating view"
+                    );
+                    m.own(&client, takeover)?;
+                }
                 let m = self.managed(&workspace, &session)?;
-                m.own(&client, takeover)?;
                 m.session.resize(rows, cols)?;
                 Ok(Response::Ok)
             }
@@ -397,6 +531,10 @@ impl Host {
                 screen.set_scrollback(0);
                 let (rows, cols) = screen.size();
                 let formatted = screen.state_formatted();
+                crate::perf::add(
+                    crate::perf::Count::TerminalFrameBytes,
+                    formatted.len() as u64,
+                );
                 let mut past = Vec::new();
                 if history {
                     let count = screen.scrollback_len();
@@ -447,25 +585,47 @@ impl Host {
             } => {
                 let m = self.managed(&workspace, &session)?;
                 m.check(&client)?;
+                crate::perf::add(crate::perf::Count::TerminalResizes, 1);
                 m.session.resize(rows, cols)?;
                 Ok(Response::Ok)
             }
             Request::Detach { client } => {
+                crate::perf::add(crate::perf::Count::TerminalDetaches, 1);
+                let mut released = vec![];
                 for workspace in self.workspaces.values_mut() {
                     for session in &mut workspace.sessions {
                         if session.owner.as_ref().is_some_and(|(id, _)| id == &client) {
                             session.owner = None;
+                            if session.placement == Placement::Floating {
+                                session.placement = Placement::Collapsed;
+                                released.push(Target {
+                                    workspace: workspace.id.clone(),
+                                    session: session.id.clone(),
+                                });
+                            }
                         }
                     }
+                }
+                for target in released {
+                    self.floating.remove(&target);
                 }
                 Ok(Response::Ok)
             }
             Request::Close { workspace } => {
-                self.workspaces
+                anyhow::ensure!(
+                    self.workspaces.contains_key(&workspace),
+                    "Unknown workspace"
+                );
+                crate::recovery::remove(&workspace)?;
+                let removed = self
+                    .workspaces
                     .remove(&workspace)
                     .context("Unknown workspace")?;
-                if self.debug.as_ref() == Some(&workspace) {
-                    self.debug = None;
+                for m in removed.sessions {
+                    self.floating.remove(&Target {
+                        workspace: workspace.clone(),
+                        session: m.id.clone(),
+                    });
                 }
                 Ok(Response::Ok)
             }
@@ -506,13 +666,6 @@ impl Host {
                     true,
                 ))?;
                 Ok(Response::Ok)
-            }
-            Request::DebugTarget { workspace } => {
-                if let Some(id) = workspace {
-                    anyhow::ensure!(self.workspaces.contains_key(&id), "Unknown workspace");
-                    self.debug = Some(id);
-                }
-                Ok(Response::Target(self.debug.clone()))
             }
             Request::Shutdown => {
                 anyhow::ensure!(

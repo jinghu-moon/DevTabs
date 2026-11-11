@@ -286,12 +286,12 @@ fn panel_edit_projection_unsaved_cancel_save_and_external_conflict() {
     s.update_layout(Rect::new(0, 0, 160, 30), false);
     until("preview ready", || {
         s.tick(true);
-        s.document.as_ref().is_some_and(|d| d.rendered.is_some())
+        s.document.as_ref().is_some_and(|d| d.rendered().is_some())
     });
     s.key(key(KeyCode::Char('e'))).unwrap();
     until("editor ready", || {
         s.tick(true);
-        s.document.as_ref().is_some_and(|d| d.editor.is_some())
+        s.document.as_ref().is_some_and(|d| d.editor().is_some())
     });
     assert_eq!(s.focus, Focus::Editor);
     s.paste("新内容").unwrap();
@@ -313,20 +313,13 @@ fn panel_edit_projection_unsaved_cancel_save_and_external_conflict() {
     fs::write(&p, "external\n").unwrap();
     until("conflict marked", || {
         s.tick(true);
-        s.document
-            .as_ref()
-            .unwrap()
-            .editor
-            .as_ref()
-            .unwrap()
-            .conflict
+        s.document.as_ref().unwrap().editor().unwrap().conflict
     });
     assert!(
         s.document
             .as_ref()
             .unwrap()
-            .editor
-            .as_ref()
+            .editor()
             .unwrap()
             .text()
             .contains("local")
@@ -334,7 +327,7 @@ fn panel_edit_projection_unsaved_cancel_save_and_external_conflict() {
     s.key(ctrl('s')).unwrap();
     until("save refused", || {
         s.tick(true);
-        !s.document.as_ref().unwrap().editor.as_ref().unwrap().saving
+        !s.document.as_ref().unwrap().editor().unwrap().saving
     });
     assert_eq!(fs::read_to_string(&p).unwrap(), "external\n");
     s.open(other.clone(), true).unwrap();
@@ -343,7 +336,7 @@ fn panel_edit_projection_unsaved_cancel_save_and_external_conflict() {
         s.tick(true);
         s.document
             .as_ref()
-            .is_some_and(|d| d.path == other && d.loaded.is_some())
+            .is_some_and(|d| d.path == other && d.loaded().is_some())
     });
     assert!(!s.dirty());
 }
@@ -401,23 +394,15 @@ fn markdown_projection_menus_and_save_revision_keep_single_buffer() {
     s.open(p.clone(), true).unwrap();
     until("loaded", || {
         s.tick(true);
-        s.document.as_ref().unwrap().loaded.is_some()
+        s.document.as_ref().unwrap().loaded().is_some()
     });
     menu(&mut s, |c| matches!(c, Command::Edit));
     until("editing", || {
         s.tick(true);
-        s.document.as_ref().unwrap().editor.is_some()
+        s.document.as_ref().unwrap().editor().is_some()
     });
     s.paste("# UNSAVED\n").unwrap();
-    let cursor = s
-        .document
-        .as_ref()
-        .unwrap()
-        .editor
-        .as_ref()
-        .unwrap()
-        .area
-        .cursor();
+    let cursor = s.document.as_ref().unwrap().editor().unwrap().area.cursor();
     menu(&mut s, |c| matches!(c, Command::Project));
     s.update_layout(Rect::new(0, 0, 160, 30), false);
     until("buffer projection", || {
@@ -425,21 +410,13 @@ fn markdown_projection_menus_and_save_revision_keep_single_buffer() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| r.markdown && r.plain.iter().any(|l| l.contains("UNSAVED")))
     });
     assert_eq!(fs::read_to_string(&p).unwrap(), "# original\n");
     s.key(key(KeyCode::Char('e'))).unwrap();
     assert_eq!(
-        s.document
-            .as_ref()
-            .unwrap()
-            .editor
-            .as_ref()
-            .unwrap()
-            .area
-            .cursor(),
+        s.document.as_ref().unwrap().editor().unwrap().area.cursor(),
         cursor
     );
     s.open(other.clone(), true).unwrap();
@@ -448,7 +425,7 @@ fn markdown_projection_menus_and_save_revision_keep_single_buffer() {
     s.paste("newer").unwrap(); // mutate after the saved snapshot, before completion
     until("save completes even when sidebar inactive", || {
         s.tick(false);
-        !s.document.as_ref().unwrap().editor.as_ref().unwrap().saving
+        !s.document.as_ref().unwrap().editor().unwrap().saving
     });
     assert_eq!(fs::read_to_string(&p).unwrap(), "# UNSAVED\n# original\n");
     assert!(s.dirty() && s.modal());
@@ -460,8 +437,7 @@ fn markdown_projection_menus_and_save_revision_keep_single_buffer() {
         s.document
             .as_ref()
             .unwrap()
-            .editor
-            .as_ref()
+            .editor()
             .unwrap()
             .area
             .search_pattern()
@@ -472,7 +448,8 @@ fn markdown_projection_menus_and_save_revision_keep_single_buffer() {
     s.key(key(KeyCode::Char('d'))).unwrap();
     until("navigated", || {
         s.tick(true);
-        s.document.as_ref().unwrap().path == other && s.document.as_ref().unwrap().loaded.is_some()
+        s.document.as_ref().unwrap().path == other
+            && s.document.as_ref().unwrap().loaded().is_some()
     });
 }
 
@@ -528,12 +505,12 @@ fn visible_panel_controls_toggle_restore_edit_and_guard_close() {
     s.update_layout(area, false);
     until("preview ready", || {
         s.tick(true);
-        s.document.as_ref().unwrap().loaded.is_some()
+        s.document.as_ref().unwrap().loaded().is_some()
     });
     click(&mut s, &mut terminal, "[E]");
     until("edit button", || {
         s.tick(true);
-        s.document.as_ref().unwrap().editor.is_some()
+        s.document.as_ref().unwrap().editor().is_some()
     });
     s.paste("local").unwrap();
     click(&mut s, &mut terminal, "[X]");

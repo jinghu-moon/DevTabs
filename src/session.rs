@@ -93,9 +93,25 @@ impl Client {
         }
     }
     pub fn attach(&mut self, workspace: &str, rows: u16, cols: u16, takeover: bool) -> Result<()> {
+        self.attach_view(workspace, rows, cols, takeover, None)
+    }
+    pub fn attach_view(
+        &mut self,
+        workspace: &str,
+        rows: u16,
+        cols: u16,
+        takeover: bool,
+        floating: Option<u64>,
+    ) -> Result<()> {
         if self.remote.is_none() {
-            let remote =
-                crate::remote::Remote::attach(workspace, self.info.clone(), rows, cols, takeover)?;
+            let remote = crate::remote::Remote::attach_view(
+                workspace,
+                self.info.clone(),
+                rows,
+                cols,
+                takeover,
+                floating,
+            )?;
             self.shared = remote.shared_clone();
             self.remote = Some(remote);
         } else {

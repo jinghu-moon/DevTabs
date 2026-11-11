@@ -4,6 +4,7 @@ use std::collections::{BTreeSet, VecDeque};
 
 #[derive(Default)]
 pub(super) struct DocumentReading {
+    pub images: super::images::InlineImages,
     pub expanded: BTreeSet<usize>,
     pub seek: Option<usize>,
     pub fragment: Option<String>,
@@ -14,10 +15,17 @@ pub(super) struct DocumentReading {
 #[derive(Clone)]
 pub(super) struct Bookmark {
     path: PathBuf,
-    byte: usize,
-    left: usize,
-    markdown: bool,
-    expanded: BTreeSet<usize>,
+    position: Location,
+}
+#[derive(Clone)]
+enum Location {
+    Text {
+        byte: usize,
+        left: usize,
+        markdown: bool,
+        expanded: BTreeSet<usize>,
+    },
+    Image(preview::image::View),
 }
 #[derive(Default)]
 pub(super) struct ReadingUi {
@@ -29,6 +37,20 @@ pub(super) struct ReadingUi {
     pub drag: Option<super::scroll::Drag>,
 }
 impl ReadingUi {
+    pub(super) fn remap_paths(&mut self, old: &std::path::Path, new: Option<&std::path::Path>) {
+        for entries in [&mut self.memory, &mut self.back, &mut self.forward] {
+            entries.retain_mut(|bookmark| {
+                if bookmark.path.starts_with(old) {
+                    if let Some(new) = new {
+                        bookmark.path = crate::explorer::relocate(&bookmark.path, old, new);
+                    } else {
+                        return false;
+                    }
+                }
+                true
+            });
+        }
+    }
     pub(super) fn record(&mut self, bookmark: Bookmark) {
         self.forward.clear();
         self.back.push_back(bookmark);
@@ -58,7 +80,7 @@ impl Outline {
     }
     fn matches<'a>(&self, d: &'a Document) -> Vec<&'a preview::reading::Heading> {
         let filter = self.filter.to_lowercase();
-        d.rendered.as_ref().map_or(Vec::new(), |r| {
+        d.rendered().map_or(Vec::new(), |r| {
             r.reading
                 .headings
                 .iter()
@@ -69,8 +91,7 @@ impl Outline {
 }
 impl Document {
     pub(super) fn reading_byte(&self) -> usize {
-        self.rendered
-            .as_ref()
+        self.rendered()
             .and_then(|r| {
                 r.rows
                     .iter()
@@ -84,10 +105,44 @@ impl Document {
     pub(super) fn bookmark(&self) -> Bookmark {
         Bookmark {
             path: self.path.clone(),
-            byte: self.reading_byte(),
-            left: self.offset().1,
-            markdown: self.markdown,
-            expanded: self.reader.expanded.clone(),
+            position: if let Some(i) = self.image() {
+                Location::Image(i.view)
+            } else {
+                Location::Text {
+                    byte: self.reading_byte(),
+                    left: self.offset().1,
+                    markdown: self.markdown,
+                    expanded: self.reader.expanded.clone(),
+                }
+            },
+        }
+    }
+    fn restore_bookmark(&mut self, b: &Bookmark) {
+        match &b.position {
+            Location::Image(view) => {
+                if let Some(i) = self.image_mut() {
+                    i.view = *view;
+                    i.release();
+                }
+            }
+            Location::Text {
+                byte,
+                left,
+                markdown,
+                expanded,
+            } if !self.is_image() => {
+                if self.markdown != *markdown || self.reader.expanded != *expanded {
+                    self.set_rendered(None);
+                    self.render_pending = false;
+                    self.render_id = 0;
+                }
+                self.markdown = *markdown;
+                self.reader.seek = Some(*byte);
+                self.scroll[usize::from(*markdown)].1 = *left;
+                self.reader.expanded = expanded.clone();
+                self.restore_reading_position();
+            }
+            _ => {}
         }
     }
     pub(super) fn restore_reading_position(&mut self) {
@@ -95,7 +150,7 @@ impl Document {
             self.reader.seek = if fragment.is_empty() {
                 Some(0)
             } else {
-                self.rendered.as_ref().and_then(|r| {
+                self.rendered().and_then(|r| {
                     r.reading
                         .headings
                         .iter()
@@ -105,7 +160,7 @@ impl Document {
             };
         }
         if let Some(byte) = self.reader.seek {
-            let ancestors = self.rendered.as_ref().map_or(Vec::new(), |r| {
+            let ancestors = self.rendered().map_or(Vec::new(), |r| {
                 r.reading
                     .details
                     .iter()
@@ -122,13 +177,13 @@ impl Document {
                 };
             }
             if changed {
-                self.rendered = None;
+                self.set_rendered(None);
                 self.render_pending = false;
                 self.render_id = 0;
                 return;
             }
         }
-        if let Some(r) = &self.rendered
+        if let Some(r) = self.rendered()
             && let Some(byte) = self.reader.seek
         {
             let known = r.complete
@@ -146,7 +201,7 @@ impl Document {
     /// Screen rows include a pinned table header; all hit-testing uses the same projection.
     pub(super) fn screen_rows(&self, height: usize) -> Vec<usize> {
         let top = self.offset().0;
-        let Some(r) = &self.rendered else {
+        let Some(r) = self.rendered() else {
             return Vec::new();
         };
         let mut rows = Vec::with_capacity(height);
@@ -178,10 +233,7 @@ impl Sidebar {
         if let Some(d) = &mut self.document
             && let Some(b) = self.reader.memory.iter().find(|b| b.path == d.path)
         {
-            d.markdown = b.markdown;
-            d.reader.seek = Some(b.byte);
-            d.scroll[usize::from(b.markdown)].1 = b.left;
-            d.reader.expanded = b.expanded.clone();
+            d.restore_bookmark(b);
         }
     }
     pub(super) fn push_back(&mut self) {
@@ -215,7 +267,7 @@ impl Sidebar {
             &self.reader.back
         };
         let Some(b) = stack.back().cloned() else {
-            self.say("No reading history", true);
+            self.say(crate::i18n::t("preview.no_history"), true);
             return Ok(());
         };
         if self.dirty() && self.document.as_ref().is_some_and(|d| d.path != b.path) {
@@ -244,16 +296,8 @@ impl Sidebar {
             to.pop_front();
         }
         if let Some(d) = &mut self.document {
-            if d.markdown != b.markdown || d.reader.expanded != b.expanded {
-                d.rendered = None;
-                d.render_pending = false;
-                d.render_id = 0;
-            }
-            d.reader.expanded = b.expanded;
-            d.markdown = b.markdown;
-            d.offset_mut().1 = b.left;
+            d.restore_bookmark(&b);
         }
-        self.seek_reading(b.byte);
         Ok(())
     }
     pub fn activate_reading(&mut self, action: preview::ReadingAction) -> Result<()> {
@@ -268,7 +312,7 @@ impl Sidebar {
                         d.reader.expanded.insert(id);
                     }
                     d.reader.seek = Some(id);
-                    d.rendered = None;
+                    d.set_rendered(None);
                     d.render_pending = false;
                     d.render_id = 0;
                     d.selection = None;
@@ -278,7 +322,7 @@ impl Sidebar {
                 let byte = self
                     .document
                     .as_ref()
-                    .and_then(|d| d.rendered.as_ref())
+                    .and_then(|d| d.rendered())
                     .and_then(|r| {
                         r.reading
                             .footnotes
@@ -290,7 +334,7 @@ impl Sidebar {
                     self.push_back();
                     self.seek_reading(byte);
                 } else {
-                    self.say("Footnote not found", true);
+                    self.say(crate::i18n::t("preview.no_footnote"), true);
                 }
             }
             Link(target) | Image(target) => {
@@ -304,7 +348,7 @@ impl Sidebar {
                         let byte = if anchor.is_empty() {
                             Some(0)
                         } else {
-                            d.rendered.as_ref().and_then(|r| {
+                            d.rendered().and_then(|r| {
                                 r.reading
                                     .headings
                                     .iter()
@@ -316,15 +360,19 @@ impl Sidebar {
                             self.push_back();
                             self.seek_reading(byte);
                         } else {
-                            self.say("Heading not found", true);
+                            self.say(crate::i18n::t("preview.no_heading"), true);
                         }
                     }
                     Destination::File(path, fragment) => {
-                        let path = dunce::canonicalize(&path)
-                            .with_context(|| format!("Cannot open {}", path.display()))?;
+                        let path = if image {
+                            preview::image::local_path(&d.path, &target)?
+                        } else {
+                            dunce::canonicalize(&path)
+                                .with_context(|| format!("Cannot open {}", path.display()))?
+                        };
                         ensure!(path.is_file(), "Link is not a file");
                         if image {
-                            files::external(&path, false)?;
+                            self.open(path, true)?;
                         } else {
                             if self.dirty()
                                 && self.document.as_ref().is_some_and(|d| d.path != path)
@@ -355,7 +403,7 @@ impl Sidebar {
         if self.document.as_ref().is_some_and(|d| d.markdown) {
             let selected = self.document.as_ref().map_or(0, |d| {
                 let byte = d.reading_byte();
-                d.rendered.as_ref().map_or(0, |r| {
+                d.rendered().map_or(0, |r| {
                     r.reading
                         .headings
                         .partition_point(|h| h.source.start <= byte)
@@ -430,7 +478,7 @@ impl Sidebar {
         crate::ui::clear_popup(frame, r);
         frame.render_widget(
             Block::bordered()
-                .title(" Outline ")
+                .title(crate::i18n::t("outline_title"))
                 .title_bottom(" ↑↓ Enter · Esc ")
                 .style(base)
                 .border_style(Style::new().fg(Color::Cyan)),
@@ -471,7 +519,10 @@ impl Sidebar {
             );
         }
         if rows.is_empty() {
-            frame.render_widget(Paragraph::new("No headings found").style(base), layout.list);
+            frame.render_widget(
+                Paragraph::new(crate::i18n::t("no_headings")).style(base),
+                layout.list,
+            );
         }
     }
     fn outline_anchor(&self) -> Option<Rect> {
@@ -479,7 +530,7 @@ impl Sidebar {
         header_buttons(
             self.geometry.preview?,
             d.editing,
-            d.loaded.as_ref().is_some_and(|l| l.markdown()),
+            d.loaded().is_some_and(|l| l.markdown()),
             d.markdown,
         )
         .into_iter()
@@ -605,7 +656,7 @@ impl Sidebar {
         let Some(d) = &self.document else {
             return;
         };
-        let Some(r) = &d.rendered else {
+        let Some(r) = d.rendered() else {
             return;
         };
         let Some(mapping) = r.rows.get(row) else {
@@ -619,8 +670,12 @@ impl Sidebar {
             .reader
             .copied
             .is_some_and(|(r, t)| r == row && t.elapsed() < Duration::from_secs(2));
-        let label = if copied { "[Copied]" } else { "[Copy]" };
-        let available = content.width.saturating_sub(label.len() as u16 + 1) as usize;
+        let label = if copied {
+            crate::i18n::t("ui.copied")
+        } else {
+            crate::i18n::t("ui.copy")
+        };
+        let available = content.width.saturating_sub(label.width() as u16 + 1) as usize;
         let text = if language.width() <= available {
             format!("{language} {label}")
         } else {
@@ -645,7 +700,7 @@ impl Sidebar {
         let Some(d) = &mut self.document else {
             return Ok(false);
         };
-        let Some(r) = &d.rendered else {
+        let Some(r) = d.rendered() else {
             return Ok(false);
         };
         let copy_width = if d
@@ -653,9 +708,9 @@ impl Sidebar {
             .copied
             .is_some_and(|(r, t)| r == row && t.elapsed() < Duration::from_secs(2))
         {
-            8
+            crate::i18n::t("ui.copied").width() as u16
         } else {
-            6
+            crate::i18n::t("ui.copy").width() as u16
         };
         if let Some(copy) = r.rows.get(row).and_then(|r| r.code_copy.as_ref())
             && inner.width >= copy_width
@@ -663,7 +718,7 @@ impl Sidebar {
         {
             files::copy(copy.to_string())?;
             d.reader.copied = Some((row, Instant::now()));
-            self.say("Copied code block", true);
+            self.say(crate::i18n::t("ui.copied_code_block"), true);
             return Ok(true);
         }
         if let Some(action) = r.action_at(row, col) {

@@ -28,7 +28,7 @@ fn ready(s: &mut Sidebar) {
         s.tick(true);
         if s.document
             .as_ref()
-            .is_some_and(|d| !d.loading && d.rendered.is_some())
+            .is_some_and(|d| !d.loading && d.rendered().is_some())
         {
             break;
         }
@@ -52,7 +52,7 @@ fn source_preview_does_not_keep_whole_file_colored_spans() {
     s.open(path, true).unwrap();
     s.update_layout(Rect::new(0, 0, 100, 40), false);
     ready(&mut s);
-    let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+    let r = s.document.as_ref().unwrap().rendered().unwrap();
     let colored_rows = r
         .text
         .lines
@@ -210,8 +210,7 @@ fn fast_scrolling_draws_current_text_and_only_highlights_after_settling() {
             s.document
                 .as_ref()
                 .unwrap()
-                .rendered
-                .as_ref()
+                .rendered()
                 .unwrap()
                 .window
                 .as_ref()
@@ -248,8 +247,7 @@ fn fast_scrolling_draws_current_text_and_only_highlights_after_settling() {
     loop {
         s.tick(true);
         let d = s.document.as_ref().unwrap();
-        if d.rendered
-            .as_ref()
+        if d.rendered()
             .unwrap()
             .window
             .as_ref()
@@ -265,7 +263,7 @@ fn fast_scrolling_draws_current_text_and_only_highlights_after_settling() {
     let d = s.document.as_ref().unwrap();
     let settled_color_ms = last_move.elapsed().as_secs_f64() * 1000.0;
     assert_eq!(d.highlight_stats().unwrap().requests, requests + 1);
-    let window = d.rendered.as_ref().unwrap().window.as_ref().unwrap();
+    let window = d.rendered().unwrap().window.as_ref().unwrap();
     assert!(
         window
             .line(7000)
@@ -317,7 +315,7 @@ fn source_viewport_workload() {
         let open_ms = start.elapsed().as_secs_f64() * 1000.0;
         let b = draw(&mut s);
         std::hint::black_box(b);
-        let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+        let r = s.document.as_ref().unwrap().rendered().unwrap();
         let spans = r.text.lines.iter().map(|l| l.spans.len()).sum::<usize>();
         let retained_colored_rows = r
             .text

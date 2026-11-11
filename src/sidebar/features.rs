@@ -43,10 +43,9 @@ pub(super) struct DiffView {
 
 impl Document {
     pub(super) fn source_snapshot(&self) -> Option<Arc<str>> {
-        self.rendered
-            .as_ref()
+        self.rendered()
             .map(|r| r.source.clone())
-            .or_else(|| self.loaded.as_ref().map(|l| l.source.clone()))
+            .or_else(|| self.loaded().map(|l| l.source.clone()))
     }
     fn update_source_index(&mut self) {
         let Some(source) = self.source_snapshot() else {
@@ -78,7 +77,7 @@ impl Document {
     }
     pub(super) fn progress(&self) -> String {
         let Some(source) = &self.view.source else {
-            return "Loading".into();
+            return crate::i18n::t("loading").into_owned();
         };
         let byte = self.reading_byte().min(source.len());
         let line = self.source_line(byte) + 1;
@@ -95,16 +94,36 @@ impl Document {
             },
             self.view.search_targets.len(),
         );
-        format!(
-            " Ln {line}/{} · {percent}% · {index}/{total}{}{} ",
-            self.view.starts.len(),
-            if self.view.wrap { " · Wrap" } else { "" },
-            if self.view.compare { " · Compare" } else { "" }
+        crate::i18n::format(
+            "preview.progress",
+            &[
+                ("line", line.to_string()),
+                ("lines", self.view.starts.len().to_string()),
+                ("percent", percent.to_string()),
+                ("index", index.to_string()),
+                ("total", total.to_string()),
+                (
+                    "wrap",
+                    if self.view.wrap {
+                        crate::i18n::t("preview.wrap_suffix").into_owned()
+                    } else {
+                        String::new()
+                    },
+                ),
+                (
+                    "compare",
+                    if self.view.compare {
+                        crate::i18n::t("preview.compare_suffix").into_owned()
+                    } else {
+                        String::new()
+                    },
+                ),
+            ],
         )
     }
-    fn invalidate_view(&mut self) {
+    pub(super) fn invalidate_view(&mut self) {
         self.reader.seek = Some(self.reading_byte());
-        self.rendered = None;
+        self.set_rendered(None);
         self.render_pending = false;
         self.render_id = 0;
         self.code_pending = false;
@@ -163,11 +182,15 @@ impl Sidebar {
     }
     pub(super) fn park_document(&mut self) {
         if let Some(mut d) = self.document.take() {
+            if let Some(i) = d.image_mut() {
+                i.release();
+            }
+            d.reader.images.release();
             d.invalidate_view();
             d.edit_requested = None;
             d.reader.search_origin = None;
             d.markdown_search_jump = false;
-            if let Some(e) = &mut d.editor {
+            if let Some(e) = d.editor_mut() {
                 e.highlight = None;
             }
             d.view.previous = None;
@@ -225,8 +248,8 @@ impl Sidebar {
             Command::Compare => {
                 if let Some(d) = &mut self.document {
                     ensure!(
-                        d.loaded.as_ref().is_some_and(|l| l.markdown()) && !d.editing,
-                        "Source comparison requires Markdown preview"
+                        d.loaded().is_some_and(|l| l.markdown()) && !d.editing,
+                        crate::i18n::t("preview.compare_requires_markdown")
                     );
                     d.view.compare = !d.view.compare;
                     d.markdown = true;
@@ -234,24 +257,27 @@ impl Sidebar {
                 }
             }
             Command::Diff => {
-                let d = self.document.as_ref().context("No document")?;
+                let d = self
+                    .document
+                    .as_ref()
+                    .context(crate::i18n::t("ui.no_document"))?;
                 let old = d
                     .view
                     .previous
                     .as_ref()
-                    .or(d.loaded.as_ref())
-                    .context("File not loaded")?
+                    .or(d.loaded())
+                    .context(crate::i18n::t("ui.file_not_loaded"))?
                     .source
                     .clone();
                 let new = d
                     .view
                     .disk
                     .as_ref()
-                    .or(d.loaded.as_ref())
-                    .context("File not loaded")?
+                    .or(d.loaded())
+                    .context(crate::i18n::t("ui.file_not_loaded"))?
                     .source
                     .clone();
-                let old = if let Some(e) = &d.editor
+                let old = if let Some(e) = d.editor()
                     && e.dirty()
                 {
                     Arc::from(e.source())
@@ -282,16 +308,23 @@ impl Sidebar {
         }
         Ok(())
     }
-    fn navigate_input(&mut self, input: &str) -> Result<()> {
-        let d = self.document.as_mut().context("No document")?;
+    pub(super) fn navigate_input(&mut self, input: &str) -> Result<()> {
+        let d = self
+            .document
+            .as_mut()
+            .context(crate::i18n::t("ui.no_document"))?;
         d.update_source_index();
         let input = input.trim();
-        let source = d.view.source.as_ref().context("File not loaded")?;
+        let source = d
+            .view
+            .source
+            .as_ref()
+            .context(crate::i18n::t("ui.file_not_loaded"))?;
         let byte = if let Some(percent) = input.strip_suffix('%') {
             let percent = percent
                 .parse::<usize>()
-                .context("Use a source line or 0–100%")?;
-            ensure!(percent <= 100, "Percentage must be 0–100");
+                .context(crate::i18n::t("preview.goto_format"))?;
+            ensure!(percent <= 100, crate::i18n::t("preview.percent_range"));
             let mut at = source.len().saturating_mul(percent) / 100;
             while !source.is_char_boundary(at) {
                 at = at.saturating_sub(1);
@@ -300,11 +333,14 @@ impl Sidebar {
         } else {
             let line = input
                 .parse::<usize>()
-                .context("Use a source line or 0–100%")?;
+                .context(crate::i18n::t("preview.goto_format"))?;
             *d.view
                 .starts
-                .get(line.checked_sub(1).context("Line numbers start at 1")?)
-                .context("Line is outside this preview")?
+                .get(
+                    line.checked_sub(1)
+                        .context(crate::i18n::t("preview.line_start"))?,
+                )
+                .context(crate::i18n::t("preview.line_outside"))?
         };
         self.push_back();
         self.seek_reading(byte);
@@ -520,14 +556,14 @@ impl Sidebar {
             return Vec::new();
         };
         let available = rect.width.saturating_sub(2);
-        let count = (available / 24).max(1).min(self.tools.paths.len() as u16) as usize;
+        let count = (available / 18).max(1).min(self.tools.paths.len() as u16) as usize;
         let selected = self
             .document
             .as_ref()
             .and_then(|d| self.tools.paths.iter().position(|p| p == &d.path))
             .unwrap_or(0);
         let first = selected.saturating_sub(count - 1);
-        let width = (available / count as u16).clamp(1, 33);
+        let width = (available / count as u16).clamp(1, 28);
         self.tools
             .paths
             .iter()
@@ -709,7 +745,17 @@ impl Sidebar {
                 frame.render_widget(
                     Paragraph::new(format!(
                         "{} {}",
-                        if current { "●" } else { " " },
+                        if (if current {
+                            Some(d)
+                        } else {
+                            self.tools.parked.iter().find(|d| d.path == path)
+                        })
+                        .is_some_and(|d| d.editor().is_some_and(|e| e.dirty()))
+                        {
+                            "●"
+                        } else {
+                            " "
+                        },
                         shortened(&label, r.width.saturating_sub(8) as usize)
                     ))
                     .style(if current {
@@ -773,7 +819,7 @@ impl Sidebar {
                         );
                     }
                 } else {
-                    frame.render_widget(Paragraph::new("Loading source…"), inner);
+                    frame.render_widget(Paragraph::new(crate::i18n::t("loading_source")), inner);
                 }
             }
         }
@@ -808,11 +854,11 @@ impl Sidebar {
             };
             if let Some(n) = &self.tools.navigation {
                 frame.render_widget(
-                    Paragraph::new(format!(
-                        "Line number or percent: {}\n{}\nEnter Go · Esc Cancel",
-                        n.value, n.error
+                    Paragraph::new(crate::i18n::format(
+                        "preview.goto_prompt",
+                        &[("value", n.value.clone()), ("error", n.error.clone())],
                     ))
-                    .block(Block::bordered().title(" Go to position "))
+                    .block(Block::bordered().title(crate::i18n::t("goto_position")))
                     .style(base),
                     popup,
                 );

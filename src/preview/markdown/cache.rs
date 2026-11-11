@@ -23,6 +23,7 @@ struct Block {
 pub struct MarkdownCache {
     source: Option<Arc<str>>,
     width: u16,
+    image_heights: std::collections::BTreeMap<usize, u16>,
     light: bool,
     blocks: Vec<Block>,
     display_ranges: Vec<Range<usize>>,
@@ -144,6 +145,7 @@ impl MarkdownCache {
             events,
             &self.display_ranges,
             false,
+            &self.image_heights,
         );
         self.stats.laid_out_blocks += 1;
         for note in output.notes {
@@ -189,11 +191,13 @@ impl MarkdownCache {
             || self.width != width
             || self.light != light
             || self.expanded != *expanded
+            || self.image_heights != reading.image_heights
         {
             let same_layout = self.source.is_some()
                 && self.width == width
                 && self.light == light
                 && self.expanded == *expanded
+                && self.image_heights == reading.image_heights
                 && self.notes.is_empty();
             let old_source = self.source.clone();
             let previous = if same_layout {
@@ -205,6 +209,7 @@ impl MarkdownCache {
                 Vec::new()
             };
             self.reset(source.clone(), width, light, expanded);
+            self.image_heights = reading.image_heights.clone();
             for (events, rows) in previous {
                 // Compare globally resolved events, ranges and original source: reference changes
                 // and moved source coordinates must invalidate reuse.
@@ -279,6 +284,7 @@ impl MarkdownCache {
             if self.plain.is_empty() {
                 Arc::make_mut(&mut self.plain).push(String::new());
                 Arc::make_mut(&mut self.rows).push(RowSource {
+                    image: None,
                     kind: crate::preview::RowKind::Prose,
                     segments: Vec::new(),
                     code_language: None,

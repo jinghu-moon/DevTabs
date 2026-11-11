@@ -12,6 +12,7 @@ use std::{
 };
 
 pub const MAX_FRAME: usize = 32 * 1024 * 1024;
+pub const BUILD_ID: &str = env!("DEVTABS_BUILD_ID");
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkspaceInfo {
     pub id: String,
@@ -26,6 +27,8 @@ pub struct SessionInfo {
     pub shell_pid: Option<u32>,
     pub status: Status,
     pub command: CommandStatus,
+    #[serde(default)]
+    pub placement: crate::presentation::Placement,
 }
 #[derive(Serialize, Deserialize)]
 pub enum Request {
@@ -35,10 +38,26 @@ pub enum Request {
     },
     Ping,
     Open {
-        options: Options,
+        options: Box<Options>,
     },
     List,
+    PrepareFloat {
+        target: crate::presentation::Target,
+    },
+    FloatingTarget,
+    ViewReady {
+        workspace: String,
+    },
+    CancelFloat {
+        revision: u64,
+    },
+    Present {
+        target: crate::presentation::Target,
+        placement: crate::presentation::Placement,
+    },
     Attach {
+        #[serde(default)]
+        floating: Option<u64>,
         #[serde(default)]
         takeover: bool,
         workspace: String,
@@ -83,9 +102,6 @@ pub enum Request {
         session: String,
         source: Option<String>,
     },
-    DebugTarget {
-        workspace: Option<String>,
-    },
     Shutdown,
 }
 #[derive(Serialize, Deserialize)]
@@ -106,19 +122,30 @@ pub enum Response {
     Host { pid: u32 },
     Ok,
     Error(String),
-    Workspace(WorkspaceInfo),
+    Workspace(Box<WorkspaceInfo>),
     Workspaces(Vec<WorkspaceInfo>),
     Update(Option<Update>),
-    Target(Option<String>),
+    FloatPlan(crate::presentation::Plan),
+    FirstView(bool),
+    Floating(Option<crate::presentation::Ticket>),
 }
 
 pub fn endpoint() -> String {
+    endpoint_for(
+        &crate::config::home(),
+        std::env::var_os("DEVTABS_INSTANCE").as_deref(),
+        BUILD_ID,
+    )
+}
+fn endpoint_for(home: &std::path::Path, instance: Option<&std::ffi::OsStr>, build: &str) -> String {
     use std::hash::{Hash, Hasher};
     let mut hash = std::hash::DefaultHasher::new();
-    crate::config::key(&crate::config::home()).hash(&mut hash);
-    std::env::var_os("DEVTABS_INSTANCE").hash(&mut hash);
-    format!("DevTabs-v2-{:016x}", hash.finish())
+    crate::config::key(home).hash(&mut hash);
+    instance.hash(&mut hash);
+    // Matching package versions do not imply matching development builds.
+    format!("DevTabs-v5-{build}-{:016x}", hash.finish())
 }
+
 fn transfer(stream: &mut Stream, bytes: &mut [u8], write: bool) -> Result<()> {
     let start = Instant::now();
     let mut offset = 0;
@@ -158,7 +185,10 @@ fn transfer(stream: &mut Stream, bytes: &mut [u8], write: bool) -> Result<()> {
             stream.read(&mut bytes[offset..offset + available])
         };
         match result {
-            Ok(0) => bail!("Session host disconnected"),
+            Ok(0) => {
+                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
+                    .context("Session host disconnected");
+            }
             Ok(n) => offset += n,
             Err(e)
                 if matches!(
@@ -207,4 +237,55 @@ pub fn rpc(request: Request) -> Result<Response> {
         bail!("{error}");
     }
     Ok(response)
+}
+
+/// Only transport loss permits restarting a host. Invalid responses, access
+/// denial and host-reported application errors must remain visible to users.
+pub(crate) fn disconnected(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<std::io::Error>().is_some_and(|e| {
+        matches!(
+            e.kind(),
+            std::io::ErrorKind::NotFound
+                | std::io::ErrorKind::ConnectionRefused
+                | std::io::ErrorKind::ConnectionReset
+                | std::io::ErrorKind::BrokenPipe
+                | std::io::ErrorKind::NotConnected
+                | std::io::ErrorKind::UnexpectedEof
+        )
+    })
+}
+
+#[cfg(test)]
+mod build_tests {
+    use super::*;
+    #[test]
+    fn reconnect_only_recognizes_transport_loss_through_context() {
+        for kind in [
+            std::io::ErrorKind::NotFound,
+            std::io::ErrorKind::BrokenPipe,
+            std::io::ErrorKind::UnexpectedEof,
+        ] {
+            let error =
+                anyhow::Error::from(std::io::Error::from(kind)).context("Connect to DevTabs host");
+            assert!(disconnected(&error));
+        }
+        assert!(!disconnected(&anyhow::anyhow!("Invalid host response")));
+        assert!(!disconnected(&anyhow::Error::from(std::io::Error::from(
+            std::io::ErrorKind::PermissionDenied
+        ))));
+    }
+    #[test]
+    fn host_scope_separates_builds_and_instances_but_reuses_identical_builds() {
+        let home = std::path::Path::new("D:/DevTabs/data");
+        let a = endpoint_for(home, None, "build-a");
+        assert_eq!(a, endpoint_for(home, None, "build-a"));
+        assert_ne!(a, endpoint_for(home, None, "build-b"));
+        assert_ne!(a, endpoint_for(home, Some("isolated".as_ref()), "build-a"));
+        assert_ne!(
+            a,
+            endpoint_for(std::path::Path::new("D:/other"), None, "build-a")
+        );
+        assert_eq!(BUILD_ID.len(), 16);
+        assert!(BUILD_ID.bytes().all(|c| c.is_ascii_hexdigit()));
+    }
 }

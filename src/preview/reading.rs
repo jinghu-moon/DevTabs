@@ -9,6 +9,7 @@ use std::{
 pub struct ReadingOptions {
     pub expanded: BTreeSet<usize>,
     pub seek: Option<usize>,
+    pub image_heights: std::collections::BTreeMap<usize, u16>,
 }
 
 pub(super) fn options() -> Options {
@@ -368,6 +369,9 @@ impl super::Rendered {
     }
     pub fn action_at(&self, row: usize, col: usize) -> Option<ReadingAction> {
         let mapping = self.rows.get(row)?;
+        if let Some(image) = &mapping.image {
+            return Some(ReadingAction::Image(image.destination.to_string()));
+        }
         let segment = mapping.segments.iter().find(|s| s.display.contains(&col))?;
         let at = if segment.exact {
             segment.source.start

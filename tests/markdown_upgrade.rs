@@ -307,7 +307,7 @@ fn sidebar_resize_theme_and_unsaved_preview_use_current_render_state() {
                 .map_or(80, |r| r.width);
             if s.document.as_ref().is_some_and(|d| {
                 !d.loading
-                    && d.rendered.as_ref().is_some_and(|r| {
+                    && d.rendered().as_ref().is_some_and(|r| {
                         r.width == width
                             && r.light == s.files.light
                             && r.markdown == (d.markdown && !d.editing)
@@ -323,10 +323,7 @@ fn sidebar_resize_theme_and_unsaved_preview_use_current_render_state() {
     {
         let d = s.document.as_ref().unwrap();
         assert!(
-            std::sync::Arc::ptr_eq(
-                &d.loaded.as_ref().unwrap().source,
-                &d.rendered.as_ref().unwrap().source
-            ),
+            std::sync::Arc::ptr_eq(&d.loaded().unwrap().source, &d.rendered().unwrap().source),
             "read-only render must share the loaded source allocation"
         );
     }
@@ -335,26 +332,18 @@ fn sidebar_resize_theme_and_unsaved_preview_use_current_render_state() {
     ready(&mut s);
     assert!(s.document.as_ref().unwrap().selection.is_none());
     s.menu = Some(Menu {
-        items: vec![("Theme", Command::Theme)],
+        items: vec![("Theme".into(), Command::Theme)],
         selected: 0,
         target: path.clone(),
     });
     s.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         .unwrap();
     ready(&mut s);
-    assert!(
-        s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .unwrap()
-            .light
-    );
+    assert!(s.document.as_ref().unwrap().rendered().unwrap().light);
     s.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
         .unwrap();
     let start = std::time::Instant::now();
-    while s.document.as_ref().unwrap().editor.is_none() {
+    while s.document.as_ref().unwrap().editor().is_none() {
         s.tick(true);
         assert!(start.elapsed() < std::time::Duration::from_secs(15));
         std::thread::sleep(std::time::Duration::from_millis(2));
@@ -362,13 +351,12 @@ fn sidebar_resize_theme_and_unsaved_preview_use_current_render_state() {
     s.document
         .as_mut()
         .unwrap()
-        .editor
-        .as_mut()
+        .editor_mut()
         .unwrap()
         .paste("UNSAVED ")
         .unwrap();
     s.menu = Some(Menu {
-        items: vec![("Preview", Command::Project)],
+        items: vec![("Preview".into(), Command::Project)],
         selected: 0,
         target: path.clone(),
     });
@@ -376,11 +364,11 @@ fn sidebar_resize_theme_and_unsaved_preview_use_current_render_state() {
         .unwrap();
     ready(&mut s);
     let d = s.document.as_ref().unwrap();
-    let r = d.rendered.as_ref().unwrap();
+    let r = d.rendered().unwrap();
     assert!(r.source.contains("UNSAVED"));
     assert!(r.plain.join("\n").contains("UNSAVED"));
     assert!(
-        d.editor.as_ref().unwrap().highlight.is_none(),
+        d.editor().unwrap().highlight.is_none(),
         "Markdown display rows must never become editor source colors"
     );
     assert!(!std::fs::read_to_string(path).unwrap().contains("UNSAVED"));

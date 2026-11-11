@@ -44,7 +44,7 @@ fn ready(s: &mut Sidebar) {
         s.tick(true);
         if s.document
             .as_ref()
-            .is_some_and(|d| !d.loading && d.rendered.as_ref().is_some_and(|r| r.markdown))
+            .is_some_and(|d| !d.loading && d.rendered().as_ref().is_some_and(|r| r.markdown))
         {
             break;
         }
@@ -56,7 +56,7 @@ fn ready(s: &mut Sidebar) {
 fn first_screen_does_not_layout_the_whole_markdown_document() {
     let root = Fixture::new();
     let s = opened(&root);
-    let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+    let r = s.document.as_ref().unwrap().rendered().unwrap();
     assert!(
         r.text.lines.len() < 200,
         "first screen laid out {} rows",
@@ -132,8 +132,7 @@ fn scrolling_keeps_known_rows_stable_bounds_cache_and_full_search_reaches_tail()
         .document
         .as_ref()
         .unwrap()
-        .rendered
-        .as_ref()
+        .rendered()
         .unwrap()
         .plain
         .clone();
@@ -142,7 +141,7 @@ fn scrolling_keeps_known_rows_stable_bounds_cache_and_full_search_reaches_tail()
     loop {
         s.tick(true);
         let d = s.document.as_ref().unwrap();
-        let r = d.rendered.as_ref().unwrap();
+        let r = d.rendered().unwrap();
         if r.window.as_ref().is_some_and(|w| w.line(500).is_some()) {
             break;
         }
@@ -150,7 +149,7 @@ fn scrolling_keeps_known_rows_stable_bounds_cache_and_full_search_reaches_tail()
         std::thread::sleep(Duration::from_millis(1));
     }
     let d = s.document.as_ref().unwrap();
-    let r = d.rendered.as_ref().unwrap();
+    let r = d.rendered().unwrap();
     assert_eq!(&r.plain[..initial.len()], initial.as_slice());
     assert!(d.markdown_stats().unwrap().cached_blocks <= 64);
     assert!(d.markdown_stats().unwrap().cached_rows <= 512);
@@ -164,14 +163,7 @@ fn scrolling_keeps_known_rows_stable_bounds_cache_and_full_search_reaches_tail()
     let start = Instant::now();
     loop {
         s.tick(true);
-        if s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .unwrap()
-            .complete
-        {
+        if s.document.as_ref().unwrap().rendered().unwrap().complete {
             break;
         }
         assert!(start.elapsed() < Duration::from_secs(20));
@@ -181,7 +173,7 @@ fn scrolling_keeps_known_rows_stable_bounds_cache_and_full_search_reaches_tail()
     assert_eq!(d.matches.len(), 1);
     assert_eq!(d.offset().0, d.matches[0].0);
     let full = preview::render(&source(), std::path::Path::new("large.md"), true, 98, false);
-    assert_eq!(d.rendered.as_ref().unwrap().plain, full.plain);
+    assert_eq!(d.rendered().unwrap().plain, full.plain);
 }
 
 #[test]
@@ -196,7 +188,7 @@ fn end_key_reaches_the_real_tail_of_a_partially_laid_out_document() {
     loop {
         s.tick(true);
         let d = s.document.as_ref().unwrap();
-        let r = d.rendered.as_ref().unwrap();
+        let r = d.rendered().unwrap();
         if r.complete {
             assert_eq!(r.plain[d.offset().0], "UniqueEndMarker");
             break;
@@ -227,7 +219,7 @@ fn reading_fixture_keeps_code_diagrams_math_and_quotes_in_the_actual_sidebar() {
             s.open(path.clone(), true).unwrap();
             s.update_layout(Rect::new(0, 0, 100, 120), false);
             ready(&mut s);
-            let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+            let r = s.document.as_ref().unwrap().rendered().unwrap();
             let full =
                 preview::render(&source, std::path::Path::new("reading.md"), true, 96, light);
             assert!(r.complete, "fixture should fit the viewport plus prefetch");
@@ -313,24 +305,18 @@ fn code_language_is_fixed_at_top_right_without_entering_code_or_source_selection
                     .document
                     .as_ref()
                     .unwrap()
-                    .rendered
-                    .as_ref()
+                    .rendered()
                     .unwrap()
                     .window
                     .clone();
                 for left in [0, 8, 100] {
                     s.document.as_mut().unwrap().scroll[1].1 = left;
                     for fallback in [false, true] {
-                        s.document
-                            .as_mut()
-                            .unwrap()
-                            .rendered
-                            .as_mut()
-                            .unwrap()
-                            .window = if fallback { None } else { cached.clone() };
+                        s.document.as_mut().unwrap().rendered_mut().unwrap().window =
+                            if fallback { None } else { cached.clone() };
                         let mut terminal = Terminal::new(TestBackend::new(width, 12)).unwrap();
                         terminal.draw(|f| s.draw(f)).unwrap();
-                        let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+                        let r = s.document.as_ref().unwrap().rendered().unwrap();
                         let code = r.plain.iter().position(|s| s == "let value = 42;").unwrap();
                         assert!(code > 0, "language header must not overlap code");
                         let header = code - 1;
@@ -413,7 +399,7 @@ fn list_markers_have_no_underline_but_links_still_do() {
         ready(&mut s);
         let mut terminal = Terminal::new(TestBackend::new(80, 30)).unwrap();
         terminal.draw(|f| s.draw(f)).unwrap();
-        let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+        let r = s.document.as_ref().unwrap().rendered().unwrap();
         let buffer = terminal.backend().buffer();
         for marker in ["☑", "☐", "1.", "2.", "•"] {
             let row = r
@@ -468,8 +454,7 @@ fn code_background_fills_sidebar_width_for_short_empty_and_scrolled_rows() {
                 .document
                 .as_ref()
                 .unwrap()
-                .rendered
-                .as_ref()
+                .rendered()
                 .unwrap()
                 .window
                 .clone();
@@ -477,13 +462,8 @@ fn code_background_fills_sidebar_width_for_short_empty_and_scrolled_rows() {
                 s.document.as_mut().unwrap().scroll[1].1 = left;
                 for fallback in [false, true] {
                     // The same base style must work before the viewport's colored window arrives.
-                    s.document
-                        .as_mut()
-                        .unwrap()
-                        .rendered
-                        .as_mut()
-                        .unwrap()
-                        .window = if fallback { None } else { cached.clone() };
+                    s.document.as_mut().unwrap().rendered_mut().unwrap().window =
+                        if fallback { None } else { cached.clone() };
                     let background = if light {
                         Color::White
                     } else {
@@ -499,7 +479,7 @@ fn code_background_fills_sidebar_width_for_short_empty_and_scrolled_rows() {
                             s.draw(f);
                         })
                         .unwrap();
-                    let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+                    let r = s.document.as_ref().unwrap().rendered().unwrap();
                     let buffer = terminal.backend().buffer();
                     let mut checked = 0;
                     for (row, mapping) in r
@@ -591,7 +571,7 @@ fn markdown_viewport_workload() {
             .map(|c| c.fg)
             .collect::<std::collections::HashSet<_>>();
         assert!(colors.len() >= 4);
-        let r = s.document.as_ref().unwrap().rendered.as_ref().unwrap();
+        let r = s.document.as_ref().unwrap().rendered().unwrap();
         cases.push(serde_json::json!({"iteration":iteration,"open_ms":open_ms,"rows":r.text.lines.len(),"spans":r.text.lines.iter().map(|l|l.spans.len()).sum::<usize>(),"window_spans":r.window.as_ref().map(|w|w.text.lines.iter().map(|l|l.spans.len()).sum::<usize>()),"stats":s.document.as_ref().unwrap().markdown_stats()}));
     }
     fs::write(std::env::var_os("DEVTABS_MARKDOWN_REPORT").expect("report path"),serde_json::to_vec_pretty(&serde_json::json!({"source_bytes":source().len(),"terminal":[100,40],"blocks":1501,"cases":cases})).unwrap()).unwrap();

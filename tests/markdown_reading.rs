@@ -27,7 +27,9 @@ impl Fixture {
         s.visible = false;
         s.open(path, true).unwrap();
         s.update_layout(Rect::new(0, 0, width, height), false);
-        wait(&mut s, |s| s.document.as_ref().unwrap().rendered.is_some());
+        wait(&mut s, |s| {
+            s.document.as_ref().unwrap().rendered().is_some()
+        });
         s
     }
 }
@@ -79,8 +81,7 @@ fn preview_padding_keeps_all_four_sides_blank_and_uses_the_smaller_viewport() {
                 s.document
                     .as_ref()
                     .unwrap()
-                    .rendered
-                    .as_ref()
+                    .rendered()
                     .is_some_and(|r| !r.markdown)
             });
         }
@@ -89,16 +90,10 @@ fn preview_padding_keeps_all_four_sides_blank_and_uses_the_smaller_viewport() {
         let inner = devtabs::ui::preview_content(rect);
         assert_eq!(
             (inner.x, inner.y, inner.width, inner.height),
-            (2, 2, 76, 14)
+            (2, 2, 76, 15)
         );
         assert_eq!(
-            s.document
-                .as_ref()
-                .unwrap()
-                .rendered
-                .as_ref()
-                .unwrap()
-                .width,
+            s.document.as_ref().unwrap().rendered().unwrap().width,
             inner.width
         );
         for y in rect.y + 1..rect.bottom() - 1 {
@@ -285,17 +280,7 @@ fn outline_filters_and_jumps_beyond_first_viewport_without_eager_open() {
         .map(|i| format!("## Section {i}\n\nparagraph {i}\n\n"))
         .collect::<String>();
     let mut s = f.open(&text, 80, 20);
-    assert!(
-        s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .unwrap()
-            .plain
-            .len()
-            < 100
-    );
+    assert!(s.document.as_ref().unwrap().rendered().unwrap().plain.len() < 100);
     key(&mut s, KeyCode::Char('t'));
     assert!(s.modal());
     s.paste("Section 180").unwrap();
@@ -305,7 +290,7 @@ fn outline_filters_and_jumps_beyond_first_viewport_without_eager_open() {
     assert!(!s.modal());
     wait(&mut s, |s| {
         let d = s.document.as_ref().unwrap();
-        d.rendered.as_ref().is_some_and(|r| {
+        d.rendered().is_some_and(|r| {
             r.plain
                 .get(d.offset().0)
                 .is_some_and(|s| s == "Section 180")
@@ -325,8 +310,7 @@ fn clicking_local_links_jumps_to_fragment_and_back_restores_position() {
         .document
         .as_ref()
         .unwrap()
-        .rendered
-        .as_ref()
+        .rendered()
         .unwrap()
         .plain
         .iter()
@@ -337,7 +321,7 @@ fn clicking_local_links_jumps_to_fragment_and_back_restores_position() {
     wait(&mut s, |s| {
         let d = s.document.as_ref().unwrap();
         d.path.ends_with("other.md")
-            && d.rendered.as_ref().is_some_and(|r| {
+            && d.rendered().as_ref().is_some_and(|r| {
                 r.plain
                     .get(d.offset().0)
                     .is_some_and(|s| s == "Destination")
@@ -347,7 +331,7 @@ fn clicking_local_links_jumps_to_fragment_and_back_restores_position() {
         .unwrap();
     wait(&mut s, |s| {
         s.document.as_ref().unwrap().path.ends_with("read.md")
-            && s.document.as_ref().unwrap().rendered.is_some()
+            && s.document.as_ref().unwrap().rendered().is_some()
     });
     assert_eq!(s.document.as_ref().unwrap().offset().0, 0);
 }
@@ -360,52 +344,33 @@ fn resize_mode_switch_and_file_switch_preserve_logical_reading_position() {
         .unwrap();
     wait(&mut s, |s| {
         let d = s.document.as_ref().unwrap();
-        d.rendered
-            .as_ref()
+        d.rendered()
             .is_some_and(|r| r.plain.get(d.offset().0).is_some_and(|s| s == "Heading 12"))
     });
     s.update_layout(Rect::new(0, 0, 64, 20), false);
     wait(&mut s, |s| {
-        s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .unwrap()
-            .width
-            == 60
+        s.document.as_ref().unwrap().rendered().unwrap().width == 60
     });
     let d = s.document.as_ref().unwrap();
-    assert_eq!(
-        d.rendered.as_ref().unwrap().plain[d.offset().0],
-        "Heading 12"
-    );
+    assert_eq!(d.rendered().unwrap().plain[d.offset().0], "Heading 12");
     key(&mut s, KeyCode::Char('m'));
     wait(&mut s, |s| {
-        !s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .unwrap()
-            .markdown
+        !s.document.as_ref().unwrap().rendered().unwrap().markdown
     });
     let d = s.document.as_ref().unwrap();
-    assert_eq!(
-        d.rendered.as_ref().unwrap().plain[d.offset().0],
-        "## Heading 12"
-    );
+    assert_eq!(d.rendered().unwrap().plain[d.offset().0], "## Heading 12");
     fs::write(f.0.join("other.md"), "other").unwrap();
     s.open(f.0.join("other.md"), true).unwrap();
-    wait(&mut s, |s| s.document.as_ref().unwrap().rendered.is_some());
+    wait(&mut s, |s| {
+        s.document.as_ref().unwrap().rendered().is_some()
+    });
     s.open(f.0.join("read.md"), true).unwrap();
-    wait(&mut s, |s| s.document.as_ref().unwrap().rendered.is_some());
+    wait(&mut s, |s| {
+        s.document.as_ref().unwrap().rendered().is_some()
+    });
     let d = s.document.as_ref().unwrap();
     assert!(!d.markdown);
-    assert_eq!(
-        d.rendered.as_ref().unwrap().plain[d.offset().0],
-        "## Heading 12"
-    );
+    assert_eq!(d.rendered().unwrap().plain[d.offset().0], "## Heading 12");
 }
 #[test]
 fn table_header_pins_and_horizontal_scrollbar_drags() {
@@ -458,7 +423,7 @@ fn footnote_round_trip_and_clicking_summary_use_source_targets() {
         .unwrap();
     wait(&mut s, |s| {
         let d = s.document.as_ref().unwrap();
-        d.rendered.as_ref().is_some_and(|r| {
+        d.rendered().is_some_and(|r| {
             r.plain
                 .get(d.offset().0)
                 .is_some_and(|s| s.contains("explanation"))
@@ -470,8 +435,7 @@ fn footnote_round_trip_and_clicking_summary_use_source_targets() {
         .document
         .as_ref()
         .unwrap()
-        .rendered
-        .as_ref()
+        .rendered()
         .unwrap()
         .reading
         .details[0]
@@ -482,8 +446,7 @@ fn footnote_round_trip_and_clicking_summary_use_source_targets() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| r.plain.iter().any(|s| s == "secret"))
     });
 }
@@ -519,8 +482,7 @@ fn hidden_heading_links_open_ancestor_details_and_back_closes_them() {
         .unwrap();
     wait(&mut s, |s| {
         let d = s.document.as_ref().unwrap();
-        d.rendered
-            .as_ref()
+        d.rendered()
             .is_some_and(|r| r.plain.get(d.offset().0).is_some_and(|s| s == "Hidden"))
     });
     s.activate_reading(ReadingAction::Back).unwrap();
@@ -528,8 +490,7 @@ fn hidden_heading_links_open_ancestor_details_and_back_closes_them() {
         s.document
             .as_ref()
             .unwrap()
-            .rendered
-            .as_ref()
+            .rendered()
             .is_some_and(|r| !r.plain.iter().any(|s| s == "secret"))
     });
 }
@@ -547,6 +508,9 @@ fn tree_and_editor_scrollbars_drag_without_editing_text() {
     s.visible = true;
     s.update_layout(Rect::new(0, 0, 120, 24), false);
     wait(&mut s, |s| s.files.nodes.len() > 100);
+    // Automatic follow now scrolls to the opened file. Start at the first row
+    // explicitly so this test continues to verify scrollbar track dragging.
+    s.files.state.select_first();
     let b = draw(&mut s, 120, 24);
     let tree = s.geometry.tree.unwrap();
     assert_eq!(b[(tree.right() - 1, 1)].symbol(), "█");
@@ -593,7 +557,7 @@ fn tree_and_editor_scrollbars_drag_without_editing_text() {
         rect.right() - 1,
         12,
     );
-    let e = s.document.as_ref().unwrap().editor.as_ref().unwrap();
+    let e = s.document.as_ref().unwrap().editor().unwrap();
     assert!(e.area.scroll_offset().0 > 20);
     assert!(!e.dirty());
     draw(&mut s, 120, 24);
@@ -615,7 +579,7 @@ fn tree_and_editor_scrollbars_drag_without_editing_text() {
         rect.right() - 3,
         rect.bottom() - 1,
     );
-    let e = s.document.as_ref().unwrap().editor.as_ref().unwrap();
+    let e = s.document.as_ref().unwrap().editor().unwrap();
     assert!(e.area.scroll_offset().1 > 0);
     assert!(!e.dirty());
 }
@@ -647,8 +611,7 @@ fn file_links_keep_the_existing_unsaved_cancel_and_discard_guard() {
     s.document
         .as_mut()
         .unwrap()
-        .editor
-        .as_mut()
+        .editor_mut()
         .unwrap()
         .paste("unsaved ")
         .unwrap();
@@ -671,7 +634,7 @@ fn file_links_keep_the_existing_unsaved_cancel_and_discard_guard() {
     key(&mut s, KeyCode::Char('d'));
     wait(&mut s, |s| {
         s.document.as_ref().unwrap().path.ends_with("other.md")
-            && s.document.as_ref().unwrap().rendered.is_some()
+            && s.document.as_ref().unwrap().rendered().is_some()
     });
     assert_eq!(
         fs::read_to_string(f.0.join("read.md")).unwrap(),
@@ -688,8 +651,7 @@ fn same_file_navigation_and_back_keep_unsaved_edits_without_a_prompt() {
     s.document
         .as_mut()
         .unwrap()
-        .editor
-        .as_mut()
+        .editor_mut()
         .unwrap()
         .paste("prefix\n\n")
         .unwrap();
@@ -701,7 +663,9 @@ fn same_file_navigation_and_back_keep_unsaved_edits_without_a_prompt() {
         .position(|(label, _)| *label == "Preview current content")
         .unwrap();
     key(&mut s, KeyCode::Enter);
-    wait(&mut s, |s| s.document.as_ref().unwrap().rendered.is_some());
+    wait(&mut s, |s| {
+        s.document.as_ref().unwrap().rendered().is_some()
+    });
     s.activate_reading(ReadingAction::Link("#destination".into()))
         .unwrap();
     s.activate_reading(ReadingAction::Back).unwrap();
@@ -735,24 +699,22 @@ fn cross_file_fragment_works_when_the_target_was_remembered_in_source_mode() {
     fs::write(&other, "# First\n\n## Destination\n").unwrap();
     let mut s = f.open("start", 80, 20);
     s.open(other, true).unwrap();
-    wait(&mut s, |s| s.document.as_ref().unwrap().rendered.is_some());
+    wait(&mut s, |s| {
+        s.document.as_ref().unwrap().rendered().is_some()
+    });
     key(&mut s, KeyCode::Char('m'));
     wait(&mut s, |s| {
-        !s.document
-            .as_ref()
-            .unwrap()
-            .rendered
-            .as_ref()
-            .unwrap()
-            .markdown
+        !s.document.as_ref().unwrap().rendered().unwrap().markdown
     });
     s.open(f.0.join("read.md"), true).unwrap();
-    wait(&mut s, |s| s.document.as_ref().unwrap().rendered.is_some());
+    wait(&mut s, |s| {
+        s.document.as_ref().unwrap().rendered().is_some()
+    });
     s.activate_reading(ReadingAction::Link("other.md#destination".into()))
         .unwrap();
     wait(&mut s, |s| {
         let d = s.document.as_ref().unwrap();
-        d.rendered.as_ref().is_some_and(|r| {
+        d.rendered().is_some_and(|r| {
             r.markdown
                 && r.plain
                     .get(d.offset().0)
@@ -908,7 +870,7 @@ fn outline_dropdown_click_selects_and_outside_click_dismisses_without_clickthrou
     );
     assert!(!s.modal());
     let d = s.document.as_ref().unwrap();
-    assert_eq!(d.rendered.as_ref().unwrap().plain[d.offset().0], "Three");
+    assert_eq!(d.rendered().unwrap().plain[d.offset().0], "Three");
     key(&mut s, KeyCode::Char('t'));
     let old = s.document.as_ref().unwrap().offset();
     mouse(&mut s, MouseEventKind::Down(MouseButton::Left), 1, 12);
@@ -964,8 +926,7 @@ fn outline_dropdown_scrolls_filters_toggles_and_stays_in_bounds_after_resize() {
     key(&mut s, KeyCode::Enter);
     wait(&mut s, |s| {
         let d = s.document.as_ref().unwrap();
-        d.rendered
-            .as_ref()
+        d.rendered()
             .is_some_and(|r| r.plain.get(d.offset().0).is_some_and(|s| s == "Heading 39"))
     });
 }
@@ -1008,8 +969,7 @@ fn clicking_a_scrolled_outline_row_does_not_reposition_it_before_release() {
     assert!(!s.modal());
     wait(&mut s, |s| {
         let d = s.document.as_ref().unwrap();
-        d.rendered
-            .as_ref()
+        d.rendered()
             .is_some_and(|r| r.plain.get(d.offset().0).is_some_and(|s| s == "Heading 11"))
     });
 }

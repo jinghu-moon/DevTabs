@@ -57,6 +57,11 @@ enum Action {
 }
 #[derive(Subcommand)]
 enum ConfigAction {
+    /// Persist application UI language.
+    Language {
+        #[arg(value_enum)]
+        language: crate::i18n::Language,
+    },
     Show,
     Edit,
     Root {
@@ -148,6 +153,7 @@ pub fn dispatch() -> Result<bool> {
             let _lock = config::ConfigLock::acquire()?;
             let mut c = Config::load()?;
             match action {
+                ConfigAction::Language { language } => c.language = language,
                 ConfigAction::Show => {
                     println!(
                         "# {}\n{}",
@@ -210,11 +216,8 @@ pub fn resolve(mut options: Options) -> Result<Options> {
     };
     let config = Config::load()?;
     let path = dunce::canonicalize(&options.project)?;
-    let project = config
-        .projects
-        .get(&config::key(&path))
-        .cloned()
-        .unwrap_or_default();
+    let project = crate::project_profile::effective(&config, &path)?;
+    let composition = project.terminal_composition();
     if !supplied("--agent") {
         options.agent=project.agent.or(config.default_agent).context("Choose a global Agent once: devtabs config agent codex (or claude); --agent overrides for this launch")?;
     }
@@ -225,6 +228,21 @@ pub fn resolve(mut options: Options) -> Result<Options> {
         options.layout = project.layout.unwrap_or_default();
     }
     options.extra_sessions = project.sessions;
+    if !supplied("--composition") {
+        options.composition = composition;
+    }
+    if !supplied("--title") {
+        options.title = project.title;
+    }
+    if !supplied("--color") {
+        options.color = project.color;
+    }
+    if !supplied("--agent-arg") {
+        options.agent_args = project.agent_args;
+    }
+    if !options.fresh && !options.resume && options.resume_id.is_none() {
+        options.continue_latest |= project.resume_latest.unwrap_or(true);
+    }
     options.project = path;
     Ok(options)
 }

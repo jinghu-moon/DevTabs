@@ -154,6 +154,7 @@ pub(super) fn row(pieces: Vec<Piece>, kind: RowKind, base: Style) -> Row {
     Row {
         line: Line::from(spans).style(base),
         source: RowSource {
+            image: None,
             kind,
             segments,
             code_language: None,

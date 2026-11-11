@@ -97,6 +97,9 @@ fn spawn(work: &Workspace, id: usize, program: &Path, args: &[String]) -> Sessio
     };
     if program.file_stem().is_some_and(|name| name == "devtabs") {
         args.extend(["--data-dir".into(), work.file("data").display().to_string()]);
+        // Screen assertions below intentionally describe the English UI.
+        // Keep them independent of the machine's automatic UI language.
+        args.extend(["--language".into(), "en-us".into()]);
     }
     Session::spawn(Spawn {
         id,
@@ -196,11 +199,13 @@ fn nested_sidebar_editor_saves_once_and_guards_detach_without_terminal_leaks() {
     press(&outer, KeyCode::Enter, KeyModifiers::NONE);
     press(&outer, KeyCode::Enter, KeyModifiers::NONE);
     until("read only preview", Duration::from_secs(10), || {
-        screen().contains("[More]") && screen().contains("Original") && !screen().contains("· EDIT")
+        screen().contains("[More]")
+            && screen().contains("Original")
+            && !screen().contains("· Editor")
     });
     outer.send(b"e".to_vec()).unwrap();
     until("explicit editor", Duration::from_secs(10), || {
-        screen().contains("EDIT")
+        screen().contains("· Editor")
     });
     let inserted = "中文 M/O/I/E . / 👩‍💻 e\u{301}\n";
     // The same bracketed paste event twice must remain two edits.
@@ -208,7 +213,7 @@ fn nested_sidebar_editor_saves_once_and_guards_detach_without_terminal_leaks() {
         paste_console(&outer, inserted);
     }
     until("unsaved editor", Duration::from_secs(10), || {
-        screen().contains("* · EDIT")
+        screen().contains("● · Editor")
     });
     press(&outer, KeyCode::Char('s'), KeyModifiers::CONTROL);
     until("disk saved", Duration::from_secs(10), || {
@@ -233,7 +238,7 @@ fn nested_sidebar_editor_saves_once_and_guards_detach_without_terminal_leaks() {
     outer.send(b"\x07o".to_vec()).unwrap();
     outer.send(b"e".to_vec()).unwrap();
     until("return editor", Duration::from_secs(10), || {
-        screen().contains("EDIT")
+        screen().contains("· Editor")
     });
     outer
         .send(b"\x1b[200~discard-me\x1b[201~".to_vec())
@@ -244,7 +249,7 @@ fn nested_sidebar_editor_saves_once_and_guards_detach_without_terminal_leaks() {
     });
     press(&outer, KeyCode::Esc, KeyModifiers::NONE);
     until("cancel detach", Duration::from_secs(10), || {
-        !screen().contains("Unsaved changes") && screen().contains("EDIT")
+        !screen().contains("Unsaved changes") && screen().contains("· Editor")
     });
     // Release closure borrow before resize.
     outer.resize(5, 40).unwrap();
@@ -258,7 +263,12 @@ fn nested_sidebar_editor_saves_once_and_guards_detach_without_terminal_leaks() {
     });
     outer.resize(36, 140).unwrap();
     until("editor restored", Duration::from_secs(10), || {
-        outer.state().terminal.screen().contents().contains("EDIT")
+        outer
+            .state()
+            .terminal
+            .screen()
+            .contents()
+            .contains("· Editor")
     });
     outer.send(b"\x07x".to_vec()).unwrap();
     until("detach guard again", Duration::from_secs(10), || {
@@ -529,7 +539,7 @@ fn nested_tui_routes_focus_and_survives_small_window() {
             .terminal
             .screen()
             .contents()
-            .contains("exited 0")
+            .contains("Exited 0")
     });
     assert!(alive(debug_pid));
     outer.send(b"\x07d".to_vec()).unwrap();

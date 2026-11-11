@@ -165,6 +165,7 @@ impl Rendered {
                 plain.push(text.chars().skip(range.start).take(range.len()).collect());
                 neutral.push(slice_line(&self.text.lines[row], range.clone()));
                 let mut mapping = self.rows.get(row).cloned().unwrap_or_else(|| RowSource {
+                    image: None,
                     kind: RowKind::Code,
                     code_language: None,
                     code_copy: None,

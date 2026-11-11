@@ -114,13 +114,13 @@ impl Editor {
             !text
                 .chars()
                 .any(|c| c.is_control() && !matches!(c, '\r' | '\n' | '\t')),
-            "Paste contains control characters"
+            crate::i18n::t("editor.paste_controls")
         );
         if let Some(query) = &mut self.search_input {
             let text = text.replace(['\r', '\n'], "");
             ensure!(
                 query.chars().count() + text.chars().count() <= 256,
-                "Query exceeds 256 characters"
+                crate::i18n::t("editor.query_limit")
             );
             query.push_str(&text);
             self.area
@@ -149,7 +149,7 @@ impl Editor {
     pub fn copy(&self) -> Result<()> {
         crate::files::copy(
             self.selected()
-                .context("Select text first, or use Copy content")?,
+                .context(crate::i18n::t("editor.select_first"))?,
         )
     }
     pub fn cut(&mut self) -> Result<()> {
@@ -342,15 +342,24 @@ impl Editor {
     pub fn draw(&self, frame: &mut Frame, rect: Rect, focused: bool) {
         let _perf = crate::perf::span(crate::perf::Metric::EditorDraw);
         let title = format!(
-            " {}{} · EDIT{}{} [F2] ",
+            " {}{} · {}{}{} ",
             self.loaded
                 .path
                 .file_name()
                 .unwrap_or_default()
                 .to_string_lossy(),
-            if self.dirty() { " *" } else { "" },
-            if self.saving { " · saving" } else { "" },
-            if self.conflict { " · CONFLICT" } else { "" }
+            if self.dirty() { " ●" } else { "" },
+            crate::i18n::t("chrome.editor"),
+            if self.saving {
+                crate::i18n::t("chrome.saving")
+            } else {
+                "".into()
+            },
+            if self.conflict {
+                crate::i18n::t("chrome.conflict")
+            } else {
+                "".into()
+            }
         );
         frame.render_widget(
             Block::bordered()
@@ -422,11 +431,11 @@ fn validate(lines: &[String], encoding: Encoding, newline: &str) -> Result<()> {
     let _perf = crate::perf::span(crate::perf::Metric::EditorValidate);
     ensure!(
         lines.len() <= preview::MAX_LINES,
-        "Edit exceeds 10,000 lines; operation rejected"
+        crate::i18n::t("editor.line_count_limit")
     );
     ensure!(
         lines.iter().all(|l| l.chars().count() <= preview::MAX_LINE),
-        "Edit exceeds line limit; operation rejected"
+        crate::i18n::t("editor.line_length_limit")
     );
     let bytes = match encoding {
         Encoding::Utf8 | Encoding::Utf8Bom => {
@@ -443,10 +452,7 @@ fn validate(lines: &[String], encoding: Encoding, newline: &str) -> Result<()> {
                     + newline.len() * lines.len().saturating_sub(1))
         }
     };
-    ensure!(
-        bytes <= MAX_EDIT_BYTES,
-        "Edit exceeds 512 KiB; operation rejected"
-    );
+    ensure!(bytes <= MAX_EDIT_BYTES, crate::i18n::t("editor.byte_limit"));
     Ok(())
 }
 
@@ -562,19 +568,19 @@ fn encoded_matches(text: &str, encoding: Encoding, expected: &[u8]) -> bool {
 pub fn eligible(path: &Path) -> Result<()> {
     ensure!(
         !path.to_string_lossy().starts_with("\\\\"),
-        "Network paths are preview-only"
+        crate::i18n::t("editor.network_readonly")
     );
     for p in path.ancestors() {
         let meta = fs::symlink_metadata(p)?;
         ensure!(
             !crate::files::is_link(&meta),
-            "Linked paths are preview-only"
+            crate::i18n::t("editor.link_readonly")
         );
     }
     let meta = fs::metadata(path)?;
     ensure!(
         meta.is_file() && !meta.permissions().readonly(),
-        "File is not a writable regular file"
+        crate::i18n::t("editor.not_writable")
     );
     #[cfg(windows)]
     {
@@ -584,11 +590,11 @@ pub fn eligible(path: &Path) -> Result<()> {
         let mut info = BY_HANDLE_FILE_INFORMATION::default();
         ensure!(
             unsafe { GetFileInformationByHandle(file.as_raw_handle() as _, &mut info) } != 0,
-            "Cannot verify hard links"
+            crate::i18n::t("editor.hard_link_check")
         );
         ensure!(
             info.nNumberOfLinks == 1,
-            "Multiple hard links are preview-only"
+            crate::i18n::t("editor.hard_link_readonly")
         );
     }
     Ok(())
@@ -619,15 +625,15 @@ fn save_staged(request: &Save, write: impl FnOnce(&mut File) -> Result<()>) -> R
     }
     let mut held = options
         .open(&request.snapshot.path)
-        .context("Cannot exclude concurrent direct writers; buffer retained")?;
+        .context(crate::i18n::t("editor.concurrent_writer"))?;
     ensure!(
         file_matches(&mut held, &request.snapshot.bytes)?,
-        "Disk content changed; reload or copy edits for external resolution"
+        crate::i18n::t("editor.disk_changed")
     );
     let identity = file_id(&held)?;
     ensure!(
         request.snapshot.identity == Some(identity),
-        "File identity changed since opening; save refused"
+        crate::i18n::t("editor.identity_changed")
     );
     let temp = request
         .snapshot
@@ -642,7 +648,7 @@ fn save_staged(request: &Save, write: impl FnOnce(&mut File) -> Result<()>) -> R
         drop(output);
         ensure!(
             file_id(&File::open(&request.snapshot.path)?)? == identity,
-            "File identity changed during save; refused"
+            crate::i18n::t("editor.identity_during_save")
         );
         #[cfg(windows)]
         replace_checked(request, &temp)?;
@@ -653,7 +659,7 @@ fn save_staged(request: &Save, write: impl FnOnce(&mut File) -> Result<()>) -> R
         let loaded = preview::read(&request.snapshot.path)?;
         ensure!(
             encoded_matches(&request.source, request.snapshot.encoding, &loaded.bytes),
-            "Disk changed immediately after save; delivery state unknown, buffer retained"
+            crate::i18n::t("editor.disk_after_save")
         );
         Ok(loaded)
     })();
@@ -753,13 +759,13 @@ impl SaveLock {
                 .chain(Some(0))
                 .collect();
             let handle = unsafe { CreateMutexW(std::ptr::null(), 0, name.as_ptr()) };
-            ensure!(!handle.is_null(), "Create file save mutex");
+            ensure!(!handle.is_null(), crate::i18n::t("editor.save_mutex"));
             let wait = unsafe { WaitForSingleObject(handle, 5000) };
             if !matches!(wait, 0 | 0x80) {
                 unsafe {
                     CloseHandle(handle);
                 }
-                anyhow::bail!("File save busy; retry");
+                anyhow::bail!(crate::i18n::t("editor.save_busy"));
             }
             Ok(Self { handle })
         }

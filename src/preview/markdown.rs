@@ -44,9 +44,50 @@ pub(super) fn render(source: &str, width: usize, light: bool) -> Output {
         super::reading::with_summaries(events, &prepared.summaries),
         &math.display_ranges,
         true,
+        &Default::default(),
     );
     output.reading = prepared.index;
     output
+}
+/// Bounded textual overview summary using the same writer. No spatial math,
+/// image decoding or diagram preparation is scheduled for this representation.
+pub(super) fn summary(
+    source: &str,
+    width: usize,
+    light: bool,
+) -> Vec<ratatui::text::Line<'static>> {
+    let events =
+        pulldown_cmark::Parser::new_ext(source, super::reading::options()).into_offset_iter();
+    render_events(
+        source,
+        width.max(1),
+        light,
+        events,
+        &[],
+        true,
+        &Default::default(),
+    )
+    .rows
+    .into_iter()
+    .flat_map(|r| {
+        // Source previews can scroll long code horizontally. Overview summaries
+        // have a fixed width and role rails, so wrap those rows before prefixing
+        // them; Paragraph wrapping afterwards would lose the continuation rail.
+        if r.line.width() <= width.max(1) {
+            return vec![r.line];
+        }
+        let pieces: Vec<_> = r
+            .line
+            .spans
+            .into_iter()
+            .map(|s| Piece::synthetic(s.content, s.style))
+            .collect();
+        layout::wrap(&pieces, &[], &[], width.max(1), r.source.kind, r.line.style)
+            .into_iter()
+            .map(|r| r.line)
+            .collect()
+    })
+    .collect()
 }
 fn render_events<'a>(
     source: &str,
@@ -55,6 +96,7 @@ fn render_events<'a>(
     events: impl IntoIterator<Item = (Event<'a>, Range<usize>)>,
     display_ranges: &[Range<usize>],
     trim: bool,
+    image_heights: &std::collections::BTreeMap<usize, u16>,
 ) -> Output {
     let mut w = Writer {
         source,
@@ -72,6 +114,7 @@ fn render_events<'a>(
         spans: 0,
         images: Vec::new(),
         quote_depth: 0,
+        image_heights,
     };
     for (event, range) in events {
         if w.rows.len() >= super::MAX_RENDER_ROWS || w.spans > super::MAX_SPANS {
@@ -132,6 +175,7 @@ struct Writer<'a> {
     spans: usize,
     images: Vec<(String, Range<usize>)>,
     quote_depth: usize,
+    image_heights: &'a std::collections::BTreeMap<usize, u16>,
 }
 impl Writer<'_> {
     fn style(&self) -> Style {
@@ -295,6 +339,8 @@ impl Writer<'_> {
                 Tag::Strikethrough => self.inline(Style::new().add_modifier(Modifier::CROSSED_OUT)),
                 Tag::Link { .. } => self.inline(self.palette.link),
                 Tag::Image { dest_url, .. } => {
+                    self.flush();
+                    self.blank();
                     self.images.push((dest_url.to_string(), range));
                     self.inline(self.palette.link);
                 }
@@ -399,7 +445,31 @@ impl Writer<'_> {
                 }
                 TagEnd::Image => {
                     if let Some((destination, source)) = self.images.pop() {
+                        let caption = std::mem::take(&mut self.pending);
+                        let height = self
+                            .image_heights
+                            .get(&source.start)
+                            .copied()
+                            .unwrap_or(3)
+                            .clamp(1, 48);
+                        for offset in 0..height {
+                            let mut row = layout::row(Vec::new(), RowKind::Prose, Style::default());
+                            row.source.image = Some(super::ImageRow {
+                                source: source.clone(),
+                                destination: destination.clone().into(),
+                                offset,
+                                height,
+                            });
+                            row.source.segments.push(super::SourceSegment {
+                                display: 0..0,
+                                source: source.clone(),
+                                exact: false,
+                            });
+                            self.push(row);
+                        }
+                        self.pending = caption;
                         self.text(&format!(" ({destination})"), source);
+                        self.flush();
                     }
                     self.pop();
                 }

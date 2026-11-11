@@ -24,6 +24,9 @@ impl Harness {
         fs::create_dir_all(&root).unwrap();
         let exe = root.join("devtabs.exe");
         fs::copy(env!("CARGO_BIN_EXE_devtabs"), &exe).unwrap();
+        // Trap accidental native-window launches. DevTabs rejects wt's -w flag;
+        // the isolated frontend must never resolve the installed wt.exe.
+        fs::copy(&exe, root.join("wt.exe")).unwrap();
         Self { root, exe }
     }
     fn command(&self) -> Command {
@@ -107,6 +110,410 @@ fn wait(label: &str, mut f: impl FnMut() -> bool) {
 fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "''"))
 }
+#[test]
+fn agent_only_creates_exactly_one_pty_and_roundtrips_recovery() {
+    let h = Harness::new();
+    let workspace = h.open(&["--composition", "agent-only", "--new-instance"]);
+    assert_eq!(workspace.sessions.len(), 1);
+    assert_eq!(workspace.sessions[0].name, "Agent");
+    assert_eq!(
+        workspace.options.composition,
+        devtabs::launch::Composition::AgentOnly
+    );
+    wait("single Agent shell", || {
+        h.info(&workspace.id).sessions[0].shell_pid.is_some()
+    });
+    let Response::Workspaces(work) = h.rpc(Request::List).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        work.iter().map(|w| w.sessions.len()).sum::<usize>(),
+        1,
+        "there must be no hidden Debug process"
+    );
+    let journal = devtabs::recovery::Journal::load_at(&h.root.join("data")).unwrap();
+    let restored = devtabs::recovery::restore_options(&journal.entries[&workspace.id]);
+    assert_eq!(restored.terminal_count(), 1);
+    assert_eq!(
+        devtabs::overview::model::LaunchSpec::from_options(&restored)
+            .options()
+            .terminal_count(),
+        1
+    );
+    let reused = h.open(&[]);
+    assert_eq!(reused.id, workspace.id);
+    assert_eq!(reused.sessions.len(), 1);
+    h.rpc(Request::Close {
+        workspace: workspace.id,
+    })
+    .unwrap();
+}
+
+#[test]
+fn legacy_host_cannot_receive_new_build_requests_or_reject_new_sidebar_settings() {
+    use interprocess::local_socket::{
+        GenericNamespaced, ListenerNonblockingMode, ListenerOptions, prelude::*,
+    };
+    use std::{
+        hash::{Hash, Hasher},
+        sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
+    };
+    let h = Harness::new();
+    let home = h.root.join("data");
+    fs::create_dir_all(&home).unwrap();
+    let mut config = devtabs::config::Config::default();
+    let project = config
+        .projects
+        .entry(devtabs::config::key(&h.root))
+        .or_default();
+    project.sidebar.width = 46;
+    project.sidebar.agent_ratio = 6250;
+    let path = home.join("config.toml");
+    fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
+
+    // A real listener with the exact namespace used by existing v4 binaries.
+    // It accepts Ping but rejects Open exactly where the old configuration parser failed.
+    let mut hash = std::hash::DefaultHasher::new();
+    devtabs::config::key(&home).hash(&mut hash);
+    std::env::var_os("DEVTABS_INSTANCE").hash(&mut hash);
+    let name = format!("DevTabs-v4-{:016x}", hash.finish());
+    let listener = ListenerOptions::new()
+        .name(name.to_ns_name::<GenericNamespaced>().unwrap())
+        .nonblocking(ListenerNonblockingMode::Accept)
+        .create_sync()
+        .unwrap();
+    struct LegacyHost {
+        stop: Arc<AtomicBool>,
+        requests: Arc<AtomicUsize>,
+        thread: Option<thread::JoinHandle<()>>,
+    }
+    impl Drop for LegacyHost {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            self.thread.take().unwrap().join().unwrap();
+        }
+    }
+    let stop = Arc::new(AtomicBool::new(false));
+    let requests = Arc::new(AtomicUsize::new(0));
+    let legacy = LegacyHost {
+        stop: stop.clone(),
+        requests: requests.clone(),
+        thread: Some(thread::spawn(move || {
+            while !stop.load(Ordering::Relaxed) {
+                match listener.accept() {
+                    Ok(mut stream) => {
+                        requests.fetch_add(1, Ordering::Relaxed);
+                        let response = match devtabs::protocol::receive::<Request>(&mut stream).unwrap() {
+                        Request::Ping => Response::Host { pid: std::process::id() },
+                        _ => Response::Error("unknown field `agent_ratio`, expected one of `width`, `follow`, `compact`".into()),
+                    };
+                        devtabs::protocol::send(&mut stream, &response).unwrap();
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5))
+                    }
+                    Err(error) => panic!("legacy listener: {error}"),
+                }
+            }
+        })),
+    };
+    let workspace = h.open(&["--new-instance"]);
+    assert_eq!(
+        legacy.requests.load(Ordering::Relaxed),
+        0,
+        "a new build must not send any request to an old host"
+    );
+    let Response::Host { pid } = h.rpc(Request::Ping).unwrap() else {
+        panic!("host identity")
+    };
+    assert_ne!(pid, std::process::id());
+    let loaded: devtabs::config::Config =
+        toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let saved = &loaded.projects[&devtabs::config::key(&h.root)].sidebar;
+    assert_eq!(saved.width, 46);
+    assert_eq!(saved.agent_ratio, 6250);
+    assert!(loaded.projects[&devtabs::config::key(&h.root)].last_opened > 0);
+    let copy = h.root.join("same-build.exe");
+    fs::copy(&h.exe, &copy).unwrap();
+    let out = Command::new(copy)
+        .env("DEVTABS_HOME", &home)
+        .arg("list")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let listed: Vec<WorkspaceInfo> = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(
+        listed[0].id, workspace.id,
+        "a copied identical build must reuse the same host"
+    );
+    h.rpc(Request::Close {
+        workspace: workspace.id,
+    })
+    .unwrap();
+}
+
+#[test]
+fn launch_journal_survives_host_crash_restore_is_idempotent_and_last_reuses_workspaces() {
+    let h = Harness::new();
+    let original = h.open(&["--title", "恢复测试", "--new-instance"]);
+    wait("initial shell identity", || {
+        h.info(&original.id)
+            .sessions
+            .iter()
+            .all(|s| s.shell_pid.is_some())
+    });
+    let old_pid = h.info(&original.id).sessions[0].shell_pid.unwrap();
+    let home = h.root.join("data");
+    let journal = devtabs::recovery::Journal::load_at(&home).unwrap();
+    assert!(journal.entries.contains_key(&original.id));
+    let live_restore = h
+        .command()
+        .args(["--restore", "--headless"])
+        .output()
+        .unwrap();
+    assert!(
+        live_restore.status.success(),
+        "{}",
+        String::from_utf8_lossy(&live_restore.stderr)
+    );
+    let live: serde_json::Value = serde_json::from_slice(&live_restore.stdout).unwrap();
+    assert!(live["workspaces"].as_array().unwrap().is_empty());
+    assert_eq!(h.info(&original.id).sessions[0].shell_pid, Some(old_pid));
+    let Response::Host { pid } = h.rpc(Request::Ping).unwrap() else {
+        panic!("host identity")
+    };
+    unsafe {
+        use windows_sys::Win32::{
+            Foundation::CloseHandle,
+            System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess},
+        };
+        let process = OpenProcess(PROCESS_TERMINATE, 0, pid);
+        assert!(!process.is_null());
+        assert_ne!(TerminateProcess(process, 77), 0);
+        CloseHandle(process);
+    }
+    wait("isolated host exits", || h.rpc(Request::Ping).is_err());
+    assert!(
+        devtabs::recovery::Journal::load_at(&home)
+            .unwrap()
+            .entries
+            .contains_key(&original.id)
+    );
+    let result = h
+        .command()
+        .args(["--restore", "--headless"])
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let restored: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let work = restored["workspaces"].as_array().unwrap();
+    assert_eq!(work.len(), 1);
+    let id = work[0]["id"].as_str().unwrap().to_owned();
+    assert_ne!(id, original.id);
+    wait("restored shell identity", || {
+        h.info(&id).sessions.iter().all(|s| s.shell_pid.is_some())
+    });
+    assert_eq!(h.info(&id).options.title.as_deref(), Some("恢复测试"));
+    assert_ne!(h.info(&id).sessions[0].shell_pid, Some(old_pid));
+    let journal = devtabs::recovery::Journal::load_at(&home).unwrap();
+    assert_eq!(journal.entries.len(), 1);
+    assert!(!journal.entries.contains_key(&original.id));
+    assert!(journal.entries.contains_key(&id));
+    let again = h
+        .command()
+        .args(["--restore", "--headless"])
+        .output()
+        .unwrap();
+    assert!(again.status.success());
+    let data: serde_json::Value = serde_json::from_slice(&again.stdout).unwrap();
+    assert!(data["workspaces"].as_array().unwrap().is_empty());
+    let last = h.command().args(["--last", "--headless"]).output().unwrap();
+    assert!(
+        last.status.success(),
+        "{}",
+        String::from_utf8_lossy(&last.stderr)
+    );
+    let data: serde_json::Value = serde_json::from_slice(&last.stdout).unwrap();
+    assert_eq!(data["workspaces"][0]["id"], id);
+    h.rpc(Request::Close { workspace: id }).unwrap();
+    assert!(
+        devtabs::recovery::Journal::load_at(&home)
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    let nothing = h
+        .command()
+        .args(["--restore", "--headless"])
+        .output()
+        .unwrap();
+    assert!(nothing.status.success());
+    let data: serde_json::Value = serde_json::from_slice(&nothing.stdout).unwrap();
+    assert!(data["workspaces"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn automatic_resume_uses_fixture_history_and_fresh_preserves_literal_agent_arguments() {
+    let h = Harness::new();
+    let bin = h.root.join("bin");
+    fs::create_dir(&bin).unwrap();
+    let captured = h.root.join("arguments.json");
+    // Bind the command explicitly inside the fixture shell: PATH precedence is
+    // not sufficient isolation from PowerShell aliases, functions or app shims.
+    let pwsh = Command::new("pwsh")
+        .args(["-NoProfile", "-Command", "(Get-Process -Id $PID).Path"])
+        .output()
+        .unwrap();
+    assert!(pwsh.status.success());
+    let pwsh = String::from_utf8(pwsh.stdout).unwrap().trim().to_owned();
+    let source = bin.join("fixture.rs");
+    fs::write(&source, format!(r#"
+fn main() {{
+    if std::env::current_exe().unwrap().file_stem().unwrap() == "fixture-shell" {{
+        let encoded = std::env::args().last().unwrap();
+        let fixture = std::env::current_exe().unwrap().with_file_name("codex.exe");
+        let script = format!("function global:codex {{{{ & '{{}}' @args }}}}; & ([scriptblock]::Create([Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('{{}}'))))", fixture.display().to_string().replace('\'', "''"), encoded);
+        let status = std::process::Command::new({pwsh:?}).args(["-NoLogo", "-NoExit", "-NoProfile", "-Command", &script]).status().unwrap();
+        std::process::exit(status.code().unwrap_or(1));
+    }}
+    let path = std::env::var_os("DEVTABS_FIXTURE_CAPTURE").unwrap();
+    let args = std::env::args().skip(1).collect::<Vec<_>>().join("\0");
+    std::fs::write(path, args).unwrap();
+}}
+"#)).unwrap();
+    let compiled = Command::new("rustc")
+        .arg(&source)
+        .arg("-o")
+        .arg(bin.join("codex.exe"))
+        .output()
+        .unwrap();
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let shell = bin.join("fixture-shell.exe");
+    fs::copy(bin.join("codex.exe"), &shell).unwrap();
+    let history = h.root.join("fake-codex/sessions");
+    fs::create_dir_all(&history).unwrap();
+    let line = serde_json::json!({"type":"session_meta","payload":{"cwd":h.root,"id":"fixture-session","timestamp":"2026-11-11T00:00:00Z"}});
+    fs::write(history.join("fixture.jsonl"), format!("{line}\n")).unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let open = |flags: &[&str]| {
+        let out = h
+            .command()
+            .env("PATH", &path)
+            .arg("--shell")
+            .arg(&shell)
+            .env("DEVTABS_FIXTURE_CAPTURE", &captured)
+            .env("CODEX_HOME", h.root.join("fake-codex"))
+            .args([
+                "--headless",
+                "--agent",
+                "codex",
+                "--no-profile",
+                "--project",
+            ])
+            .arg(&h.root)
+            .args([
+                "--agent-arg=--model",
+                "--agent-arg=literal ' ; $(Write-Output injected)",
+            ])
+            .args(flags)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<WorkspaceInfo>(&out.stdout).unwrap()
+    };
+    let resumed = open(&["--continue-latest"]);
+    assert_eq!(
+        resumed.options.resume_id.as_deref(),
+        Some("fixture-session")
+    );
+    h.rpc(Request::Attach {
+        floating: None,
+        takeover: false,
+        workspace: resumed.id.clone(),
+        session: resumed.sessions[0].id.clone(),
+        client: "fixture".into(),
+        rows: 32,
+        cols: 160,
+    })
+    .unwrap();
+    let resume_started = Instant::now();
+    wait("fixture Agent captures resumed arguments", || {
+        let current = h.info(&resumed.id);
+        if resume_started.elapsed() > Duration::from_secs(5)
+            || matches!(current.sessions[0].command,CommandStatus::Exited(c) if c!=0)
+        {
+            let output = h
+                .rpc(Request::Poll {
+                    workspace: resumed.id.clone(),
+                    session: resumed.sessions[0].id.clone(),
+                    client: "fixture".into(),
+                    revision: None,
+                    history: true,
+                })
+                .unwrap();
+            if let Response::Update(Some(update)) = output {
+                panic!(
+                    "Fixture Agent failed: {}",
+                    String::from_utf8_lossy(&update.screen)
+                );
+            }
+        }
+
+        fs::read(&captured).ok().is_some()
+    });
+    let args = fs::read_to_string(&captured)
+        .unwrap()
+        .split('\0')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        args,
+        vec![
+            "resume",
+            "fixture-session",
+            "--model",
+            "literal ' ; $(Write-Output injected)"
+        ]
+    );
+    fs::remove_file(&captured).unwrap();
+    let fresh = open(&["--fresh", "--new-instance"]);
+    assert!(fresh.options.resume_id.is_none());
+    wait("fixture Agent captures fresh arguments", || {
+        fs::read(&captured).ok().is_some()
+    });
+    let args = fs::read_to_string(&captured)
+        .unwrap()
+        .split('\0')
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        args,
+        vec!["--model", "literal ' ; $(Write-Output injected)"]
+    );
+}
 
 #[test]
 fn detached_output_reconnect_and_layouts_keep_same_processes() {
@@ -120,6 +527,7 @@ fn detached_output_reconnect_and_layouts_keep_same_processes() {
     let pid = h.info(&w.id).sessions[1].shell_pid;
     let attach = |client: &str| {
         h.rpc(Request::Attach {
+            floating: None,
             takeover: false,
             workspace: w.id.clone(),
             session: sid.clone(),
@@ -448,6 +856,7 @@ fn killed_frontend_reconnects_without_restarting_shells() {
     );
     thread::sleep(Duration::from_millis(3200));
     h.rpc(Request::Attach {
+        floating: None,
         takeover: false,
         workspace: id.clone(),
         session: before.sessions[0].id.clone(),
@@ -468,6 +877,7 @@ fn managed_run_cancels_unsubmitted_edit_buffer_and_config_writers_merge() {
     let w = h.open(&[]);
     let sid = w.sessions[1].id.clone();
     h.rpc(Request::Attach {
+        floating: None,
         takeover: false,
         workspace: w.id.clone(),
         session: sid.clone(),
@@ -583,9 +993,7 @@ fn named_sessions_keep_identity_and_relative_directory_across_reuse() {
         .unwrap()
         .write_all(b"\x07n\x07n")
         .unwrap();
-    wait("named session focus", || {
-        view.contents().contains("Docs [focus]")
-    });
+    wait("named session focus", || view.contents().contains("[Docs]"));
     assert_eq!(h.info(&w.id).sessions[2].id, w.sessions[2].id);
     assert!(!directory.join(".devtabs").exists());
 }
@@ -595,6 +1003,7 @@ struct Frontend {
     _master: Box<dyn portable_pty::MasterPty + Send>,
     screen: std::sync::Arc<std::sync::Mutex<devtabs::terminal::Terminal>>,
     writer: std::sync::Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
+    received: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 impl Frontend {
     fn start(h: &Harness, args: &[&str]) -> Self {
@@ -614,18 +1023,26 @@ impl Frontend {
         let mut command = CommandBuilder::new(&h.exe);
         command.args(args);
         command.env("DEVTABS_HOME", h.root.join("data"));
+        let mut paths = vec![h.root.clone()];
+        paths.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        command.env("PATH", std::env::join_paths(paths).unwrap());
         let child = pair.slave.spawn_command(command).unwrap();
         drop(pair.slave);
         let screen = Arc::new(Mutex::new(devtabs::terminal::Terminal::new(36, 140, 100)));
         let writer = Arc::new(Mutex::new(pair.master.take_writer().unwrap()));
         let (screen_thread, writer_thread) = (screen.clone(), writer.clone());
         let mut reader = pair.master.try_clone_reader().unwrap();
+        let received = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let received_thread = received.clone();
         thread::spawn(move || {
             let mut buffer = [0; 8192];
             while let Ok(n) = reader.read(&mut buffer) {
                 if n == 0 {
                     break;
                 }
+                received_thread.fetch_add(n as u64, std::sync::atomic::Ordering::Relaxed);
                 let replies = screen_thread.lock().unwrap().process(&buffer[..n]);
                 if !replies.is_empty() {
                     let _ = writer_thread.lock().unwrap().write_all(&replies);
@@ -637,6 +1054,7 @@ impl Frontend {
             _master: pair.master,
             screen,
             writer,
+            received,
         }
     }
     fn contents(&self) -> String {
@@ -650,181 +1068,81 @@ impl Drop for Frontend {
     }
 }
 #[test]
-#[ignore = "opens isolated real Windows Terminal windows to verify layouts and topmost state"]
-fn windows_terminal_layouts_preserve_shells_and_debug_window_state() {
-    use windows_sys::Win32::{
-        Foundation::{HWND, LPARAM},
-        UI::WindowsAndMessaging::*,
-    };
-    fn find(title: &str) -> HWND {
-        struct Find {
-            title: String,
-            found: HWND,
-        }
-        unsafe extern "system" fn visit(hwnd: HWND, param: LPARAM) -> i32 {
-            let find = unsafe { &mut *(param as *mut Find) };
-            let mut text = [0u16; 1024];
-            let len = unsafe { GetWindowTextW(hwnd, text.as_mut_ptr(), text.len() as i32) };
-            if String::from_utf16_lossy(&text[..len.max(0) as usize]).contains(&find.title) {
-                find.found = hwnd;
-                return 0;
-            }
-            1
-        }
-        let mut find = Find {
-            title: title.into(),
-            found: std::ptr::null_mut(),
-        };
-        unsafe {
-            EnumWindows(Some(visit), &mut find as *mut Find as isize);
-        }
-        find.found
-    }
+fn overview_recovers_when_its_empty_host_exits_without_creating_any_sessions() {
     let h = Harness::new();
-    let w = h.open(&[]);
-    wait("shells", || {
-        h.info(&w.id).sessions.iter().all(|s| s.shell_pid.is_some())
-    });
-    let before = h
-        .info(&w.id)
-        .sessions
-        .iter()
-        .map(|s| s.shell_pid)
-        .collect::<Vec<_>>();
-    let second = h.open(&["--new-instance"]);
-    h.rpc(Request::Layout {
-        workspace: second.id.clone(),
-        layout: Layout::Float,
-    })
-    .unwrap();
-    let frontend = Frontend::start(&h, &["--workspace", &w.id]);
-    wait("split frontend", || frontend.contents().contains("Ctrl+G"));
-    let title = format!(
-        "DevTabs Debug · {}",
-        h.root.file_name().unwrap().to_string_lossy()
-    );
-    h.rpc(Request::Layout {
-        workspace: w.id.clone(),
-        layout: Layout::Float,
-    })
-    .unwrap();
-    wait("floating Debug window", || !find(&title).is_null());
-    let hwnd = find(&title);
-    assert_eq!(
-        unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_TOPMOST as isize,
-        0
-    );
-    frontend.writer.lock().unwrap().write_all(b"\x07t").unwrap();
-    wait(
-        "topmost Debug",
-        || unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_TOPMOST as isize != 0,
-    );
-    frontend.writer.lock().unwrap().write_all(b"\x07d").unwrap();
-    thread::sleep(Duration::from_millis(200));
-    assert_ne!(
-        unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } & WS_EX_TOPMOST as isize,
-        0,
-        "restoring Debug preserves topmost"
-    );
-    h.rpc(Request::DebugTarget {
-        workspace: Some(second.id.clone()),
-    })
-    .unwrap();
-    thread::sleep(Duration::from_millis(650));
-    h.rpc(Request::Attach {
-        workspace: w.id.clone(),
-        session: w.sessions[1].id.clone(),
-        client: "shared-released-original".into(),
-        rows: 24,
-        cols: 100,
-        takeover: false,
-    })
-    .unwrap();
+    let projects = h.root.join("empty-projects");
+    fs::create_dir_all(&projects).unwrap();
     assert!(
-        h.rpc(Request::Attach {
-            workspace: second.id.clone(),
-            session: second.sessions[1].id.clone(),
-            client: "competing-shared".into(),
-            rows: 24,
-            cols: 100,
-            takeover: false
-        })
-        .is_err(),
-        "the shared view must now own the selected project's Debug"
+        h.command()
+            .args(["config", "root"])
+            .arg(&projects)
+            .output()
+            .unwrap()
+            .status
+            .success()
     );
-    assert_eq!(
-        find(&title),
-        hwnd,
-        "switching projects reuses the same Debug window"
-    );
-    h.rpc(Request::Detach {
-        client: "shared-released-original".into(),
-    })
-    .unwrap();
-    h.rpc(Request::DebugTarget {
-        workspace: Some(w.id.clone()),
-    })
-    .unwrap();
-    thread::sleep(Duration::from_millis(650));
-    h.rpc(Request::Layout {
-        workspace: w.id.clone(),
-        layout: Layout::Tabs,
-    })
-    .unwrap();
-    wait("floating view retired", || find(&title).is_null());
-    wait("native tabs", || !find(&w.id).is_null());
-    h.rpc(Request::Layout {
-        workspace: w.id.clone(),
-        layout: Layout::Split,
-    })
-    .unwrap();
-    thread::sleep(Duration::from_millis(800));
-    h.rpc(Request::Layout {
-        workspace: w.id.clone(),
-        layout: Layout::Float,
-    })
-    .unwrap();
+    let view = Frontend::start(&h, &[]);
+    let mut first = None;
+    wait("overview starts an empty host", || {
+        if let Ok(Response::Host { pid }) = h.rpc(Request::Ping) {
+            first = Some(pid);
+            true
+        } else {
+            false
+        }
+    });
+    assert!(matches!(h.rpc(Request::List).unwrap(), Response::Workspaces(w) if w.is_empty()));
+    // Same missing-pipe state as idle expiry or a crashed host, without a
+    // 30-second sleep and without opening Windows Terminal or an Agent.
+    h.rpc(Request::Shutdown).unwrap();
     let start = Instant::now();
-    while find(&title).is_null() {
+    loop {
+        if let Ok(Response::Host { pid }) = h.rpc(Request::Ping)
+            && Some(pid) != first
+        {
+            break;
+        }
         assert!(
-            start.elapsed() < Duration::from_secs(20),
-            "Debug restore: {:?}; last error: {:?}",
-            h.info(&w.id),
-            fs::read_to_string(h.root.join("data/last-error.txt"))
+            start.elapsed() < Duration::from_secs(8),
+            "overview never reconnects after the empty host exits"
         );
         thread::sleep(Duration::from_millis(50));
     }
-    let after = h
-        .info(&w.id)
-        .sessions
-        .iter()
-        .map(|s| s.shell_pid)
-        .collect::<Vec<_>>();
-    assert_eq!(before, after);
-    // Closing the independent frontend collapses Debug, leaving its shell alive.
-    let debug = find(&title);
-    unsafe {
-        PostMessageW(debug, WM_CLOSE, 0, 0);
-    }
-    wait("Debug collapsed", || find(&title).is_null());
-    assert_eq!(
-        before,
-        h.info(&w.id)
-            .sessions
-            .iter()
-            .map(|s| s.shell_pid)
-            .collect::<Vec<_>>()
-    );
-    let main = Frontend::start(&h, &["--workspace", &w.id]);
-    wait("collapsed Debug restored", || !find(&title).is_null());
-    h.rpc(Request::Close {
-        workspace: w.id.clone(),
-    })
-    .unwrap();
-    wait("owned windows closed", || {
-        find(&title).is_null() && find(&w.id).is_null()
+    assert!(matches!(h.rpc(Request::List).unwrap(), Response::Workspaces(w) if w.is_empty()));
+    wait("healthy status replaces stale connection error", || {
+        !view.contents().contains("os error 2")
+            && !view.contents().contains("Connect to DevTabs host")
     });
-    drop(main);
+}
+#[test]
+fn workspace_overview_button_returns_without_agent_input_or_terminating_shells() {
+    let h = Harness::new();
+    let w = h.open(&["--composition", "agent-only"]);
+    wait("shell starts", || {
+        h.info(&w.id).sessions[0].shell_pid.is_some()
+    });
+    let pid = h.info(&w.id).sessions[0].shell_pid;
+    assert!(
+        h.command()
+            .args(["config", "add"])
+            .arg(&h.root)
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let view = Frontend::start(&h, &["--workspace", &w.id]);
+    wait("visible overview button", || view.contents().contains("[←"));
+    view.writer
+        .lock()
+        .unwrap()
+        .write_all(b"\x1b[<0;11;36M\x1b[<0;11;36m")
+        .unwrap();
+    wait("back in overview", || {
+        view.contents().contains("DevTabs") && view.contents().contains("[ / ")
+    });
+    assert_eq!(h.info(&w.id).sessions[0].shell_pid, pid);
+    assert!(matches!(h.rpc(Request::List).unwrap(),Response::Workspaces(rows)if rows.len()==1));
 }
 fn process_metrics(pids: &[u32]) -> (u64, u64, u64) {
     use windows_sys::Win32::{
@@ -1091,4 +1409,466 @@ fn release_scale_100_projects_8_sessions() {
     );
     drop(overview);
     drop(views);
+}
+
+#[test]
+fn headless_host_validation_failure_returns_nonzero_and_equals_data_dir_is_honored() {
+    let h = Harness::new();
+    let alternate = h.root.join("explicit-data");
+    let o = h
+        .command()
+        .arg(format!("--data-dir={}", alternate.display()))
+        .args([
+            "--headless",
+            "--agent",
+            "shell",
+            "--shell",
+            "missing-fixture-shell-0a167b.exe",
+            "--project",
+        ])
+        .arg(&h.root)
+        .output()
+        .unwrap();
+    assert!(!o.status.success());
+    assert!(String::from_utf8_lossy(&o.stderr).contains("PowerShell not found"));
+    assert!(alternate.join("launches.json").is_file());
+    assert!(!h.root.join("data/launches.json").exists());
+    let _ = h
+        .command()
+        .env("DEVTABS_HOME", alternate)
+        .arg("shutdown")
+        .output();
+}
+
+#[test]
+fn literal_agent_argument_cannot_override_devtabs_data_directory() {
+    let h = Harness::new();
+    let decoy = h.root.join("decoy-data");
+    let arg = format!("--data-dir={}", decoy.display());
+    let workspace = h.open(&["--agent-arg", &arg]);
+    assert_eq!(workspace.options.agent_args, vec![arg]);
+    assert!(h.root.join("data/launches.json").is_file());
+    assert!(!decoy.exists());
+}
+
+#[test]
+fn floating_handoff_preserves_processes_and_rejects_stale_views_and_sizes() {
+    use devtabs::presentation::{Placement, Target};
+    let h = Harness::new();
+    let mut config = devtabs::config::Config::default();
+    config
+        .projects
+        .entry(devtabs::config::key(&h.root))
+        .or_default()
+        .sessions = vec![devtabs::config::SessionConfig {
+        name: "Build".into(),
+        command: None,
+        directory: None,
+    }];
+    fs::create_dir_all(h.root.join("data")).unwrap();
+    fs::write(
+        h.root.join("data/config.toml"),
+        toml::to_string(&config).unwrap(),
+    )
+    .unwrap();
+    let work = h.open(&[
+        "--debug-command",
+        "for($i=0;$i -lt 40;$i++){Write-Output ('CONTINUE-'+$i);Start-Sleep -Milliseconds 50}",
+    ]);
+    wait("shell identities", || {
+        h.info(&work.id)
+            .sessions
+            .iter()
+            .all(|s| s.shell_pid.is_some())
+    });
+    let original = h.info(&work.id);
+    let target = |i: usize| Target {
+        workspace: work.id.clone(),
+        session: work.sessions[i].id.clone(),
+    };
+    let attach = |i: usize, client: &str, floating| {
+        h.rpc(Request::Attach {
+            floating,
+            takeover: true,
+            workspace: work.id.clone(),
+            session: work.sessions[i].id.clone(),
+            client: client.into(),
+            rows: 24,
+            cols: 90,
+        })
+    };
+    let poll = |i: usize, client: &str| {
+        h.rpc(Request::Poll {
+            workspace: work.id.clone(),
+            session: work.sessions[i].id.clone(),
+            client: client.into(),
+            revision: None,
+            history: true,
+        })
+    };
+    let prepare = |i| {
+        let Response::FloatPlan(plan) = h.rpc(Request::PrepareFloat { target: target(i) }).unwrap()
+        else {
+            panic!("plan")
+        };
+        plan
+    };
+    attach(0, "main", None).unwrap();
+    let a = prepare(0);
+    assert_eq!(h.info(&work.id).sessions[0].placement, Placement::Docked);
+    assert!(
+        poll(0, "main").is_ok(),
+        "preparation must preserve the source view"
+    );
+    let invalid = h.rpc(Request::Attach {
+        floating: Some(a.ticket.revision),
+        takeover: true,
+        workspace: work.id.clone(),
+        session: work.sessions[0].id.clone(),
+        client: "invalid-size".into(),
+        rows: 0,
+        cols: 0,
+    });
+    assert!(invalid.is_err());
+    assert!(poll(0, "main").is_ok());
+    attach(0, "float-a", Some(a.ticket.revision)).unwrap();
+    assert_eq!(h.info(&work.id).sessions[0].placement, Placement::Floating);
+    assert!(poll(0, "main").is_err());
+    assert!(attach(0, "competing", None).is_err());
+    assert!(attach(0, "competing-float", Some(a.ticket.revision)).is_err());
+    let b = prepare(1);
+    let c = prepare(2);
+    h.rpc(Request::CancelFloat {
+        revision: b.ticket.revision,
+    })
+    .unwrap();
+    assert!(attach(1, "stale", Some(b.ticket.revision)).is_err());
+    assert!(
+        poll(0, "float-a").is_ok(),
+        "pending switch keeps the old floating view until commit"
+    );
+    attach(2, "float-c", Some(c.ticket.revision)).unwrap();
+    assert_eq!(h.info(&work.id).sessions[0].placement, Placement::Collapsed);
+    assert!(poll(0, "float-a").is_err());
+    assert!(
+        h.rpc(Request::Resize {
+            workspace: work.id.clone(),
+            session: work.sessions[0].id.clone(),
+            client: "main".into(),
+            rows: 4,
+            cols: 5
+        })
+        .is_err()
+    );
+    assert!(
+        h.rpc(Request::Input {
+            workspace: work.id.clone(),
+            session: work.sessions[0].id.clone(),
+            client: "float-a".into(),
+            bytes: b"SHOULD-NOT-ARRIVE".to_vec()
+        })
+        .is_err()
+    );
+    for layout in [Layout::Float, Layout::Tabs, Layout::Split] {
+        h.rpc(Request::Layout {
+            workspace: work.id.clone(),
+            layout,
+        })
+        .unwrap();
+        assert!(
+            poll(2, "float-c").is_ok(),
+            "layout changes must preserve the floating lease"
+        );
+    }
+    h.rpc(Request::Present {
+        target: target(2),
+        placement: Placement::Collapsed,
+    })
+    .unwrap();
+    assert!(poll(2, "float-c").is_err());
+    h.rpc(Request::Present {
+        target: target(1),
+        placement: Placement::Collapsed,
+    })
+    .unwrap();
+    wait("hidden command completes", || {
+        matches!(
+            h.info(&work.id).sessions[1].command,
+            CommandStatus::Exited(0)
+        )
+    });
+    h.rpc(Request::Present {
+        target: target(1),
+        placement: Placement::Docked,
+    })
+    .unwrap();
+    attach(1, "docked", None).unwrap();
+    let Response::Update(Some(update)) = poll(1, "docked").unwrap() else {
+        panic!("update")
+    };
+    assert!(String::from_utf8_lossy(&update.screen).contains("CONTINUE-39"));
+    let again = h.info(&work.id);
+    assert_eq!(
+        again
+            .sessions
+            .iter()
+            .map(|s| s.shell_pid)
+            .collect::<Vec<_>>(),
+        original
+            .sessions
+            .iter()
+            .map(|s| s.shell_pid)
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        again.sessions.iter().map(|s| &s.id).collect::<Vec<_>>(),
+        original.sessions.iter().map(|s| &s.id).collect::<Vec<_>>()
+    );
+    let d = prepare(0);
+    attach(0, "crashed-float", Some(d.ticket.revision)).unwrap();
+    h.rpc(Request::Detach {
+        client: "crashed-float".into(),
+    })
+    .unwrap();
+    assert_eq!(h.info(&work.id).sessions[0].placement, Placement::Collapsed);
+    assert!(matches!(
+        h.rpc(Request::FloatingTarget).unwrap(),
+        Response::Floating(None)
+    ));
+}
+
+#[test]
+fn terminal_panel_stays_in_one_frontend_and_routes_geometry_and_input() {
+    use devtabs::presentation::Placement;
+    let h = Harness::new();
+    let work = h.open(&[]);
+    let main = Frontend::start(&h, &["--workspace", &work.id, "--language", "en-us"]);
+    let keys = |f: &Frontend, bytes: &[u8]| f.writer.lock().unwrap().write_all(bytes).unwrap();
+    wait("main ready", || main.contents().contains("Ctrl+G"));
+    let before = h
+        .info(&work.id)
+        .sessions
+        .iter()
+        .map(|s| (s.id.clone(), s.shell_pid))
+        .collect::<Vec<_>>();
+    keys(&main, b"\x07d\x07wf");
+    wait("inline Debug", || {
+        h.info(&work.id).sessions[1].placement == Placement::Floating
+    });
+    wait("panel drawn in the same frontend", || {
+        main.contents().contains("[Dock]")
+    });
+    assert!(main.contents().contains("Agent"));
+    keys(&main, b"Write-Output 'PANEL-INPUT-OK'\r");
+    wait("panel command completed", || {
+        main.contents().contains("PANEL-INPUT-OK")
+    });
+    // Enlarging Agent temporarily covers the floating Debug without detaching it.
+    keys(&main, b"\x07a\x07z");
+    wait("Agent enlarged", || !main.contents().contains("[Dock]"));
+    keys(&main, b"\x07z\x07d");
+    wait("Debug restored after Agent enlargement", || {
+        main.contents().contains("[Dock]")
+    });
+    let restored = h.root.join("restored-float-input");
+    keys(
+        &main,
+        format!("[IO.File]::WriteAllText({},'ok')\r", quoted(&restored)).as_bytes(),
+    );
+    wait("restored Debug still accepts input", || restored.exists());
+    // Default 93 x 23 panel above the one-line footer: (23, 6).
+    // SGR mouse coordinates are one based; drag title five cells right/two down.
+    keys(&main, b"\x1b[<0;26;7M\x1b[<32;31;9M\x1b[<0;31;9m");
+    let geometry = || {
+        fs::read(h.root.join("data/terminal-panel.json"))
+            .ok()
+            .and_then(|v| serde_json::from_slice::<[u16; 4]>(&v).ok())
+    };
+    wait("drag saved cell coordinates", || {
+        geometry().is_some_and(|r| r[0] == 28 && r[1] == 8)
+    });
+    let moved = geometry().unwrap();
+    assert_eq!((moved[2], moved[3]), (93, 23));
+    keys(&main, b"\x1b[<0;121;31M\x1b[<32;116;28M\x1b[<0;116;28m");
+    wait("resize saved", || {
+        geometry().is_some_and(|r| r[2] == 88 && r[3] == 20)
+    });
+    // Keyboard geometry mode consumes arrows instead of sending them to shell.
+    keys(&main, b"\x07wm\x1b[D\r");
+    wait("keyboard move saved", || {
+        geometry().is_some_and(|r| r[0] == 27)
+    });
+    assert_eq!(
+        before,
+        h.info(&work.id)
+            .sessions
+            .iter()
+            .map(|s| (s.id.clone(), s.shell_pid))
+            .collect::<Vec<_>>()
+    );
+    keys(&main, b"\x07wc");
+    wait("panel collapsed", || {
+        h.info(&work.id).sessions[1].placement == Placement::Collapsed
+    });
+    wait("main stays visible", || main.contents().contains("Agent"));
+    keys(&main, b"\x07d");
+    wait("same panel restored", || main.contents().contains("[Dock]"));
+    assert_eq!(geometry().unwrap()[0], 27);
+    // A different project takes the shared target; the first frontend survives.
+    let second = h.open(&["--new-instance"]);
+    let other = Frontend::start(&h, &["--workspace", &second.id, "--language", "en-us"]);
+    wait("second main", || other.contents().contains("Ctrl+G"));
+    keys(&other, b"\x07d\x07wf");
+    wait("shared panel moved project", || {
+        h.info(&second.id).sessions[1].placement == Placement::Floating
+            && h.info(&work.id).sessions[1].placement == Placement::Collapsed
+    });
+    keys(&main, b"\x07a");
+    let marker = h.root.join("source-input-ok");
+    keys(
+        &main,
+        format!("[IO.File]::WriteAllText({},'ok')\r", quoted(&marker)).as_bytes(),
+    );
+    wait("source frontend still interactive", || marker.exists());
+    drop(other);
+    wait("crashed main releases panel", || {
+        h.info(&second.id).sessions[1].placement == Placement::Collapsed
+    });
+    // Dock, then collapse every managed terminal: workspace remains alive.
+    keys(&main, b"\x07d\x07wd");
+    wait("dock restored", || {
+        h.info(&work.id).sessions[1].placement == Placement::Docked
+    });
+    keys(&main, b"\x07wc");
+    wait("Debug hidden", || {
+        h.info(&work.id).sessions[1].placement == Placement::Collapsed
+    });
+    keys(&main, b"\x07wc");
+    wait("all hidden", || {
+        h.info(&work.id)
+            .sessions
+            .iter()
+            .all(|s| s.placement == Placement::Collapsed)
+    });
+    wait("empty workspace controls", || {
+        main.contents().contains("All terminals are hidden")
+    });
+    assert_eq!(
+        before,
+        h.info(&work.id)
+            .sessions
+            .iter()
+            .map(|s| (s.id.clone(), s.shell_pid))
+            .collect::<Vec<_>>()
+    );
+    keys(&main, b"\x07wd");
+    wait("menu usable after all hidden", || {
+        h.info(&work.id).sessions[0].placement == Placement::Docked
+    });
+    keys(&main, b"\x07x");
+}
+
+#[test]
+fn default_float_layout_uses_the_current_frontend() {
+    use devtabs::presentation::Placement;
+    let h = Harness::new();
+    let work = h.open(&[]);
+    h.rpc(Request::Layout {
+        workspace: work.id.clone(),
+        layout: Layout::Float,
+    })
+    .unwrap();
+    let main = Frontend::start(&h, &["--workspace", &work.id, "--language", "en-us"]);
+    wait("default inline Debug", || {
+        h.info(&work.id).sessions[1].placement == Placement::Floating
+    });
+    wait("inline controls on main", || {
+        main.contents().contains("[Dock]")
+    });
+    for layout in [Layout::Split, Layout::Tabs, Layout::Float] {
+        main.writer.lock().unwrap().write_all(b"\x07l").unwrap();
+        wait("inline layout switch", || {
+            h.info(&work.id).options.layout == layout
+        });
+        assert_eq!(h.info(&work.id).sessions[1].placement, Placement::Floating);
+    }
+    main.writer
+        .lock()
+        .unwrap()
+        .write_all(b"\x07d\x07wc")
+        .unwrap();
+    wait("collapse leaves main", || {
+        h.info(&work.id).sessions[1].placement == Placement::Collapsed
+    });
+    drop(main);
+    let reconnect = Frontend::start(&h, &["--workspace", &work.id, "--language", "en-us"]);
+    wait("reconnect main", || reconnect.contents().contains("Ctrl+G"));
+    assert_eq!(
+        h.info(&work.id).sessions[1].placement,
+        Placement::Collapsed,
+        "reconnect must not undo intentional collapse"
+    );
+}
+
+#[test]
+#[ignore = "release-only 10-second expanded/collapsed terminal performance comparison"]
+fn collapsed_terminal_output_workload() {
+    use devtabs::presentation::{Placement, Target};
+    use std::sync::atomic::Ordering;
+    let h = Harness::new();
+    let marker = h.root.join("producer-complete");
+    let source = format!(
+        "for($i=0;$i -lt 300;$i++){{Write-Output ('ACTIVE-'+$i);Start-Sleep -Milliseconds 100}};[IO.File]::WriteAllText({},'done')",
+        quoted(&marker)
+    );
+    let work = h.open(&["--debug-command", &source]);
+    let front = Frontend::start(&h, &["--workspace", &work.id, "--language", "en-us"]);
+    wait("frontend active output", || {
+        front.contents().contains("ACTIVE-")
+    });
+    let Response::Host { pid } = h.rpc(Request::Ping).unwrap() else {
+        panic!("host")
+    };
+    let pids = [pid, front.child.process_id().unwrap()];
+    let sample = || {
+        let (cpu0, _, _) = process_metrics(&pids);
+        let bytes0 = front.received.load(Ordering::Relaxed);
+        let start = Instant::now();
+        for _ in 0..100 {
+            thread::sleep(Duration::from_millis(100));
+        }
+        let (cpu, working, private) = process_metrics(&pids);
+        serde_json::json!({"wall_ms":start.elapsed().as_millis(),"cpu_ms":(cpu-cpu0) as f64 /10000.0,"frontend_bytes":front.received.load(Ordering::Relaxed)-bytes0,"working_set_bytes":working,"private_bytes":private})
+    };
+    let visible = sample();
+    h.rpc(Request::Present {
+        target: Target {
+            workspace: work.id.clone(),
+            session: work.sessions[1].id.clone(),
+        },
+        placement: Placement::Collapsed,
+    })
+    .unwrap();
+    wait("collapsed state delivered", || {
+        front.contents().contains("Collapsed")
+    });
+    let hidden = sample();
+    assert!(
+        !marker.exists(),
+        "producer must continue during both measurements"
+    );
+    assert!(matches!(
+        h.info(&work.id).sessions[1].command,
+        CommandStatus::Running
+    ));
+    assert!(
+        hidden["frontend_bytes"].as_u64().unwrap() < visible["frontend_bytes"].as_u64().unwrap()
+    );
+    let report = serde_json::json!({"visible":visible,"collapsed":hidden,"producer_running":true,"memory_scope":"host and frontend only; excludes PowerShell, Agent and Windows Terminal","samples_seconds":10});
+    fs::write(
+        "artifacts/terminal-panel-output-benchmark.json",
+        serde_json::to_vec_pretty(&report).unwrap(),
+    )
+    .unwrap();
+    println!("{report}");
 }

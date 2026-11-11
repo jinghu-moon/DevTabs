@@ -23,6 +23,7 @@ pub enum Operation {
     List,
     Put(Entry),
     Delete(uuid::Uuid),
+    Remap(Vec<(PathBuf, Option<PathBuf>)>),
 }
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -83,6 +84,25 @@ pub fn update(file: &Path, project: &Path, operation: Operation) -> Result<Vec<E
             store.entries.push(entry);
         }
         Operation::Delete(id) => store.entries.retain(|e| !belongs(e) || e.id != id),
+        Operation::Remap(paths) => store.entries.retain_mut(|entry| {
+            if !belongs(entry) {
+                return true;
+            }
+            for (old, new) in &paths {
+                if new.as_ref() == Some(old) {
+                    continue;
+                }
+                if entry.path.starts_with(old) {
+                    if let Some(new) = new {
+                        entry.path = crate::explorer::relocate(&entry.path, old, new);
+                    } else {
+                        return false;
+                    }
+                    break;
+                }
+            }
+            true
+        }),
     }
     if write {
         let bytes = serde_json::to_vec_pretty(&store)?;

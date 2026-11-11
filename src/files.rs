@@ -7,7 +7,7 @@ use ratatui::{
     text::{Line, Span},
 };
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, ReadDir},
     path::{Path, PathBuf},
     sync::{
@@ -18,6 +18,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tui_tree_widget::{TreeItem, TreeState};
+use unicode_width::UnicodeWidthStr;
 
 pub const MAX_NODES: usize = 10_000;
 pub const BATCH: usize = 500;
@@ -113,9 +114,12 @@ pub enum Job {
         new: Arc<str>,
     },
     Close(PathBuf),
-    ValidateInput(PathBuf),
 }
 pub enum Completed {
+    Image {
+        path: PathBuf,
+        id: u64,
+    },
     Bookmarks {
         id: u64,
         result: Result<Vec<crate::bookmarks::Entry>>,
@@ -140,7 +144,6 @@ pub enum Completed {
         source: String,
         result: Result<preview::Loaded>,
     },
-    Input(Result<PathBuf>),
     Directory {
         path: PathBuf,
         generation: u64,
@@ -253,7 +256,7 @@ impl Workers {
                         })();
                         Some(Completed::Directory{path,generation,batch:result})
                     }
-                    Job::Read{path,id}=>{let result=preview::read(&path);Some(Completed::Read{path,id,result})}
+                    Job::Read{path,id}=>{if preview::image::supported_signature(&path){Some(Completed::Image{path,id})}else{let result=preview::read(&path);Some(Completed::Read{path,id,result})}}
                     Job::Render{path,id,source,markdown,width,light,editor,viewport,generation,complete,reading,wrap}=>{
                         let code=if markdown {None} else {code_cache.render(source.clone(),&path,viewport,light,&generation,id)};
                         let mut result=if editor {preview::render_editor_plain(source,width,light)} else if markdown {markdown_cache.render_reading(source,width,light,viewport,complete,&reading)} else {preview::render_plain(source,&path,false,width,light)};
@@ -273,7 +276,6 @@ impl Workers {
                     },
                     Job::Diff{path,id,old,new}=>Some(Completed::Diff{path,id,result:preview::tools::diff(&old,&new)}),
                     Job::Close(path)=>{cursor_guard.take().expect("ordered cursor ownership").remove(&path);None}
-                    Job::ValidateInput(path)=>{let result=(||->Result<PathBuf>{ensure!(fs::metadata(&path)?.is_file(),"Drop target is not a file");path_input(&path)?;Ok(path)})();Some(Completed::Input(result))}
                 };
                 if let Some(completion)=completion {
                     let _perf=crate::perf::span(crate::perf::Metric::ResultWait);
@@ -298,7 +300,7 @@ impl Workers {
         })
         .map_err(|_| {
             crate::perf::record(crate::perf::Metric::QueueFull, Duration::ZERO);
-            anyhow::anyhow!("File work queue full; retry")
+            anyhow::anyhow!(crate::i18n::t("ui.file_work_queue_full_retry"))
         })
     }
 }
@@ -313,16 +315,21 @@ pub fn is_link(meta: &fs::Metadata) -> bool {
     meta.file_type().is_symlink()
 }
 #[cfg(windows)]
-fn hidden_attribute(meta: &fs::Metadata) -> bool {
+pub(crate) fn hidden_attribute(meta: &fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
     meta.file_attributes() & 2 != 0
 }
 #[cfg(not(windows))]
-fn hidden_attribute(_: &fs::Metadata) -> bool {
+pub(crate) fn hidden_attribute(_: &fs::Metadata) -> bool {
     false
 }
 
 pub struct Files {
+    refresh_pending: VecDeque<PathBuf>,
+    pub git: crate::explorer::Git,
+    pub modified_only: bool,
+    pub compact: bool,
+    pub selected_paths: HashSet<PathBuf>,
     revision: u64,
     pub root: PathBuf,
     pub nodes: HashMap<PathBuf, Node>,
@@ -367,6 +374,11 @@ impl Files {
         state.open(vec![Key::Entry(root.clone())]);
         state.select(vec![Key::Entry(root.clone())]);
         Self {
+            refresh_pending: VecDeque::new(),
+            git: Default::default(),
+            modified_only: false,
+            compact: false,
+            selected_paths: Default::default(),
             revision: 0,
             root,
             nodes,
@@ -390,15 +402,73 @@ impl Files {
         }
     }
     pub fn identifier(&self, path: &Path) -> Vec<Key> {
+        let projected = self.compact_target(path);
+        let path = projected.as_path();
         let mut chain = vec![Key::Entry(self.root.clone())];
         if let Ok(relative) = path.strip_prefix(&self.root) {
             let mut p = self.root.clone();
             for c in relative.components() {
                 p.push(c);
-                chain.push(Key::Entry(p.clone()));
+                if self.compact_target(&p) == p {
+                    chain.push(Key::Entry(p.clone()));
+                }
             }
         }
         chain
+    }
+    pub fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+    pub fn compact_target(&self, path: &Path) -> PathBuf {
+        let mut at = path.to_path_buf();
+        if !self.compact || at == self.root {
+            return at;
+        }
+        for _ in 0..64 {
+            let Some(d) = self.dirs.get(&at).filter(|d| {
+                (d.complete || d.loading) && d.error.is_empty() && d.children.len() == 1
+            }) else {
+                break;
+            };
+            let next = &d.children[0];
+            if !self.nodes.get(next).is_some_and(|n| n.directory && !n.link) {
+                break;
+            }
+            at = next.clone();
+        }
+        at
+    }
+    pub fn reproject(&mut self) {
+        let opened: Vec<_> = self
+            .state
+            .opened()
+            .iter()
+            .filter_map(|id| match id.last() {
+                Some(Key::Entry(p)) => Some((
+                    p.clone(),
+                    (1..id.len()).all(|i| self.state.opened().contains(&id[..i])),
+                )),
+                _ => None,
+            })
+            .collect();
+        let selected = self.selected_path();
+        self.state.close_all();
+        for (p, visible) in opened {
+            let id = self.identifier(&p);
+            if visible {
+                for i in 1..id.len() {
+                    self.state.open(id[..i].to_vec());
+                }
+            }
+            self.state.open(id);
+        }
+        if let Some(p) = selected {
+            let id = self.identifier(&p);
+            if self.state.selected() != id {
+                self.state.select(id);
+            }
+        }
+        self.touch();
     }
     pub fn selected(&self) -> Option<Key> {
         self.state.selected().last().cloned()
@@ -423,10 +493,20 @@ impl Files {
         // Reserve one batch for every in-flight directory; never consume an
         // iterator entry which cannot subsequently enter the bounded cache.
         let reserved = self.dirs.values().filter(|d| d.loading).count() * BATCH;
-        let capacity = MAX_NODES.saturating_sub(self.nodes.len() + reserved);
+        let reusable = self.dirs.get(path).map_or(0, |d| {
+            if reset {
+                d.children.len()
+            } else {
+                d.children.len().saturating_sub(d.seen.len())
+            }
+        });
+        let capacity = MAX_NODES
+            .saturating_sub(self.nodes.len() + reserved)
+            .saturating_add(reusable.min(BATCH))
+            .min(BATCH);
         ensure!(
             capacity > 0,
-            "Tree cache full; collapse branches and release cache (F2)"
+            crate::i18n::t("ui.tree_cache_full_collapse_branches_and_release_cache_f2")
         );
         let dir = self.dirs.entry(path.into()).or_default();
         if dir.loading {
@@ -467,6 +547,7 @@ impl Files {
         }
         self.revision = self.revision.wrapping_add(1);
         dir.loading = false;
+        let mut removed_paths = Vec::new();
         match batch {
             Ok((nodes, complete, scanned)) => {
                 dir.scanned = scanned;
@@ -475,7 +556,9 @@ impl Files {
                     dir.seen.insert(node.path.clone());
                     if existing.insert(node.path.clone()) {
                         if self.nodes.len() >= MAX_NODES {
-                            dir.error = "Tree cache full; release collapsed cache (F2)".into();
+                            dir.error =
+                                crate::i18n::t("ui.tree_cache_full_release_collapsed_cache_f2")
+                                    .into();
                             continue;
                         }
                         dir.children.push(node.path.clone());
@@ -492,6 +575,7 @@ impl Files {
                     dir.children.retain(|p| dir.seen.contains(p));
                     for p in removed {
                         self.nodes.retain(|n, _| !n.starts_with(&p));
+                        removed_paths.push(p);
                     }
                 }
                 dir.children.sort_by_cached_key(|path| {
@@ -502,9 +586,19 @@ impl Files {
             }
             Err(e) => dir.error = format!("{e:#}"),
         }
+        for p in removed_paths {
+            self.dirs.retain(|n, _| !n.starts_with(&p));
+            self.selected_paths.retain(|n| !n.starts_with(&p));
+        }
+        if self.compact {
+            self.reproject();
+        }
         if let Some(restore) = self.restore.clone() {
             if self.nodes.contains_key(&restore) {
-                self.state.select(self.identifier(&restore));
+                let id = self.identifier(&restore);
+                if self.state.selected() != id {
+                    self.state.select(id);
+                }
                 self.restore = None;
             } else if self.dirs.values().all(|d| d.complete && !d.loading) {
                 self.restore = None;
@@ -525,7 +619,9 @@ impl Files {
                         .skip(1)
                         .all(|(i, _)| self.state.opened().contains(&id[..i]));
                 if visible {
-                    self.state.select(id);
+                    if self.state.selected() != id {
+                        self.state.select(id);
+                    }
                     break;
                 }
                 if p == self.root || !p.pop() {
@@ -605,14 +701,39 @@ impl Files {
     pub fn refresh(&mut self, io: &Workers) -> Result<()> {
         self.revision = self.revision.wrapping_add(1);
         self.restore = self.selected_path();
-        let paths: Vec<_> = self.dirs.keys().cloned().collect();
-        for p in paths {
-            let _ = io.send(Job::Close(p));
+        self.refresh_pending.clear();
+        for (path, dir) in &mut self.dirs {
+            if dir.loading {
+                let _ = io.send(Job::Close(path.clone()));
+            }
+            dir.loading = false;
+            dir.generation = 0;
+            if path != &self.root {
+                self.refresh_pending.push_back(path.clone());
+            }
         }
-        self.dirs.clear();
-        self.nodes.retain(|p, _| *p == self.root);
-        let root = self.root.clone();
-        self.request(&root, true, io)
+        self.refresh_pending.push_front(self.root.clone());
+        self.pump_refresh(io);
+        Ok(())
+    }
+    pub fn pump_refresh(&mut self, io: &Workers) {
+        let Some(path) = self.refresh_pending.front().cloned() else {
+            return;
+        };
+        if !self.nodes.contains_key(&path) {
+            self.refresh_pending.pop_front();
+            return;
+        }
+        match self.request(&path, true, io) {
+            Ok(()) => {
+                self.refresh_pending.pop_front();
+            }
+            Err(e) => {
+                if let Some(dir) = self.dirs.get_mut(&path) {
+                    dir.error = e.to_string();
+                }
+            }
+        }
     }
     pub fn refresh_paths(&mut self, paths: &HashSet<PathBuf>, io: &Workers) -> Result<()> {
         if paths.iter().any(|p| {
@@ -654,6 +775,9 @@ impl Files {
         width: usize,
         depth: usize,
     ) -> TreeItem<'static, Key> {
+        let start = path;
+        let projected = self.compact_target(path);
+        let path = projected.as_path();
         let n = &self.nodes[path];
         let icon = if self.icons {
             format!("{} ", n.icon)
@@ -662,40 +786,73 @@ impl Files {
         } else {
             "f ".into()
         };
+        let status = crate::explorer::status_for(&self.git, path);
         let badge = format!(
-            "{}{}",
+            "{}{}{}",
             if n.link { " @" } else { "" },
-            if preview == Some(path) { " [P]" } else { "" }
+            if preview == Some(path) { " [P]" } else { "" },
+            status.map_or_else(String::new, |s| format!(" {}", s.badge()))
         );
-        let name = preview::truncate_name(
-            &preview::safe_text(&n.name),
-            width.saturating_sub(depth * 2 + 6 + badge.len()),
+        let label = if path != start {
+            format!(
+                "{} / {}",
+                self.nodes[start].name,
+                path.strip_prefix(start)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .replace('\\', " / ")
+            )
+        } else {
+            n.name.clone()
+        };
+        let name_width = width.saturating_sub(depth * 2 + 6 + badge.len());
+        let name = preview::truncate_name(&preview::safe_text(&label), name_width);
+        let name = format!(
+            "{name}{}",
+            " ".repeat(name_width.saturating_sub(name.width()))
         );
         let color = if self.light { Color::Blue } else { n.color };
         let line = Line::from(vec![
             Span::styled(icon, Style::new().fg(color)),
             Span::raw(name),
-            Span::styled(badge, Style::new().fg(Color::Cyan)),
+            Span::styled(
+                format!(
+                    "{}{}",
+                    if n.link { " @" } else { "" },
+                    if preview == Some(path) { " [P]" } else { "" }
+                ),
+                Style::new().fg(Color::Cyan),
+            ),
+            Span::styled(
+                status.map_or_else(String::new, |s| format!(" {}", s.badge())),
+                Style::new().fg(status.map_or(Color::Reset, |s| s.color(self.light))),
+            ),
         ]);
         let mut children = Vec::new();
         if n.directory {
             if let Some(dir) = self.dirs.get(path) {
                 for child in &dir.children {
-                    if self.nodes.contains_key(child) {
+                    if self.nodes.contains_key(child)
+                        && (!self.modified_only
+                            || crate::explorer::status_for(&self.git, child)
+                                .is_some_and(|s| s.changed()))
+                    {
                         children.push(self.item(child, preview, width, depth + 1));
                     }
                 }
                 let status = if dir.loading {
-                    "Loading…".to_owned()
+                    crate::i18n::t("ui.loading").into_owned()
                 } else if !dir.error.is_empty() {
                     format!("Error: {} (Enter retries)", dir.error)
                 } else if !dir.complete {
                     format!("Load more · {} loaded", dir.children.len())
+                } else if self.modified_only && children.is_empty() {
+                    crate::i18n::t("ui.no_modified_entries").into()
                 } else if dir.children.is_empty() {
                     if dir.scanned == 0 {
-                        "Empty directory".into()
+                        crate::i18n::t("ui.empty_directory").into()
                     } else {
-                        "No visible entries; check filters".into()
+                        crate::i18n::t("ui.no_visible_entries_check_filters").into()
                     }
                 } else {
                     String::new()
@@ -711,12 +868,18 @@ impl Files {
                     ));
                 }
             } else {
-                children.push(TreeItem::new_leaf(Key::More(path.into()), "Expand to load"));
+                children.push(TreeItem::new_leaf(
+                    Key::More(path.into()),
+                    crate::i18n::t("ui.expand_to_load"),
+                ));
             }
         }
         TreeItem::new(Key::Entry(path.into()), line, children).expect("unique entry paths")
     }
     pub fn watch(&mut self, active: bool, preview: Option<&Path>) {
+        self.watch_images(active, preview, &[]);
+    }
+    pub fn watch_images(&mut self, active: bool, preview: Option<&Path>, images: &[PathBuf]) {
         let _perf = crate::perf::span(crate::perf::Metric::Watch);
         if !active {
             self.watcher = None;
@@ -749,6 +912,11 @@ impl Files {
         if let Some(p) = preview.and_then(Path::parent) {
             wanted.insert(p.into());
         }
+        wanted.extend(
+            images
+                .iter()
+                .filter_map(|p| p.parent().map(Path::to_path_buf)),
+        );
         let watcher = self.watcher.as_mut().expect("watcher");
         for p in self.watched.difference(&wanted) {
             let _ = watcher.unwatch(p);
@@ -808,11 +976,16 @@ impl Files {
 }
 
 pub fn path_input(path: &Path) -> Result<String> {
-    ensure!(path.is_absolute(), "Expected absolute file path");
-    let s = path.to_str().context("Path is not valid Unicode")?;
+    ensure!(
+        path.is_absolute(),
+        crate::i18n::t("ui.expected_absolute_file_path")
+    );
+    let s = path
+        .to_str()
+        .context(crate::i18n::t("ui.path_is_not_valid_unicode"))?;
     ensure!(
         !s.chars().any(char::is_control) && !s.contains('"'),
-        "Path contains characters that cannot be safely inserted"
+        crate::i18n::t("ui.path_contains_characters_that_cannot_be_safely_inserted")
     );
     Ok(format!("\"{s}\" "))
 }

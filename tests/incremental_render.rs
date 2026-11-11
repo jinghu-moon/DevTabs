@@ -204,11 +204,11 @@ fn sidebar_editor_applies_incremental_colors_to_the_current_revision() {
             s.tick(true);
             if s.document.as_ref().is_some_and(|d| {
                 if editor {
-                    d.editor.as_ref().is_some_and(|e| {
+                    d.editor().is_some_and(|e| {
                         e.highlight.as_ref().is_some_and(|(r, _)| *r == e.revision)
                     })
                 } else {
-                    d.rendered.is_some()
+                    d.rendered().is_some()
                 }
             }) {
                 break;
@@ -225,8 +225,7 @@ fn sidebar_editor_applies_incremental_colors_to_the_current_revision() {
     s.document
         .as_mut()
         .unwrap()
-        .editor
-        .as_mut()
+        .editor_mut()
         .unwrap()
         .area
         .move_cursor(ratatui_textarea::CursorMove::Jump(6500, 0));
@@ -239,8 +238,7 @@ fn sidebar_editor_applies_incremental_colors_to_the_current_revision() {
         if s.document
             .as_ref()
             .unwrap()
-            .editor
-            .as_ref()
+            .editor()
             .unwrap()
             .highlight
             .as_ref()
@@ -256,7 +254,7 @@ fn sidebar_editor_applies_incremental_colors_to_the_current_revision() {
     }
     s.paste("/*").unwrap();
     wait(&mut s, true);
-    let e = s.document.as_ref().unwrap().editor.as_ref().unwrap();
+    let e = s.document.as_ref().unwrap().editor().unwrap();
     let (revision, w) = e.highlight.as_ref().unwrap();
     assert_eq!(*revision, e.revision);
     let full = preview::highlight(&e.source(), Path::new("editor.rs"), false);
