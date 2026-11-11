@@ -94,6 +94,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     crate::app::terminals::overlay(frame, app);
     crate::app::chrome::overlay(frame, app);
+    crate::app::parallel::overlay(frame, app);
     confirm(frame, app);
 }
 
@@ -129,11 +130,16 @@ fn confirm(frame: &mut Frame, app: &App) {
 
 fn terminal(frame: &mut Frame, app: &App, index: usize, rect: Rect) {
     let state = app.sessions[index].state();
-    let label = if index == 0 {
-        format!("Agent · {:?}", app.options.agent)
-    } else {
-        app.sessions[index].info.name.clone()
-    };
+    let info = &app.sessions[index].info;
+    let label = app
+        .parallel
+        .tasks
+        .iter()
+        .find(|t| t.id == info.task.task_id)
+        .map_or_else(
+            || info.name.clone(),
+            |t| format!("{} · {} · {}", t.name, info.name, t.branch),
+        );
     let focused = app.terminal_focused(index);
     let mut title = format!(" {label} ");
     match &state.status {
@@ -161,6 +167,17 @@ fn terminal(frame: &mut Frame, app: &App, index: usize, rect: Rect) {
         } else {
             crate::appearance::palette().muted
         }));
+    let block = if let Some(task) = app
+        .parallel
+        .tasks
+        .iter()
+        .find(|t| t.id == info.task.task_id)
+    {
+        let module = task.cwd.strip_prefix(&task.checkout).unwrap_or(&task.cwd);
+        block.title_bottom(format!(" {} · {} · — ", task.branch, module.display()))
+    } else {
+        block
+    };
     let snapshot = if let Some(selection) = &app.selection {
         if selection.pane == index {
             Snapshot::from_screen(&selection.screen)

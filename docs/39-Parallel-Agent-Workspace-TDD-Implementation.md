@@ -1,6 +1,6 @@
 # 并行 Agent 工作区 TDD 实施任务
 
-状态：实施中；阶段 0、A 隔离后端自动验证完成，B–E 待实施。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
+状态：实施中；阶段 0、A、B 自动验证完成，C–E 待实施。创建：2026-11-12。依据：[37-Parallel-Agent-Workspace-Design.md](37-Parallel-Agent-Workspace-Design.md)，既有版本记录见 [38-Project-Pulse-and-Session-Navigation.md](38-Project-Pulse-and-Session-Navigation.md)，当前证据见 [40-Parallel-Agent-Workspace-Verification.md](40-Parallel-Agent-Workspace-Verification.md)。
 
 本文是整个文档 37 的实施计划，覆盖 0–E 阶段、通知及每轮文件变化记录，不仅是一个通知子功能。任务按实际证据更新状态，不修改真实 Agent 配置或发送系统通知；历史构建的结果不替代实施当天基线。
 
@@ -122,11 +122,11 @@ flowchart LR
 
 ## 7. 阶段 B：同终端多面板与输入安全
 
-- [ ] **B01 — 几何与布局状态。** RED：左右/上下切换、40×10 下界、60 列舒适阈值、放大还原或拖动得到零尺寸/会话重启；GREEN：显式 Agent 排列与按任务保存比例；REFACTOR：保留 Debug 的已有 Float/Split/Tabs 语义。TestBackend 断言区域不重叠及会话 ID 不变。
-- [ ] **B02 — 运行中增量加入。** RED：A 输出时新增 B 重建工作区、改变租约或调用 WT 新窗；GREEN：增量发现/附着新会话，在当前前端加入面板；REFACTOR：就绪状态从全工作区假设改为明确视图/会话。双 shell fixture 证明两边同时输出。
-- [ ] **B03 — 输入操作绑定。** RED：粘贴/拖拽/异步路径校验中切焦点将尾部写到 B，断连自动重试未知输入；GREEN：发起时捕获目标、run/generation 与输入租约，执行时复核；REFACTOR：普通输入与路径插入走同一校验边界，不提供广播。
-- [ ] **B04 — 每任务文档上下文。** RED：A/B 同名图片、预览、编辑草稿或异步读取互相覆盖，Debug 悬浮改变另一任务图片；GREEN：树/预览/编辑/监听及图片请求按 task/generation 隔离；REFACTOR：复用可共享只读内容，隐藏任务不重传图片、不丢草稿。扩展现有 sidebar/image/editor 回归。
-- [ ] **B05 — 固定组合与导航。** RED：固定 A/B 后 C 输出或通知替换它们，键盘编号混到 Debug、缩窗还原丢比例；GREEN：固定对、任务切换、拖动、可读角色/分支边框及显式焦点；REFACTOR：统一鼠标/键盘导航意图和帮助/国际化，不抢输入。
+- [x] **B01 — 几何与布局状态。** RED：左右/上下切换、40×10 下界、60 列舒适阈值、放大还原或拖动得到零尺寸/会话重启；GREEN：显式 Agent 排列与按任务保存比例；REFACTOR：保留 Debug 的已有 Float/Split/Tabs 语义。TestBackend 断言区域不重叠及会话 ID 不变。
+- [x] **B02 — 运行中增量加入。** RED：A 输出时新增 B 重建工作区、改变租约或调用 WT 新窗；GREEN：增量发现/附着新会话，在当前前端加入面板；REFACTOR：就绪状态从全工作区假设改为明确视图/会话。双 shell fixture 证明两边同时输出。
+- [x] **B03 — 输入操作绑定。** RED：粘贴/拖拽/异步路径校验中切焦点将尾部写到 B，断连自动重试未知输入；GREEN：发起时捕获目标、run/generation 与输入租约，执行时复核；REFACTOR：普通输入与路径插入走同一校验边界，不提供广播。
+- [x] **B04 — 每任务文档上下文。** RED：A/B 同名图片、预览、编辑草稿或异步读取互相覆盖，Debug 悬浮改变另一任务图片；GREEN：树/预览/编辑/监听及图片请求按 task/generation 隔离；REFACTOR：复用可共享只读内容，隐藏任务不重传图片、不丢草稿。扩展现有 sidebar/image/editor 回归。
+- [x] **B05 — 固定组合与导航。** RED：固定 A/B 后 C 输出或通知替换它们，键盘编号混到 Debug、缩窗还原丢比例；GREEN：固定对、任务切换、拖动、可读角色/分支边框及显式焦点；REFACTOR：统一鼠标/键盘导航意图和帮助/国际化，不抢输入。
 
 阶段退出：同终端 A/B 可同时看见并继续输入；隐藏 C 保持运行；新增、提醒、缩窗不改变输入对象或用户固定组合。
 

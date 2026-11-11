@@ -16,6 +16,12 @@ pub(crate) enum Zoom {
 }
 
 pub(crate) const COMMANDS: &[(char, &str)] = &[
+    ('+', "new_task"),
+    ('[', "previous_task"),
+    (']', "next_task"),
+    ('v', "agent_layout"),
+    ('c', "task_pins"),
+    ('e', "replace_task"),
     ('a', "agent"),
     ('d', "debug"),
     ('f', "tree"),
@@ -240,6 +246,16 @@ pub(crate) fn footer_controls(frame: &mut Frame, app: &mut App) -> u16 {
         Action::Overview,
         false,
     );
+    let new_label = format!("[+ {}]", crate::i18n::t("parallel.new_task"));
+    let new_width = new_label.width() as u16;
+    footer_hit(
+        frame,
+        app,
+        Rect::new(left.right() + 1, area.bottom() - 1, new_width, 1),
+        new_label,
+        Action::NewTask,
+        false,
+    );
     let more = format!("[{}]", crate::i18n::t("terminal.more"));
     let w = (more.width() as u16).min(area.width);
     let mut x = area.right().saturating_sub(w);
@@ -258,7 +274,16 @@ pub(crate) fn footer_controls(frame: &mut Frame, app: &mut App) -> u16 {
             crate::presentation::Placement::Floating => "◇",
             _ => "▣",
         };
-        let name = super::terminals::short_name(&info.name, 10);
+        let task = app
+            .parallel
+            .tasks
+            .iter()
+            .find(|t| t.id == info.task.task_id);
+        let label = task.map_or_else(
+            || info.name.clone(),
+            |t| format!("{}:{}", t.name, info.name),
+        );
+        let name = super::terminals::short_name(&label, 16);
         let status = match &info.status {
             crate::session::Status::Exited(code) => format!(":{code}"),
             crate::session::Status::Failed(_) => "!".into(),
@@ -344,7 +369,7 @@ pub(crate) fn footer(frame: &mut Frame, app: &App, right: u16) {
     );
     let x = overview_button(area, app)
         .right()
-        .saturating_add(1)
+        .saturating_add(format!("[+ {}]", crate::i18n::t("parallel.new_task")).width() as u16 + 2)
         .min(right);
     frame.render_widget(
         Paragraph::new(text).style(Style::new().fg(crate::appearance::palette().accent)),

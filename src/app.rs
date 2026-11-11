@@ -1,4 +1,5 @@
 pub(crate) mod chrome;
+pub(crate) mod parallel;
 pub(crate) mod popup;
 pub(crate) mod terminals;
 use std::{
@@ -41,6 +42,7 @@ pub struct SelectionView {
 }
 
 pub struct App {
+    pub(crate) parallel: parallel::State,
     pub options: Options,
     pub sessions: Vec<Client>,
     pub workspace_id: String,
@@ -55,7 +57,7 @@ pub struct App {
     pub view: Option<String>,
     pub return_overview: bool,
     pub sidebar: Option<crate::sidebar::Sidebar>,
-    path_receipt: Option<std::sync::mpsc::Receiver<Result<()>>>,
+    path_receipt: Option<(String, std::sync::mpsc::Receiver<Result<()>>)>,
     last_target: Instant,
     consumed_keys: HashSet<KeyCode>,
     size: ratatui::layout::Rect,
@@ -103,6 +105,10 @@ impl App {
         options.image_protocol = image_protocol;
         options.image_cell_size = image_cell_size;
         let mut app = Self {
+            parallel: parallel::State {
+                tasks: info.tasks,
+                ..Default::default()
+            },
             options,
             sessions,
             workspace_id: info.id,
@@ -134,6 +140,15 @@ impl App {
         }
         if app.view.is_none() {
             app.sidebar = Some(crate::sidebar::Sidebar::new(app.options.project.clone()));
+            app.parallel.context = app.sessions[app.focus].info.task.task_id.clone();
+            let path = crate::config::home()
+                .join("layouts")
+                .join(format!("{}.json", app.workspace_id));
+            if let Ok(bytes) = std::fs::read(path)
+                && bytes.len() <= 65536
+            {
+                app.parallel.layout = serde_json::from_slice(&bytes)?;
+            }
         }
         if let Some(view) = &app.view
             && let Some(index) = view.strip_prefix("session:")
@@ -178,7 +193,7 @@ impl App {
                             format!("Debug window: {error:#}; Ctrl+G L switches to split");
                     }
                 }
-                Layout::Tabs if app.sessions.len() > 1 => {
+                Layout::Tabs if app.sessions.len() > 1 && app.agents().len() < 2 => {
                     if !named_main {
                         app.detach();
                         crate::windows::spawn_view(&app.workspace_id, "main", false)?;
@@ -205,8 +220,10 @@ impl App {
             .map(|_| chrome::cover(self.popup_window.rect(self.size), self.size));
         let active = self.sidebar_active();
         if let Some(sidebar) = &mut self.sidebar {
-            sidebar.images_occluded =
-                self.mode != Mode::Normal || self.terminal_menu.is_some() || !active;
+            sidebar.images_occluded = self.mode != Mode::Normal
+                || self.terminal_menu.is_some()
+                || self.parallel.dialog.is_some()
+                || !active;
             sidebar.image_occlusion = cover;
         }
     }
@@ -238,6 +255,7 @@ impl App {
         }
         let active = self.sidebar_active();
         let split = self.options.layout == Layout::Split
+            && self.agents().len() < 2
             && self.docked(0)
             && self
                 .sessions
@@ -272,6 +290,9 @@ impl App {
         }
         if let Some(chrome::Zoom::Terminal(i)) = self.zoom {
             return vec![(i, chrome::body(self.size))];
+        }
+        if let Some(rects) = self.parallel_rects() {
+            return rects;
         }
         let primary = if self.options.layout == Layout::Split
             && self.docked(0)
@@ -352,15 +373,28 @@ impl App {
         rects
     }
     fn attach_visible(&mut self) -> Result<()> {
+        if self.parallel.restore_popup
+            && let Some(i) = self.popup
+        {
+            self.parallel.restore_popup = false;
+            self.popup = None;
+            let focus = self.focus;
+            let result = self.show_popup(i);
+            self.focus = focus;
+            result?;
+        }
         self.update_sidebar_layout();
         let mut rects = self.rects();
         let overlay = self.sidebar.as_ref().is_some_and(|s| s.geometry.overlay);
+        let overlay_agent = self
+            .role_index(crate::tasks::Role::Agent)
+            .unwrap_or(self.focus);
         if overlay
             && self.zoom.is_none()
-            && self.docked(0)
+            && self.docked(overlay_agent)
             && let Some(r) = self.sidebar.as_ref().and_then(|s| s.geometry.agent)
         {
-            rects.push((0, r));
+            rects.push((overlay_agent, r));
         }
         // A minimized terminal has no drawable panes. Keep existing connections
         // and PTY dimensions until it becomes usable again.
@@ -382,7 +416,7 @@ impl App {
             }
         }
         for (index, rect) in rects {
-            if index == 0 && overlay && self.sessions[index].attached() {
+            if index == overlay_agent && overlay && self.sessions[index].attached() {
                 continue;
             }
             let r = ui::content(rect);
@@ -424,6 +458,10 @@ impl App {
             layout,
         })?;
         self.options.layout = layout;
+        if self.agents().len() > 1 {
+            self.attach_visible()?;
+            return Ok(());
+        }
         for (i, session) in self.sessions.iter_mut().enumerate() {
             if self.popup != Some(i) {
                 session.detach();
@@ -453,17 +491,34 @@ impl App {
     fn show_default_debug(&mut self) -> Result<()> {
         // Explicit placement wins over layout defaults, including a target in
         // another project and an intentional collapse of this project's Debug.
-        if self.docked(1)
+        let Some(debug) = self.role_index(crate::tasks::Role::Debug) else {
+            return Ok(());
+        };
+        if self.docked(debug)
             && matches!(
                 crate::protocol::rpc(crate::protocol::Request::FloatingTarget)?,
                 crate::protocol::Response::Floating(None)
             )
         {
-            self.show_popup(1)?;
+            self.show_popup(debug)?;
         }
         Ok(())
     }
     fn detach(&mut self) {
+        if let Some(task) = self
+            .parallel
+            .sidebars
+            .iter()
+            .find(|(_, s)| s.dirty())
+            .map(|(id, _)| id.clone())
+            && let Some(index) = self
+                .sessions
+                .iter()
+                .position(|s| s.info.task.task_id == task)
+        {
+            self.switch_context(index);
+            self.focus = index;
+        }
         if let Some(s) = &mut self.sidebar
             && s.dirty()
         {
@@ -504,6 +559,8 @@ impl App {
             self.message = crate::i18n::t("overview.no_debug").into_owned();
             return;
         }
+        self.switch_context(index);
+        self.pin_selected_task(index);
         if let Some(sidebar) = &mut self.sidebar {
             sidebar.focus_agent();
         }
@@ -520,9 +577,22 @@ impl App {
             }
             return;
         }
-        if index == 1 && self.options.layout == Layout::Tabs && self.view.is_none() {
-            if let Err(error) = crate::windows::spawn_view(&self.workspace_id, "debug", false) {
+        if self.sessions[index].info.task.role == crate::tasks::Role::Debug
+            && self.options.layout == Layout::Tabs
+            && self.view.is_none()
+        {
+            let view = format!("session:{index}");
+            if let Err(error) = crate::windows::spawn_view(&self.workspace_id, &view, false) {
                 self.message = format!("{error:#}");
+            }
+            return;
+        }
+        if self.agents().len() > 1
+            && self.sessions[index].info.task.role != crate::tasks::Role::Agent
+            && self.options.layout == Layout::Float
+        {
+            if let Err(e) = self.show_popup(index) {
+                self.message = format!("{e:#}");
             }
             return;
         }
@@ -586,6 +656,16 @@ impl App {
         if !pressed && self.consumed_keys.remove(&key.code) {
             return;
         }
+        if self.parallel.dialog.is_some() {
+            self.consumed_keys.insert(key.code);
+            self.task_key(key);
+            return;
+        }
+        if self.parallel.drag && key.code == KeyCode::Esc {
+            self.cancel_task_drag();
+            let _ = self.attach_visible();
+            return;
+        }
         if self.terminal_menu.is_some() {
             if pressed {
                 self.consumed_keys.insert(key.code);
@@ -612,7 +692,29 @@ impl App {
             match key.code {
                 KeyCode::Char('z' | 'Z') => self.toggle_zoom(),
                 KeyCode::Char('w' | 'W') => self.terminal_menu = Some(self.focus),
-                KeyCode::Char('a' | 'A') => self.focus(0),
+                KeyCode::Char('+') => self.new_task(),
+                KeyCode::Char('c' | 'C') => self.toggle_task_pins(),
+                KeyCode::Char('e' | 'E') => self.replace_pinned_task(),
+                KeyCode::Char('[') => self.select_task(-1),
+                KeyCode::Char(']') => self.select_task(1),
+                KeyCode::Char('v' | 'V') => {
+                    self.parallel.layout.axis = match self.parallel.layout.axis {
+                        parallel::Axis::Auto | parallel::Axis::Stack => parallel::Axis::Sides,
+                        parallel::Axis::Sides => parallel::Axis::Stack,
+                    };
+                    self.save_task_layout();
+                    let _ = self.attach_visible();
+                }
+                KeyCode::Char(c @ '1'..='9') => {
+                    if let Some(&i) = self.agents().get(c as usize - '1' as usize) {
+                        self.focus(i);
+                    }
+                }
+                KeyCode::Char('a' | 'A') => {
+                    if let Some(i) = self.role_index(crate::tasks::Role::Agent) {
+                        self.focus(i);
+                    }
+                }
                 KeyCode::Char('u' | 'U') => {
                     if let Some(sidebar) = &mut self.sidebar
                         && let Err(error) = sidebar.cycle_language()
@@ -620,7 +722,11 @@ impl App {
                         self.message = format!("{error:#}")
                     }
                 }
-                KeyCode::Char('d' | 'D') => self.focus(1),
+                KeyCode::Char('d' | 'D') => {
+                    if let Some(i) = self.role_index(crate::tasks::Role::Debug) {
+                        self.focus(i);
+                    }
+                }
                 KeyCode::Char('l' | 'L') => {
                     if let Err(error) = self.layout() {
                         self.message = format!("{error:#}");
@@ -812,9 +918,14 @@ impl App {
                 self.mode = Mode::Prefix;
                 self.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), None, 1);
             }
-            crate::sidebar::Action::Agent => self.focus(0),
+            crate::sidebar::Action::Agent => {
+                if let Some(i) = self.role_index(crate::tasks::Role::Agent) {
+                    self.focus(i);
+                }
+            }
             crate::sidebar::Action::Insert(paths) => {
                 if self.path_receipt.is_some()
+                    || self.parallel.input.is_some()
                     || self.sidebar.as_ref().is_some_and(|s| s.checking_input)
                 {
                     if let Some(s) = &mut self.sidebar {
@@ -827,6 +938,7 @@ impl App {
                     }
                     return;
                 }
+                self.parallel.input = self.input_target();
                 if let Some(s) = &mut self.sidebar {
                     match s.validate_selected_paths(paths) {
                         Ok(()) => {
@@ -842,11 +954,22 @@ impl App {
             }
             crate::sidebar::Action::ValidatedInput(paths) => {
                 let result = (|| -> Result<()> {
+                    let target = self
+                        .parallel
+                        .input
+                        .take()
+                        .context("No pending input target")?;
+                    let index = self.resolve_input_target(&target)?;
                     anyhow::ensure!(
-                        self.options.agent != crate::launch::Agent::Shell,
+                        self.parallel
+                            .tasks
+                            .iter()
+                            .find(|t| t.id == target.task)
+                            .map_or(self.options.agent, |t| t.options.agent)
+                            != crate::launch::Agent::Shell,
                         crate::i18n::t("ui.shell_is_not_an_agent_input_target")
                     );
-                    let session = &self.sessions[0];
+                    let session = &self.sessions[index];
                     anyhow::ensure!(
                         session.attached() && session.running(),
                         crate::i18n::t("ui.agent_disconnected_or_exited")
@@ -863,12 +986,13 @@ impl App {
                     let bracketed = state.terminal.screen().bracketed_paste();
                     drop(state);
                     let text = crate::explorer::paths_input(&paths)?;
-                    self.path_receipt =
-                        Some(session.send_checked(input::paste(&text, bracketed)?)?);
+                    self.path_receipt = Some((
+                        target.task,
+                        session.send_checked(input::paste(&text, bracketed)?)?,
+                    ));
                     Ok(())
                 })();
                 if result.is_ok() {
-                    self.focus = 0;
                     self.selection = None;
                 }
                 if let Some(s) = &mut self.sidebar {
@@ -903,6 +1027,9 @@ impl App {
         }
     }
     fn mouse(&mut self, event: MouseEvent) {
+        if self.task_mouse(event) {
+            return;
+        }
         if event.kind == MouseEventKind::Moved {
             self.hover = Some((event.column, event.row));
         }
@@ -918,12 +1045,15 @@ impl App {
                 .popup_window
                 .rect(self.size)
                 .contains((event.column, event.row).into());
-        let agent = if on_popup && self.popup != Some(0) {
+        let agent_index = self
+            .role_index(crate::tasks::Role::Agent)
+            .unwrap_or(self.focus);
+        let agent = if on_popup && self.popup != Some(agent_index) {
             None
         } else {
             self.rects()
                 .into_iter()
-                .find(|(i, _)| *i == 0)
+                .find(|(i, _)| *i == agent_index)
                 .map(|(_, r)| r)
         };
         // A file drag owns its gesture through release, even over the panel.
@@ -1053,12 +1183,14 @@ impl App {
         let was_index = self.focus;
         let event = input.event;
         match event {
+            Event::Paste(text) if self.parallel.dialog.is_some() => self.task_paste(&text),
             Event::Key(key) => self.key(key, input.win32, input.repeat),
             Event::Mouse(mouse) if self.mode != Mode::Confirm => self.mouse(mouse),
             Event::Paste(text)
                 if self.mode == Mode::Normal
                     && self.selection.is_none()
                     && self.terminal_menu.is_none()
+                    && self.parallel.dialog.is_none()
                     && !self.popup_window.editing() =>
             {
                 if let Some(s) = &mut self.sidebar
@@ -1067,7 +1199,10 @@ impl App {
                     s.paste(&text)?;
                     return Ok(());
                 }
-                if !self.allowed(self.focus) || !self.sessions[self.focus].attached() {
+                if !self.allowed(self.focus)
+                    || !self.sessions[self.focus].attached()
+                    || !self.rects().iter().any(|(i, _)| *i == self.focus)
+                {
                     return Ok(());
                 }
                 let bracketed = self.sessions[self.focus]
@@ -1080,6 +1215,7 @@ impl App {
                 self.send(self.focus, bytes);
             }
             Event::Resize(width, height) => {
+                self.cancel_task_drag();
                 if let Some(s) = &mut self.sidebar {
                     s.cancel_drag(true);
                 }
@@ -1091,6 +1227,7 @@ impl App {
             }
             Event::FocusGained | Event::FocusLost => {
                 if event == Event::FocusLost {
+                    self.cancel_task_drag();
                     self.chrome_capture = false;
                     self.hover = None;
                     if let Some(s) = &mut self.sidebar {
@@ -1165,16 +1302,19 @@ pub fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         s.configure_images(events.display);
     }
     let mut terminal_display = events.display;
+    app.parallel.display = events.display;
     let mut pixels = crate::image_output::PixelDamage::default();
     let mut previous = vec![];
     let mut changed = true;
     let mut finished = None;
     loop {
+        changed |= app.task_tick();
         let sidebar_active = app.sidebar_active();
         app.update_image_occlusion();
         if let Some(sidebar) = &mut app.sidebar {
             if terminal_display != events.display {
                 terminal_display = events.display;
+                app.parallel.display = events.display;
                 sidebar.configure_images(events.display);
                 changed = true;
             }
@@ -1188,18 +1328,29 @@ pub fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
             app.sidebar_action(crate::sidebar::Action::Manage(command));
             changed = true;
         }
-        if let Some(receipt) = &app.path_receipt {
+        if let Some((task, receipt)) = &app.path_receipt {
+            let task = task.clone();
             match receipt.try_recv() {
                 Ok(result) => {
                     app.path_receipt = None;
-                    if let Some(s) = &mut app.sidebar {
+                    let sidebar = if app.parallel.context == task {
+                        app.sidebar.as_mut()
+                    } else {
+                        app.parallel.sidebars.get_mut(&task)
+                    };
+                    if let Some(s) = sidebar {
                         match result{Ok(())=>s.say(crate::i18n::t("ui.path_accepted_by_input_chain_no_enter_sent"),true),Err(e)=>s.say(format!("Delivery rejected or unknown: {e:#}. Inspect Agent before retrying."),false)}
                     }
                     changed = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     app.path_receipt = None;
-                    if let Some(s) = &mut app.sidebar {
+                    let sidebar = if app.parallel.context == task {
+                        app.sidebar.as_mut()
+                    } else {
+                        app.parallel.sidebars.get_mut(&task)
+                    };
+                    if let Some(s) = sidebar {
                         s.say(
                             crate::i18n::t("ui.delivery_unknown_inspect_agent_before_retrying"),
                             false,
@@ -1245,6 +1396,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
         let attached = app.sessions.iter().filter(|s| s.attached()).count();
         if attached > 0
             && !app.sidebar.as_ref().is_some_and(|s| s.dirty())
+            && !app.parallel.sidebars.values().any(|s| s.dirty())
             && app.sessions.iter().all(|s| !s.running())
             && finished.get_or_insert_with(Instant::now).elapsed() > Duration::from_millis(200)
         {
@@ -1270,34 +1422,42 @@ pub fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
                                 }
                             }
                             app.options.layout = work.options.layout;
-                            app.focus = app
-                                .sessions
-                                .iter()
-                                .position(|s| {
-                                    s.info.placement == crate::presentation::Placement::Docked
-                                })
-                                .unwrap_or(0);
+                            if app.agents().len() < 2 {
+                                app.focus = app
+                                    .sessions
+                                    .iter()
+                                    .position(|s| {
+                                        s.info.placement == crate::presentation::Placement::Docked
+                                    })
+                                    .unwrap_or(0);
+                            }
                             app.selection = None;
                             app.attach_visible()?;
-                            match app.options.layout {
-                                Layout::Float => app.show_default_debug()?,
-                                Layout::Tabs if app.popup.is_none() => {
-                                    if app.sidebar.as_ref().is_some_and(|s| s.document.is_some()) {
-                                        crate::windows::spawn_view(
-                                            &app.workspace_id,
-                                            "debug",
-                                            false,
-                                        )?;
-                                    } else {
-                                        app.detach();
-                                        crate::windows::spawn_view(
-                                            &app.workspace_id,
-                                            "main",
-                                            false,
-                                        )?;
+                            if app.agents().len() < 2 {
+                                match app.options.layout {
+                                    Layout::Float => app.show_default_debug()?,
+                                    Layout::Tabs if app.popup.is_none() => {
+                                        if app
+                                            .sidebar
+                                            .as_ref()
+                                            .is_some_and(|s| s.document.is_some())
+                                        {
+                                            crate::windows::spawn_view(
+                                                &app.workspace_id,
+                                                "debug",
+                                                false,
+                                            )?;
+                                        } else {
+                                            app.detach();
+                                            crate::windows::spawn_view(
+                                                &app.workspace_id,
+                                                "main",
+                                                false,
+                                            )?;
+                                        }
                                     }
+                                    Layout::Split | Layout::Tabs => {}
                                 }
-                                Layout::Split | Layout::Tabs => {}
                             }
                             changed = true;
                         }

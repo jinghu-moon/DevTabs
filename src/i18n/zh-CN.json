@@ -537,5 +537,19 @@
   "overview.binary": "含二进制改动",
   "overview.this_week": "本周",
   "overview.weeks_ago": "%{count} 周前",
-  "overview.updated": "最近更新"
+  "overview.updated": "最近更新",
+  "chrome.command.agent_layout": "Agent 横排／竖排",
+  "chrome.command.new_task": "新建隔离任务",
+  "chrome.command.next_task": "下一个任务",
+  "chrome.command.previous_task": "上一个任务",
+  "chrome.command.replace_task": "替换第二个固定任务",
+  "chrome.command.task_pins": "固定双任务／解除",
+  "parallel.base": "基准提交或引用",
+  "parallel.confirm": "Enter 在当前终端创建 · Esc 取消",
+  "parallel.form_hint": "Tab 切换字段 · Enter 准备 · Esc 关闭",
+  "parallel.frozen": "冻结提交",
+  "parallel.name": "任务名称",
+  "parallel.new_task": "新任务",
+  "parallel.path": "工作树路径（留空自动）",
+  "parallel.working": "准备中…"
 }

@@ -537,5 +537,19 @@
   "overview.binary": "Includes binary changes",
   "overview.this_week": "this week",
   "overview.weeks_ago": "%{count} weeks ago",
-  "overview.updated": "Updated"
+  "overview.updated": "Updated",
+  "chrome.command.agent_layout": "Agent rows / columns",
+  "chrome.command.new_task": "New isolated task",
+  "chrome.command.next_task": "Next task",
+  "chrome.command.previous_task": "Previous task",
+  "chrome.command.replace_task": "Replace second pinned task",
+  "chrome.command.task_pins": "Pin pair / unpin",
+  "parallel.base": "Base commit/reference",
+  "parallel.confirm": "Enter: create in this terminal · Esc: cancel",
+  "parallel.form_hint": "Tab: field · Enter: prepare · Esc: close",
+  "parallel.frozen": "Frozen commit",
+  "parallel.name": "Name",
+  "parallel.new_task": "New task",
+  "parallel.path": "Worktree path (blank = automatic)",
+  "parallel.working": "Preparing…"
 }

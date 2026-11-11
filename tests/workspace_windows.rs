@@ -1105,6 +1105,97 @@ struct Frontend {
     writer: std::sync::Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
     received: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
+#[test]
+fn parallel_task_form_adds_two_live_agents_to_one_frontend_without_stealing_input() {
+    let h = Harness::new();
+    for args in [
+        vec!["init", "-b", "main"],
+        vec!["config", "core.autocrlf", "false"],
+        vec!["config", "user.name", "Fixture"],
+        vec!["config", "user.email", "fixture@localhost"],
+        vec!["config", "commit.gpgsign", "false"],
+    ] {
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(&h.root)
+                .args(args)
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    fs::write(h.root.join("base.txt"), "committed").unwrap();
+    for args in [["add", "base.txt"], ["commit", "-m"]] {
+        let mut c = Command::new("git");
+        c.arg("-C").arg(&h.root).args(args);
+        if args[0] == "commit" {
+            c.arg("base");
+        }
+        assert!(c.status().unwrap().success());
+    }
+    let w = h.open(&["--composition", "agent-only"]);
+    h.rpc(Request::Layout {
+        workspace: w.id.clone(),
+        layout: Layout::Float,
+    })
+    .unwrap();
+    let front = Frontend::start(&h, &["--workspace", &w.id, "--language", "en-us"]);
+    let keys = |bytes: &[u8]| front.writer.lock().unwrap().write_all(bytes).unwrap();
+    wait("first Agent ready", || front.contents().contains("Ctrl+G"));
+    let pid = h.info(&w.id).sessions[0].shell_pid;
+    keys(b"\x07+");
+    wait("new task form", || {
+        front.contents().contains("Base commit/reference")
+    });
+    keys(b"Feature-B\r");
+    wait("frozen creation summary", || {
+        front.contents().contains("Frozen commit")
+    });
+    keys(b"\r");
+    wait("second task attached", || h.info(&w.id).tasks.len() == 2);
+    let both = h.info(&w.id);
+    let checkout = both.tasks[1].cwd.clone();
+    struct OwnedWorktree(PathBuf);
+    impl Drop for OwnedWorktree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let expected = h.root.with_file_name(format!(
+        "{}-worktrees",
+        h.root.file_name().unwrap().to_string_lossy()
+    ));
+    let owned = dunce::canonicalize(&both.tasks[1].checkout).unwrap();
+    assert!(owned.starts_with(dunce::canonicalize(expected).unwrap()));
+    let _cleanup = OwnedWorktree(owned);
+    wait("both Agents visible in the original frontend", || {
+        let text = front.contents();
+        text.contains("Feature-B") && text.contains("Main")
+    });
+    keys(b"[IO.File]::WriteAllText((Join-Path (Get-Location) 'ui-route.txt'),'A')\r");
+    wait("creation preserved original input focus", || {
+        h.root.join("ui-route.txt").exists()
+    });
+    assert!(!checkout.join("ui-route.txt").exists());
+    keys(b"\x072");
+    keys(b"[IO.File]::WriteAllText((Join-Path (Get-Location) 'ui-route.txt'),'B')\r");
+    wait("explicit task switch routes input to B", || {
+        checkout.join("ui-route.txt").exists()
+    });
+    assert_eq!(
+        fs::read_to_string(h.root.join("ui-route.txt")).unwrap(),
+        "A"
+    );
+    assert_eq!(
+        fs::read_to_string(checkout.join("ui-route.txt")).unwrap(),
+        "B"
+    );
+    assert_eq!(h.info(&w.id).sessions[0].shell_pid, pid);
+    assert!(front.child.process_id().is_some());
+    drop(front);
+    h.rpc(Request::Close { workspace: w.id }).unwrap();
+}
 impl Frontend {
     fn start(h: &Harness, args: &[&str]) -> Self {
         use portable_pty::{CommandBuilder, PtySize, native_pty_system};

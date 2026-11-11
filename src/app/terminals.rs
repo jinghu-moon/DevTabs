@@ -14,6 +14,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 #[derive(Clone, Copy)]
 pub(super) enum Action {
+    NewTask,
     Overview,
     Activate(usize),
     Menu(usize),
@@ -47,13 +48,19 @@ impl App {
     pub(super) fn sync_presentations(&mut self, work: &WorkspaceInfo) -> Result<bool> {
         let mut moved = false;
         let mut changed = false;
-        for (i, info) in work.sessions.iter().enumerate() {
-            let Some(local) = self.sessions.get_mut(i) else {
+        self.parallel.tasks = work.tasks.clone();
+        for info in &work.sessions {
+            let Some(i) = self.sessions.iter().position(|s| s.info.id == info.id) else {
+                self.sessions.push(Client::hidden(info.clone()));
+                changed = true;
+                moved = true;
                 continue;
             };
-            if local.info.id != info.id {
-                anyhow::bail!("Session identity changed");
-            }
+            let local = &mut self.sessions[i];
+            anyhow::ensure!(
+                local.info.task.run_id == info.task.run_id,
+                "Session run identity changed"
+            );
             let placement_changed = local.info.placement != info.placement;
             changed |= placement_changed
                 || local.info.command != info.command
@@ -62,9 +69,6 @@ impl App {
                 moved = true;
                 if info.placement != Placement::Docked && self.popup != Some(i) {
                     local.detach();
-                }
-                if info.placement == Placement::Docked {
-                    self.focus = i;
                 }
             }
             local.info = info.clone();
@@ -76,7 +80,7 @@ impl App {
             }
         }
         if let Some(i) = self.popup
-            && work.sessions[i].placement != Placement::Floating
+            && self.sessions[i].info.placement != Placement::Floating
         {
             self.sessions[i].detach();
             self.popup = None;
@@ -101,6 +105,7 @@ impl App {
     fn terminal_action(&mut self, action: Action) -> Result<()> {
         self.terminal_menu = None;
         match action {
+            Action::NewTask => self.new_task(),
             Action::Overview => self.back_to_overview(),
             Action::Menu(i) => self.terminal_menu = Some(i),
             Action::Activate(i) => self.focus(i),
@@ -399,7 +404,14 @@ pub(crate) fn overlay(frame: &mut Frame, app: &mut App) {
         let label = format!(
             "{} {} · {}",
             if selected == i { "▶" } else { " " },
-            info.name,
+            app.parallel
+                .tasks
+                .iter()
+                .find(|t| t.id == info.task.task_id)
+                .map_or_else(
+                    || info.name.clone(),
+                    |t| format!("{} · {} · {}", t.name, info.name, t.branch)
+                ),
             placement(info.placement)
         );
         footer_hit(
@@ -460,6 +472,189 @@ pub(super) fn short_name(s: &str, limit: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn parallel_agents_share_one_frontend_and_keep_focus_on_background_addition() {
+        let mut app = app();
+        app.sessions.truncate(2);
+        app.size = Rect::new(0, 0, 200, 50);
+        for (i, session) in app.sessions.iter_mut().enumerate() {
+            session.info.placement = Placement::Docked;
+            session.info.task.task_id = format!("t{i}");
+            session.info.task.run_id = format!("r{i}");
+            session.info.task.role = crate::tasks::Role::Agent;
+        }
+        app.options.layout = Layout::Float;
+        let rects = app.rects();
+        assert_eq!(
+            rects.len(),
+            2,
+            "Both Agents must share the existing frontend"
+        );
+        assert!(rects[0].1.intersection(rects[1].1).is_empty());
+        assert_eq!(app.focus, 0);
+    }
+    #[test]
+    fn workspace_snapshot_reordering_and_new_sessions_preserve_existing_client_identity() {
+        let mut app = app();
+        app.sessions.truncate(2);
+        app.size = Rect::new(0, 0, 20, 5); // no attach while minimized
+        app.focus = 1;
+        app.sessions[1].state().revision = 991;
+        let mut infos: Vec<_> = app.sessions.iter().map(|s| s.info.clone()).collect();
+        infos.reverse();
+        let mut third = infos[0].clone();
+        third.id = "third".into();
+        infos.push(third);
+        let work = WorkspaceInfo {
+            id: app.workspace_id.clone(),
+            project: app.options.project.clone(),
+            options: app.options.clone(),
+            sessions: infos,
+            tasks: vec![],
+        };
+        assert!(app.sync_presentations(&work).is_ok());
+        assert_eq!(app.sessions.len(), 3);
+        assert_eq!(app.sessions[1].info.id, "s1");
+        assert_eq!(app.sessions[1].state().revision, 991);
+        assert_eq!(app.focus, 1);
+    }
+    #[test]
+    fn selecting_hidden_task_temporarily_zooms_without_replacing_pinned_agents() {
+        let mut app = app();
+        app.sessions.truncate(3);
+        for (i, s) in app.sessions.iter_mut().enumerate() {
+            s.info.task.task_id = format!("t{i}");
+            s.info.task.role = crate::tasks::Role::Agent;
+            s.info.placement = Placement::Docked;
+        }
+        app.parallel.layout.pair = vec!["t0".into(), "t1".into()];
+        app.pin_selected_task(2);
+        assert_eq!(app.parallel.layout.pair, vec!["t0", "t1"]);
+        assert_eq!(app.zoom, Some(super::super::chrome::Zoom::Terminal(2)));
+    }
+    #[test]
+    fn asynchronous_path_validation_cannot_use_a_replaced_or_lost_input_lease() {
+        let app = app();
+        let ticket = super::super::parallel::InputTarget {
+            session: "s0".into(),
+            run: String::new(),
+            task: String::new(),
+            lease: Some("old-attachment".into()),
+        };
+        assert!(app.resolve_input_target(&ticket).is_err());
+    }
+    #[test]
+    fn switching_task_hides_the_previous_tasks_debug_popup_and_restores_its_context() {
+        let mut app = app();
+        app.sessions.truncate(3);
+        for (i, s) in app.sessions.iter_mut().enumerate() {
+            s.info.task.task_id = if i == 2 { "B" } else { "A" }.into();
+            s.info.task.initial_cwd = std::env::temp_dir();
+            s.info.task.role = if i == 1 {
+                crate::tasks::Role::Debug
+            } else {
+                crate::tasks::Role::Agent
+            };
+        }
+        app.parallel.context = "A".into();
+        app.sidebar = Some(crate::sidebar::Sidebar::new(std::env::temp_dir()));
+        app.sidebar.as_mut().unwrap().visible = false;
+        app.sessions[1].info.placement = Placement::Floating;
+        app.popup = Some(1);
+        app.switch_context(2);
+        assert!(
+            app.popup.is_none(),
+            "Debug A must not cover task B's preview"
+        );
+        app.switch_context(0);
+        assert_eq!(app.popup, Some(1));
+        assert!(!app.sidebar.as_ref().unwrap().visible);
+    }
+    #[test]
+    fn task_switch_preserves_unsaved_draft_and_never_saves_it_to_either_checkout() {
+        let root =
+            std::env::temp_dir().join(format!("DevTabs-task-draft-{}", uuid::Uuid::new_v4()));
+        let a = root.join("A");
+        let b = root.join("B");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("same.md"), "# A\n").unwrap();
+        std::fs::write(b.join("same.md"), "# B\n").unwrap();
+        let mut app = app();
+        app.sessions.truncate(2);
+        for (i, s) in app.sessions.iter_mut().enumerate() {
+            s.info.task.task_id = format!("t{i}");
+            s.info.task.initial_cwd = if i == 0 { a.clone() } else { b.clone() };
+        }
+        app.parallel.context = "t0".into();
+        app.sidebar = Some(crate::sidebar::Sidebar::new(a.clone()));
+        let s = app.sidebar.as_mut().unwrap();
+        s.open(a.join("same.md"), true).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !s
+            .document
+            .as_ref()
+            .is_some_and(|d| !d.loading && d.loaded().is_some())
+        {
+            s.tick(true);
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        s.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+            .unwrap();
+        while !s.document.as_ref().is_some_and(|d| d.editor().is_some()) {
+            s.tick(true);
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        s.paste("unsaved A").unwrap();
+        let draft = s.document.as_ref().unwrap().editor().unwrap().text();
+        app.switch_context(1);
+        assert_eq!(app.sidebar.as_ref().unwrap().files.root, b);
+        assert!(app.sidebar.as_ref().unwrap().document.is_none());
+        app.switch_context(0);
+        assert_eq!(
+            app.sidebar
+                .as_ref()
+                .unwrap()
+                .document
+                .as_ref()
+                .unwrap()
+                .editor()
+                .unwrap()
+                .text(),
+            draft
+        );
+        assert!(app.sidebar.as_ref().unwrap().dirty());
+        app.switch_context(1);
+        app.detach();
+        assert!(!app.force_exit, "parked draft must guard frontend exit");
+        assert_eq!(app.parallel.context, "t0");
+        assert_eq!(std::fs::read_to_string(a.join("same.md")).unwrap(), "# A\n");
+        assert_eq!(std::fs::read_to_string(b.join("same.md")).unwrap(), "# B\n");
+        drop(app);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn parallel_geometry_keeps_minima_and_saved_ratio_across_narrow_windows() {
+        use super::super::parallel::{Axis, split};
+        for axis in [Axis::Auto, Axis::Sides, Axis::Stack] {
+            for width in [40, 79, 80, 119, 120, 240] {
+                for height in [10, 19, 20, 60] {
+                    let area = Rect::new(3, 2, width, height);
+                    let rects = split(area, axis, 7700);
+                    for r in &rects {
+                        assert!(r.width >= 40 && r.height >= 10);
+                        assert_eq!(r.intersection(area), *r);
+                    }
+                    if rects.len() == 2 {
+                        assert!(rects[0].intersection(rects[1]).is_empty());
+                        assert_eq!(rects.iter().map(|r| r.area()).sum::<u32>(), area.area());
+                    }
+                }
+            }
+        }
+    }
     fn app() -> App {
         let sessions = (0..8)
             .map(|i| {
@@ -475,6 +670,7 @@ mod tests {
             })
             .collect();
         App {
+            parallel: Default::default(),
             options: Options::parse_for_view(),
             sessions,
             workspace_id: "workspace".into(),

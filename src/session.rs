@@ -125,6 +125,9 @@ impl Client {
     pub fn attached(&self) -> bool {
         self.remote.is_some()
     }
+    pub fn input_lease(&self) -> Option<String> {
+        self.remote.as_ref().map(|r| r.lease().to_owned())
+    }
     pub fn state(&self) -> MutexGuard<'_, State> {
         lock(&self.shared)
     }

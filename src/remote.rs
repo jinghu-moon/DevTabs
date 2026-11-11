@@ -234,6 +234,9 @@ impl Remote {
         self.size = (rows, cols);
         Ok(())
     }
+    pub fn lease(&self) -> &str {
+        &self.client
+    }
     pub fn terminate(&self) -> Result<()> {
         protocol::rpc(Request::Close {
             workspace: self.workspace.clone(),
