@@ -34,3 +34,7 @@ cargo fmt --check
 选择项目后点击 `[年] / [+]`，检查弹窗两侧没有原统计残留，Esc / `[+]` 关闭后恢复；全年需足够宽的终端。
 
 最终相关回归 **173 通过、0 失败、9 忽略，5 个 suite**，实际退出码 0；fmt、Clippy、Release 与 help/version 冒烟通过。构建 `22987aff408f4578`，23512576 字节，SHA256 `142510c3a2615173b20b997f17b331a606484d9c1dcb0a9660a0a2f6bb21281e`。源码指纹及检查范围见交付目录 `build.json` / `source-files.sha256`。未重跑无关真实 Agent/UI 或昂贵性能负载。
+
+## 未来日期样式补正
+
+随后根据真机反馈，将紧凑布局中误恢复的点号改回每日期一个空心方框 `□`，仍占两个字符，保留日历宽度与命中。七种当前星期的既有断言先复现点号错误，再验证方框；日志在 `artifacts/calendar-future-cells/`。当前测试程序为 `artifacts/DevTabs-0.4.0-calendar-future-cells/devtabs.exe`。

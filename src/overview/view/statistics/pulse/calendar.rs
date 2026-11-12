@@ -199,7 +199,7 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
             let future = date > today;
             let n = days[index];
             row.push(if future {
-                Span::styled("··", dim())
+                Span::styled("□ ", dim())
             } else {
                 let level = if n == 0 {
                     0
