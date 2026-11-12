@@ -222,7 +222,7 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
         dim(),
     )];
     for level in 0..5 {
-        legend.push(Span::styled(" ", Style::new().bg(activity_color(level))));
+        legend.push(Span::styled("  ", Style::new().bg(activity_color(level))));
     }
     legend.push(Span::styled(
         format!(" {}", t("overview.activity_high")),

@@ -188,6 +188,16 @@ mod tests {
                             .contains(t("overview.activity_low").as_ref())
                     })
                     .unwrap();
+                let colors: Vec<_> = legend
+                    .spans
+                    .iter()
+                    .filter(|span| span.style.bg.is_some())
+                    .collect();
+                assert_eq!(colors.len(), 5);
+                for (level, color) in colors.iter().enumerate() {
+                    assert_eq!(color.content, "  ");
+                    assert_eq!(color.style.bg, Some(activity_color(level)));
+                }
                 assert_eq!(
                     legend.width(),
                     if language == crate::i18n::Language::ZhCn {

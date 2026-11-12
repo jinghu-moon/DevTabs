@@ -42,3 +42,7 @@ cargo test --locked --lib --test overview --test project_pulse --test i18n --tar
 ```powershell
 .\artifacts\DevTabs-0.4.0-calendar-background\devtabs.exe
 ```
+
+## 图例色块尺寸统一
+
+底部“少 → 多”的五级图例也改为每级两个空格加背景色，与日期色块同宽；图例依然对齐日历右边缘。旧版每级仅一列，颜色看起来更窄长。既有图例测试先实际复现一列与两列的差异，修改后验证五个色阶、对应颜色和总宽度；总览相关回归 71 通过、0 失败、7 忽略。日志在 `artifacts/calendar-legend/`，新版程序为 `artifacts/DevTabs-0.4.0-calendar-legend/devtabs.exe`。
