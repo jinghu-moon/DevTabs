@@ -139,6 +139,36 @@ pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
             lines.push(Line::from(Span::styled(text.into_owned(), dim())));
         }
     }
+    let times = t("overview.times");
+    let binary = t("overview.binary");
+    // Both rankings share column widths; file names never move numeric columns.
+    let visible = || {
+        s.hotspots
+            .iter()
+            .take(5)
+            .chain(s.directory_hotspots.iter().take(3))
+    };
+    let count_width = visible()
+        .map(|h| h.commits.to_string().len() + times.width())
+        .max()
+        .unwrap_or(0);
+    let added_width = visible()
+        .filter(|h| !h.binary)
+        .map(|h| h.added.to_string().len() + 1)
+        .max()
+        .unwrap_or(2);
+    let mut removed_width = visible()
+        .filter(|h| !h.binary)
+        .map(|h| h.removed.to_string().len() + 1)
+        .max()
+        .unwrap_or(2);
+    if visible().any(|h| h.binary) {
+        removed_width = removed_width.max(binary.width().saturating_sub(added_width + 1));
+    }
+    let numeric_width = count_width + added_width + removed_width + 2;
+    let right = |text: &str, width: usize| {
+        format!("{}{}", " ".repeat(width.saturating_sub(text.width())), text)
+    };
     for (label, rows) in [
         ("overview.file_hotspots", &s.hotspots),
         ("overview.directory_hotspots", &s.directory_hotspots),
@@ -160,39 +190,42 @@ pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
         } else {
             3
         }) {
-            let counts = format!("{}{}", h.commits, t("overview.times"));
-            let changes = if h.binary {
-                t("overview.binary").into_owned()
+            let mut metrics = vec![Span::styled(
+                right(&format!("{}{times}", h.commits), count_width),
+                dim(),
+            )];
+            metrics.push(Span::raw(" "));
+            if h.binary {
+                metrics.push(Span::styled(
+                    right(&binary, added_width + 1 + removed_width),
+                    dim(),
+                ));
             } else {
-                format!("+{} -{}", h.added, h.removed)
-            };
-            let age = crate::config::now().saturating_sub(h.latest) / 86400;
-            let recent = if age == 0 {
-                t("overview.today").into_owned()
-            } else {
-                format!("{age}{}", t("overview.days"))
-            };
-            let extra = format!(" {counts} {changes} · {recent}");
-            if extra.width() + 8 <= width && !h.binary {
-                let name_width = width - extra.width();
-                lines.push(Line::from(vec![
-                    Span::raw(fit(&h.path, name_width)),
-                    Span::styled(format!(" {counts} "), dim()),
-                    Span::styled(format!("+{} ", h.added), Style::new().fg(green())),
-                    Span::styled(format!("-{}", h.removed), Style::new().fg(palette().error)),
-                    Span::styled(format!(" · {recent}"), dim()),
-                ]));
+                metrics.push(Span::styled(
+                    right(&format!("+{}", h.added), added_width),
+                    Style::new().fg(green()),
+                ));
+                metrics.push(Span::raw(" "));
+                metrics.push(Span::styled(
+                    right(&format!("-{}", h.removed), removed_width),
+                    Style::new().fg(palette().error),
+                ));
+            }
+            if numeric_width + 9 <= width {
+                let mut row = vec![
+                    Span::raw(fit(&h.path, width - numeric_width - 1)),
+                    Span::raw(" "),
+                ];
+                row.extend(metrics);
+                lines.push(Line::from(row));
             } else {
                 lines.push(Line::from(clip(&h.path, width)));
-                if h.binary {
-                    lines.push(Line::from(Span::styled(clip(&extra, width), dim())));
+                if numeric_width <= width {
+                    let mut row = vec![Span::raw(" ".repeat(width - numeric_width))];
+                    row.extend(metrics);
+                    lines.push(Line::from(row));
                 } else {
-                    lines.push(Line::from(vec![
-                        Span::styled(format!(" {counts} "), dim()),
-                        Span::styled(format!("+{} ", h.added), Style::new().fg(green())),
-                        Span::styled(format!("-{}", h.removed), Style::new().fg(palette().error)),
-                        Span::styled(format!(" · {recent}"), dim()),
-                    ]));
+                    lines.push(Line::from(clip(&Line::from(metrics).to_string(), width)));
                 }
             }
         }

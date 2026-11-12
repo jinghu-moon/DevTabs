@@ -612,6 +612,97 @@ mod tests {
         });
     }
     #[test]
+    fn hotspot_numeric_columns_align_across_sections_without_ages() {
+        for language in [crate::i18n::Language::EnUs, crate::i18n::Language::ZhCn] {
+            crate::i18n::with_language(language, || {
+                let mut s = fixture();
+                s.hotspots = vec![
+                    stats::Hotspot {
+                        path: "src/短文件.rs".into(),
+                        commits: 2,
+                        added: 9,
+                        removed: 1234,
+                        latest: crate::config::now(),
+                        binary: false,
+                    },
+                    stats::Hotspot {
+                        path: "src/a-much-longer-file.rs".into(),
+                        commits: 321,
+                        added: 1575,
+                        removed: 6,
+                        latest: 1,
+                        binary: false,
+                    },
+                ];
+                s.directory_hotspots = vec![stats::Hotspot {
+                    path: "docs/research".into(),
+                    commits: 77,
+                    added: 149152,
+                    removed: 63,
+                    latest: 1,
+                    binary: false,
+                }];
+                for width in [26, 40, 60, 100] {
+                    let rendered = lines(&s, width);
+                    let numeric = rendered
+                        .iter()
+                        .filter(|line| {
+                            line.spans.iter().any(|span| {
+                                span.style.fg == Some(green()) && span.content.contains('+')
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    assert_eq!(numeric.len(), 3, "{language:?} {width}");
+                    let mut expected = None;
+                    for line in numeric {
+                        let text = line.to_string();
+                        assert!(!text.contains('·'), "age remains: {text}");
+                        let mut x = 0;
+                        let mut edges = vec![];
+                        for span in &line.spans {
+                            x += span.width();
+                            if span.content.contains(t("overview.times").as_ref())
+                                || span.style.fg == Some(green())
+                                || span.style.fg == Some(palette().error)
+                            {
+                                edges.push(x);
+                            }
+                        }
+                        assert_eq!(edges.len(), 3);
+                        assert_eq!(edges[2], width, "right edge: {text}");
+                        if let Some(expected) = &expected {
+                            assert_eq!(&edges, expected, "{language:?} {width}: {text}");
+                        } else {
+                            expected = Some(edges);
+                        }
+                    }
+                }
+                s.hotspots.push(stats::Hotspot {
+                    path: "assets/logo.png".into(),
+                    commits: 1,
+                    binary: true,
+                    ..Default::default()
+                });
+                for width in [1, 8, 26, 40, 60] {
+                    let rendered = lines(&s, width);
+                    assert!(rendered.iter().all(|line| line.width() <= width));
+                    if width >= 40 {
+                        let binary = rendered
+                            .iter()
+                            .find(|line| {
+                                line.spans.iter().any(|span| {
+                                    span.content.trim() == t("overview.binary").as_ref()
+                                })
+                            })
+                            .unwrap();
+                        assert_eq!(binary.width(), width);
+                        assert!(!binary.to_string().contains("+0"));
+                    }
+                }
+            });
+        }
+    }
+    #[test]
     fn pulse_heatmap_hotspots_and_budget_labels_remain_readable_at_all_widths() {
         for language in [crate::i18n::Language::EnUs, crate::i18n::Language::ZhCn] {
             crate::i18n::with_language(language, || {
