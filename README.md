@@ -6,44 +6,44 @@ Windows Rust 项目工作区：原生 Codex / Claude Code 与 PowerShell Debug �
 
 当前版本 **0.4.0**，实现项目总览、界面内终端浮层、三种布局、文件树、代码/Markdown 预览、向 Agent 插入路径及单文件源码编辑。Markdown 阅读模式使用共享 Catppuccin 主题、按词换行、窄窗表格，以及有限 Mermaid / 数学公式排版。需要 Windows、PowerShell 7、Windows Terminal；所选 Agent 必须已在 PATH。编译需要 Rust 1.98+。
 
-规划中的同项目多 Agent 并行开发见 [设计草案](docs/37-Parallel-Agent-Workspace-Design.md)：独立 worktree、同屏左右并排／上下堆叠、任务边框信息和总览任务管理；尚未实现。
+同项目多 Agent 并行开发已支持独立 worktree、同屏横排／竖排与轮次审阅，操作见文末；设计见 [并行工作区](docs/37-Parallel-Agent-Workspace-Design.md)，实现与真机验收边界见 [验证记录](docs/40-Parallel-Agent-Workspace-Verification.md)。
 
 渲染改造与验证见 [12-Markdown-Renderer-Implementation.md](docs/12-Markdown-Renderer-Implementation.md)。测试样本见 [markdown-reading.md](tests/fixtures/markdown-reading.md)。
 
 ## 开始使用
 
-最新测试程序为 `artifacts/DevTabs-0.4.0-project-pulse/devtabs.exe`，包含单行项目与可展开会话、最近用户消息修复、常驻返回总览按钮、提交热力图与改动热点，以及详情分区、可点击搜索和宿主断线恢复、按实际栏宽排版的统计卡片与目录扫描优化、响应式项目/详情/概况三栏、Markdown 工作上下文、可审阅启动队列、真实单 Agent 终端组合，并保留侧栏、图片、编辑、终端浮层与中英文界面；构建哈希与检查记录在同目录 `build.json`。当前 IPC 使用 v5 并按构建自动隔离宿主，避免新版连接到仍在运行的旧宿主；`--version` 可查看构建标识。旧版运行中的窗口和会话由旧版正常退出，新版不接管。详见 [宿主构建隔离](docs/31-Host-Build-Isolation.md)。
+最新测试程序为 `artifacts/DevTabs-0.4.0-complete-statistics/devtabs.exe`，包含无数量/时间硬截断的完整统计扫描、后台进度、明确的根目录文件标签，以及单行项目与可展开会话、最近用户消息修复、常驻返回总览按钮、提交热力图与改动热点，以及详情分区、可点击搜索和宿主断线恢复、按实际栏宽排版的统计卡片与目录扫描优化、响应式项目/详情/概况三栏、Markdown 工作上下文、可审阅启动队列、真实单 Agent 终端组合，并保留侧栏、图片、编辑、终端浮层与中英文界面；构建哈希与检查记录在同目录 `build.json`。当前 IPC 使用 v6 并按构建自动隔离宿主，避免新版连接到仍在运行的旧宿主；`--version` 可查看构建标识。旧版运行中的窗口和会话由旧版正常退出，新版不接管。详见 [宿主构建隔离](docs/31-Host-Build-Isolation.md)。
 
 若同时运行旧版，重新编译不会更新已经打开的界面；同一构建的总览也可能激活已运行的前端。测试当前渲染时，明确指定程序路径并加 `--new-instance`，在新的界面打开 `tests/fixtures/markdown-reading.md`：
 
 ```powershell
-& "D:\100_Projects\110_Daily\new-project\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe" --project "D:\100_Projects\110_Daily\new-project" --agent codex --layout split --new-instance
+& "D:\100_Projects\110_Daily\new-project\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe" --project "D:\100_Projects\110_Daily\new-project" --agent codex --layout split --new-instance
 ```
 
 可用 `Get-CimInstance Win32_Process -Filter "Name = 'devtabs.exe'" | Select-Object ProcessId, ExecutablePath, CommandLine` 核对实际运行路径。0.4.0 的本地源码渲染器已支持 `rust,no_run` 元数据、有限 Mermaid/公式、任务框和引用续行；0.3.2 的旧预览不能用于判断这些能力。针对这份完整样本，`cargo test --test markdown_viewport reading_fixture -- --test-threads=1` 覆盖实际 Sidebar 的 LF/CRLF、明暗主题、代码颜色、图形、公式及与完整渲染逐行一致性。
 
 ```powershell
 # 首次设置默认 Agent 和项目根目录，可添加多个根
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe config agent codex
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe config root 'D:\100_Projects\110_Daily'
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe config agent codex
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe config root 'D:\100_Projects\110_Daily'
 
 # 项目总览
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe
 
 # 只创建 Agent，一个 PTY；保留文件树与预览
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe --project 'D:\Projects\Demo' --composition agent-only
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe --project 'D:\Projects\Demo' --composition agent-only
 
 # 默认 Float：Agent 主界面 + 界面内终端浮层
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe --project 'D:\Projects\Demo' --agent claude --debug-command 'cargo run'
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe --project 'D:\Projects\Demo' --agent claude --debug-command 'cargo run'
 
 # 左右内嵌分屏 / Windows Terminal 两个标签页
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe --project 'D:\Projects\Demo' --layout split
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe --project 'D:\Projects\Demo' --layout tabs
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe --project 'D:\Projects\Demo' --layout split
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe --project 'D:\Projects\Demo' --layout tabs
 
 # 原生历史选择器 / 显式另开实例 / 双 shell 诊断
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe --agent codex --resume
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe --new-instance
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe --agent shell --layout split
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe --agent codex --resume
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe --new-instance
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe --agent shell --layout split
 ```
 
 同一项目已经运行时，启动参数不会替换原会话；需要另一组进程时使用 `--new-instance`。标签页布局使用 DevTabs 命名的 WT 窗口，避免按标签序号或“最近窗口”定位。总览 Enter 优先激活可定位的现有工作区；否则打开视图并接管原会话，旧视图退出，不重启 shell。
@@ -60,7 +60,7 @@ Windows Rust 项目工作区：原生 Codex / Claude Code 与 PowerShell Debug �
 
 `--composition agent-only` 创建一个终端；`agent-debug` 创建两个；`custom` 创建 Agent、Debug 和配置的全部额外命名终端。切换组合不会删除额外终端配置，视觉布局由 `--layout` 独立决定。
 
-设计与实测见 [总览重构](docs/33-Overview-Refactor-Design.md)、[验证记录](docs/34-Overview-Refactor-Verification.md)。统计面板新样式与老项目的速度对照见 [统计优化](docs/35-Statistics-Panel-Refinement.md)。详情、搜索与宿主连接修复见 [验证记录](docs/36-Overview-Detail-Interaction-Fixes.md)。本轮统计、会话、扫描口径与返回导航见 [项目脉搏](docs/38-Project-Pulse-and-Session-Navigation.md)。
+设计与实测见 [总览重构](docs/33-Overview-Refactor-Design.md)、[验证记录](docs/34-Overview-Refactor-Verification.md)。统计面板新样式与老项目的速度对照见 [统计优化](docs/35-Statistics-Panel-Refinement.md)。详情、搜索与宿主连接修复见 [验证记录](docs/36-Overview-Detail-Interaction-Fixes.md)。本轮统计、会话、扫描口径与返回导航见 [项目脉搏](docs/38-Project-Pulse-and-Session-Navigation.md)。完整扫描的实测、资源取舍和复现命令见 [统计扫描验证](docs/42-Complete-Statistics-Scan-Verification.md)。
 
 ## 操作
 
@@ -160,10 +160,10 @@ devtabs config debug 'D:\Projects\Demo' 'cargo watch -x run'
 devtabs config edit
 
 # 当前用户安装到 %LOCALAPPDATA%\Programs\DevTabs，并添加用户 PATH
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe install
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe install
 
 # 关闭新版工作区后，从另一份 exe 卸载；保留用户配置
-.\artifacts\DevTabs-0.4.0-project-pulse\devtabs.exe uninstall
+.\artifacts\DevTabs-0.4.0-complete-statistics\devtabs.exe uninstall
 ```
 
 安装/卸载支持 `--directory` 指定目录、`--no-path` 跳过 PATH 修改。PATH 更新保留其他条目及 `%USERPROFILE%` 等变量；新终端获得新 PATH，已打开的 shell 保持原环境。不会修改 Profile 或 WT 配置。更新前先关闭安装目录内运行的 DevTabs。

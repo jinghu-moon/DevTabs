@@ -54,6 +54,15 @@ pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
     }
     let mut lines = pulse::lines(s, width);
     lines.push(heading(&t("overview.codebase"), "", width));
+    if s.disk_scanning {
+        let message = crate::i18n::format(
+            "overview.stats_scanning",
+            &[("count", count(s.scanned_entries))],
+        );
+        for text in textwrap::wrap(&message, width.max(1)) {
+            lines.push(Line::from(Span::styled(text.into_owned(), dim())));
+        }
+    }
     if s.partial && s.source_issues.is_empty() && s.disk_issues.is_empty() {
         lines.push(Line::from(Span::styled(
             clip(&t("overview.stats_partial"), width),
@@ -76,7 +85,7 @@ pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
             "overview.stats_disk",
             s.bytes,
             s.files,
-            s.disk_ready,
+            s.disk_ready || s.disk_scanning,
             "overview.stats_disk_hint",
         ),
     ] {
@@ -87,7 +96,7 @@ pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
                 if if label == "overview.stats_source" {
                     !s.source_issues.is_empty()
                 } else {
-                    !s.disk_issues.is_empty()
+                    !s.disk_issues.is_empty() || s.disk_scanning
                 } {
                     "≥ "
                 } else {
@@ -152,7 +161,7 @@ pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
         ("overview.build_artifacts", s.artifact_bytes),
         ("overview.dependencies", s.dependency_bytes),
     ] {
-        if s.disk_ready {
+        if s.disk_ready || s.disk_scanning {
             lines.push(Line::from(vec![
                 Span::styled(format!("{}  ", t(label)), dim()),
                 Span::styled(human_bytes(bytes), Style::new().fg(amber())),
@@ -229,7 +238,7 @@ pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
     for text in textwrap::wrap(&t("overview.ordinary_directories"), width.max(1)) {
         lines.push(Line::from(Span::styled(text.into_owned(), dim())));
     }
-    if !s.disk_ready || s.directories.is_empty() {
+    if (!s.disk_ready && !s.disk_scanning) || s.directories.is_empty() {
         lines.push(Line::from(Span::styled(
             clip(
                 &t(if s.disk_ready {
@@ -260,12 +269,17 @@ pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
         let name_width = width.saturating_sub(size_width + 8).clamp(1, 14);
         let bar_width = width.saturating_sub(name_width + size_width + 3);
         for (name, bytes) in s.directories.iter().take(5) {
-            let artifact = artifact(name);
+            let name = if name == "." {
+                t("overview.root_files")
+            } else {
+                name.as_str().into()
+            };
+            let artifact = artifact(&name);
             let color = if artifact { amber() } else { palette().accent };
             let value = human_bytes(*bytes);
             let mut row = vec![
                 Span::styled(
-                    fit(name, name_width),
+                    fit(&name, name_width),
                     Style::new().fg(if artifact { color } else { palette().fg }),
                 ),
                 Span::styled(
@@ -610,6 +624,34 @@ mod tests {
                 .join("\n");
             assert!(text.contains("0 B") && text.contains("0 commits"));
         });
+    }
+    #[test]
+    fn ongoing_scan_shows_live_lower_bound_and_names_root_files() {
+        for language in [crate::i18n::Language::EnUs, crate::i18n::Language::ZhCn] {
+            crate::i18n::with_language(language, || {
+                let mut s = fixture();
+                s.disk_ready = false;
+                s.disk_scanning = true;
+                s.scanned_entries = 234_567;
+                s.directories = vec![(".".into(), 123), ("crates".into(), 12)];
+                for width in [1, 8, 26, 40, 76] {
+                    let rendered = lines(&s, width);
+                    assert!(rendered.iter().all(|line| line.width() <= width));
+                    if width >= 40 {
+                        let text = rendered
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        assert!(text.contains("234,567"));
+                        assert!(text.contains(t("overview.root_files").as_ref()));
+                        assert!(text.contains("crates"));
+                        assert!(text.contains('≥'));
+                        assert!(!text.contains(t("overview.limit_entries").as_ref()));
+                    }
+                }
+            });
+        }
     }
     #[test]
     fn hotspot_numeric_columns_align_across_sections_without_ages() {

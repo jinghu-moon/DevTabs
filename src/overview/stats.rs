@@ -1,9 +1,11 @@
 //! Cancelable on-demand statistics, never computed during a UI frame.
+mod disk;
+mod source;
 use std::{
     collections::BTreeMap,
     path::Path,
     sync::{
-        Arc, OnceLock,
+        Arc,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -39,6 +41,8 @@ pub struct Stats {
     pub partial: bool,
     pub source_ready: bool,
     pub disk_ready: bool,
+    pub disk_scanning: bool,
+    pub scanned_entries: u64,
     pub git_error: Option<String>,
     pub source_issues: Vec<ScanIssue>,
     pub disk_issues: Vec<ScanIssue>,
@@ -265,127 +269,30 @@ fn scan_disk(
     generation: &Arc<AtomicU64>,
     ticket: u64,
     out: &mut Stats,
-    start: Instant,
+    _start: Instant,
 ) -> bool {
-    let _perf = crate::perf::span(crate::perf::Metric::OverviewDiskScan);
-    // ReadDir keeps Windows enumeration metadata, avoiding a new path-based stat
-    // for each file. Aggregate once per directory rather than hashing/cloning
-    // the top-level name for every file.
-    let mut groups = vec![(".".to_string(), [0u64; 3], [0u64; 3])];
-    let mut stack = vec![(root.to_path_buf(), 0usize, 0u8)];
-    let mut entries = 0usize;
-    'scan: while let Some((directory, group, category)) = stack.pop() {
-        if generation.load(Ordering::Relaxed) != ticket {
-            return false;
-        }
-        let Ok(children) = std::fs::read_dir(&directory) else {
-            issue(out, false, ScanIssue::ReadError);
-            continue;
-        };
-        for entry in children {
-            if entries.is_multiple_of(64) && generation.load(Ordering::Relaxed) != ticket {
-                return false;
-            }
-            if entries >= 200_000
-                || (entries.is_multiple_of(256) && start.elapsed() > Duration::from_secs(3))
-            {
-                issue(
-                    out,
-                    false,
-                    if entries >= 200_000 {
-                        ScanIssue::EntryLimit
-                    } else {
-                        ScanIssue::TimeLimit
-                    },
-                );
-                break 'scan;
-            }
-            entries += 1;
-            let Ok(entry) = entry else {
-                issue(out, false, ScanIssue::ReadError);
-                continue;
-            };
-            let Ok(kind) = entry.file_type() else {
-                issue(out, false, ScanIssue::ReadError);
-                continue;
-            };
-            if kind.is_symlink() {
-                continue;
-            }
-            if kind.is_dir() {
-                let child_group = if group == 0 && directory == root {
-                    groups.push((
-                        entry.file_name().to_string_lossy().into_owned(),
-                        [0; 3],
-                        [0; 3],
-                    ));
-                    groups.len() - 1
-                } else {
-                    group
-                };
-                let child_category = if category != 0 {
-                    category
-                } else {
-                    match entry.file_name().to_string_lossy().as_ref() {
-                        "target" | "build" | "dist" | ".next" | "obj" | "bin" => 1,
-                        "vendor" | "node_modules" | ".venv" => 2,
-                        _ => 0,
-                    }
-                };
-                stack.push((entry.path(), child_group, child_category));
-            } else if kind.is_file() {
-                match entry.metadata() {
-                    Ok(metadata) => {
-                        out.files += 1;
-                        out.bytes = out.bytes.saturating_add(metadata.len());
-                        match category {
-                            1 => {
-                                out.artifact_bytes =
-                                    out.artifact_bytes.saturating_add(metadata.len())
-                            }
-                            2 => {
-                                out.dependency_bytes =
-                                    out.dependency_bytes.saturating_add(metadata.len())
-                            }
-                            _ => {}
-                        }
-                        let c = category as usize;
-                        groups[group].1[c] = groups[group].1[c].saturating_add(metadata.len());
-                        groups[group].2[c] += 1;
-                    }
-                    Err(_) => issue(out, false, ScanIssue::ReadError),
-                }
-            }
-        }
-    }
-    out.directories = groups
-        .iter()
-        .filter(|(_, _, files)| files[0] > 0)
-        .map(|(name, bytes, _)| (name.clone(), bytes[0]))
-        .collect();
-    out.directories
-        .sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    out.artifacts = groups
-        .into_iter()
-        .filter(|(_, _, files)| files[1] + files[2] > 0)
-        .map(|(name, bytes, _)| (name, bytes[1].saturating_add(bytes[2])))
-        .collect();
-    out.artifacts
-        .sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    out.artifacts.truncate(6);
-    out.directories.truncate(6);
-    generation.load(Ordering::Relaxed) == ticket
+    disk::scan(root, generation, ticket, out, 4, &mut |_| {})
 }
 fn scan_source(
     root: &Path,
     generation: &Arc<AtomicU64>,
     ticket: u64,
     out: &mut Stats,
-    start: Instant,
+    _start: Instant,
+) -> bool {
+    source::scan(root, generation, ticket, out, 2)
+}
+#[cfg(test)]
+fn scan_source_serial(
+    root: &Path,
+    generation: &Arc<AtomicU64>,
+    ticket: u64,
+    out: &mut Stats,
+    _start: Instant,
 ) -> bool {
     let _perf = crate::perf::span(crate::perf::Metric::OverviewSourceScan);
     let mut langs = BTreeMap::<String, u64>::new();
-    static SYNTAX: OnceLock<syntect::parsing::SyntaxSet> = OnceLock::new();
+    static SYNTAX: std::sync::OnceLock<syntect::parsing::SyntaxSet> = std::sync::OnceLock::new();
     if generation.load(Ordering::Relaxed) != ticket {
         return false;
     }
@@ -403,21 +310,9 @@ fn scan_source(
                 )
         })
         .build();
-    for (n, e) in walk.enumerate() {
+    for e in walk {
         if generation.load(Ordering::Relaxed) != ticket {
             return false;
-        }
-        if n >= 200000 || start.elapsed() > Duration::from_secs(5) {
-            issue(
-                out,
-                true,
-                if n >= 200000 {
-                    ScanIssue::EntryLimit
-                } else {
-                    ScanIssue::TimeLimit
-                },
-            );
-            break;
         }
         let Ok(e) = e else {
             issue(out, true, ScanIssue::ReadError);
@@ -495,7 +390,7 @@ pub fn source_at(root: &Path, home: &Path, generation: &Arc<AtomicU64>, ticket: 
         (h ^ u64::from(b)).wrapping_mul(16777619)
     });
     let mut stamp = cache_stamp(root);
-    stamp.push(4);
+    stamp.push(5);
     stamp.extend(cache_stamp(&home.join("stats-refresh")));
     let now = crate::config::now();
     for suffix in [".json", "-source.json"] {
@@ -844,7 +739,7 @@ fn read_cache(path: &Path, key: &str, stamp: &[u64]) -> Option<Cached> {
         .filter(|m| m.len() <= 128 * 1024)
         .and_then(|_| std::fs::read(path).ok())
         .and_then(|b| serde_json::from_slice::<Cached>(&b).ok())
-        .filter(|c| c.path == key && c.stamp == stamp)
+        .filter(|c| c.path == key && c.stamp == stamp && !c.stats.disk_scanning)
 }
 fn cache_stamp(root: &Path) -> Vec<u64> {
     let mut stamp: Vec<u64> = [
@@ -870,12 +765,37 @@ fn cache_stamp(root: &Path) -> Vec<u64> {
 pub fn cached(root: &Path, generation: &Arc<AtomicU64>, ticket: u64) -> Stats {
     cached_at(root, &crate::config::home(), generation, ticket, false)
 }
+pub fn cached_with_progress(
+    root: &Path,
+    generation: &Arc<AtomicU64>,
+    ticket: u64,
+    progress: &mut dyn FnMut(&Stats),
+) -> Stats {
+    cached_at_with_progress(
+        root,
+        &crate::config::home(),
+        generation,
+        ticket,
+        false,
+        progress,
+    )
+}
 pub fn cached_at(
     root: &Path,
     home: &Path,
     generation: &Arc<AtomicU64>,
     ticket: u64,
     force: bool,
+) -> Stats {
+    cached_at_with_progress(root, home, generation, ticket, force, &mut |_| {})
+}
+pub fn cached_at_with_progress(
+    root: &Path,
+    home: &Path,
+    generation: &Arc<AtomicU64>,
+    ticket: u64,
+    force: bool,
+    progress: &mut dyn FnMut(&Stats),
 ) -> Stats {
     if generation.load(Ordering::Relaxed) != ticket {
         return Stats::default();
@@ -886,7 +806,7 @@ pub fn cached_at(
     });
     let path = home.join("stats").join(format!("{hash:016x}.json"));
     let mut stamp = cache_stamp(root);
-    stamp.push(4);
+    stamp.push(5);
     stamp.extend(cache_stamp(&home.join("stats-refresh")));
     let now = crate::config::now();
     let old = read_cache(&path, &key, &stamp)
@@ -924,27 +844,30 @@ pub fn cached_at(
         })
     };
     let source_at = source.as_ref().map_or(now, |c| c.source_at);
-    let result = if let Some(source) = source {
-        // The separate source worker has already collected this same version.
-        // Complete its disk fields without re-running source or Git scans.
-        let mut out = source.stats;
-        out.disk_ready = true;
-        if let Some(disk) = disk {
-            out.files = disk.stats.files;
-            out.bytes = disk.stats.bytes;
-            out.directories = disk.stats.directories.clone();
-            out.artifacts = disk.stats.artifacts.clone();
-            out.artifact_bytes = disk.stats.artifact_bytes;
-            out.dependency_bytes = disk.stats.dependency_bytes;
-            out.disk_issues = disk.stats.disk_issues.clone();
-            out.partial |= !disk.stats.disk_issues.is_empty();
-        } else if !scan_disk(root, generation, ticket, &mut out, Instant::now()) {
-            return Stats::default();
-        }
-        out
+    let mut result = if let Some(source) = source {
+        source.stats
     } else {
-        collect_inner(root, generation, ticket, disk.map(|c| &c.stats))
+        // Source/Git are published before the full disk scan; no repeated scan
+        // is needed when the separate source worker already supplied this data.
+        collect_inner(root, generation, ticket, Some(&Stats::default()))
     };
+    if generation.load(Ordering::Relaxed) != ticket {
+        return Stats::default();
+    }
+    if let Some(disk) = disk {
+        result.files = disk.stats.files;
+        result.bytes = disk.stats.bytes;
+        result.directories = disk.stats.directories.clone();
+        result.artifacts = disk.stats.artifacts.clone();
+        result.artifact_bytes = disk.stats.artifact_bytes;
+        result.dependency_bytes = disk.stats.dependency_bytes;
+        result.scanned_entries = disk.stats.scanned_entries;
+        result.disk_issues = disk.stats.disk_issues.clone();
+        result.partial = !result.source_issues.is_empty() || !result.disk_issues.is_empty();
+        result.disk_ready = true;
+    } else if !disk::scan(root, generation, ticket, &mut result, 4, progress) {
+        return Stats::default();
+    }
     if generation.load(Ordering::Relaxed) == ticket {
         let disk_at = disk.map_or(now, |c| c.disk_at);
         let data = Cached {
@@ -985,7 +908,7 @@ mod pulse_tests {
         std::fs::remove_dir(&root).unwrap();
     }
     #[test]
-    fn source_disk_limits_and_read_failures_are_reported_independently() {
+    fn elapsed_time_never_truncates_scans_but_read_errors_remain_explicit() {
         let root = std::env::temp_dir().join(format!("DevTabs-budget-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&root).unwrap();
         std::fs::write(root.join("test.rs"), "fn main() {}\n").unwrap();
@@ -993,11 +916,13 @@ mod pulse_tests {
         let expired = Instant::now() - Duration::from_secs(10);
         let mut source = Stats::default();
         assert!(scan_source(&root, &flag, 1, &mut source, expired));
-        assert_eq!(source.source_issues, vec![ScanIssue::TimeLimit]);
+        assert!(source.source_issues.is_empty());
+        assert_eq!(source.source_files, 1);
         assert!(source.disk_issues.is_empty());
         let mut disk = Stats::default();
         assert!(scan_disk(&root, &flag, 1, &mut disk, expired));
-        assert_eq!(disk.disk_issues, vec![ScanIssue::TimeLimit]);
+        assert!(disk.disk_issues.is_empty());
+        assert_eq!(disk.files, 1);
         assert!(disk.source_issues.is_empty());
         let mut missing = Stats::default();
         assert!(scan_disk(
@@ -1008,7 +933,7 @@ mod pulse_tests {
             Instant::now()
         ));
         assert_eq!(missing.disk_issues, vec![ScanIssue::ReadError]);
-        assert!(source.partial && disk.partial && missing.partial);
+        assert!(!source.partial && !disk.partial && missing.partial);
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
@@ -1025,3 +950,6 @@ mod pulse_tests {
         assert_eq!((files[0].added, files[0].removed), (0, 0));
     }
 }
+
+#[cfg(test)]
+mod verification;

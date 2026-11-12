@@ -1,10 +1,10 @@
 # Statistics Scan Research
 
-2026-11-12。状态：调研与优化路线，尚未替换生产扫描器，尚无候选库在本机的性能结论。针对 `Yue-GPUI-Component` 的统计截断问题，补充文档 35 的适用边界。
+2026-11-12。状态：完整扫描、并行聚合、扫描进度与缓存版本隔离已实现，实测与验证见 [42-Complete-Statistics-Scan-Verification.md](42-Complete-Statistics-Scan-Verification.md)。本文保留调研依据与取舍；文件监听驱动的增量缓存维护仍是后续路线。针对 `Yue-GPUI-Component` 的统计截断问题，补充文档 35 的适用边界。
 
 ## 1. 必须修正的契约
 
-当前磁盘扫描达到 200,000 项或约 3 秒就停止，源码扫描另有 200,000 项/5 秒限制。它们会漏掉未访问的目录；不能以此满足“准确且比老项目快”。文档 35 的小夹具对照只能证明当时 15,000 文件工作负载下的结果，不能推出大型真实项目已被完整统计。
+调研前，磁盘扫描达到 200,000 项或约 3 秒就停止，源码扫描另有 200,000 项/5 秒限制。它们会漏掉未访问的目录；不能以此满足“准确且比老项目快”。本轮已移除这些生产扫描限制。文档 35 的小夹具对照只能证明当时 15,000 文件工作负载下的结果，不能推出大型真实项目已被完整统计。
 
 优化目标是减少完成同一统计所需的 I/O、路径处理和调度成本。后台工作、进度展示和取消保持界面响应；限制并发、队列和进度发布频率，不按文件数量或总用时截断正常扫描。读失败必须报告，取消不能写入完成缓存。普通目录、构建产物、依赖目录都要计入既定磁盘口径；分类只影响展示，不能借分类省略遍历。
 
@@ -40,7 +40,7 @@ DevTabs 不应照搬搜索规则系统、每文件 JSON 输出、整盘内存树
 | [DiskSleuth](https://github.com/Swatto86/DiskSleuth) | 普通遍历与 MFT 分层、后台进度、紧凑树 | 是磁盘分析器参考；其 jwalk 依赖不是本项目新增库首选 |
 | [jwalk](https://github.com/Byron/jwalk) | 早期并行遍历设计 | 当前已归档，README 明确推荐 dua-core，不作为新依赖 |
 
-核对到的发布文档为 [dua-core 5.0.1](https://docs.rs/dua-core/5.0.1/dua_core/)，MIT，MSRV 1.88，符合本项目当前 Rust 1.98。其 [walk](https://docs.rs/dua-core/5.0.1/dua_core/fn.walk.html) 接受线程数、顺序、Options 与下降谓词；[Options](https://docs.rs/dua-core/5.0.1/dua_core/struct.Options.html) 支持有界批次缓冲。接入时再核对实际发布版本和锁文件，不使用仓库主分支尚未发布 API。
+初次调研核对到 5.0.1；实施时通过 `cargo search` / `cargo info` 再核对，采用实际已发布的 [dua-core 6.1.0](https://docs.rs/dua-core/6.1.0/dua_core/)，MIT，MSRV 1.88，符合本项目当前 Rust 1.98，版本固定在 Cargo.lock。其 [walk](https://docs.rs/dua-core/6.1.0/dua_core/fn.walk.html) 接受线程数、顺序、Options 与下降谓词；[Options](https://docs.rs/dua-core/6.1.0/dua_core/struct.Options.html) 支持有界批次缓冲。不使用仓库主分支尚未发布 API。
 
 [dua-cli #359](https://github.com/Byron/dua-cli/pull/359) 使用 `GetFileInformationByHandleEx(FileIdBothDirectoryInfo)` 与 64 KiB 缓冲，一批返回大小、类型、时间及身份。上游报告了自己的提速数据；它主要消除了原先逐项查询等开销，不代表 DevTabs 会获得相同收益。
 
@@ -67,4 +67,4 @@ MFT 暂不作为项目子目录统计默认方案：卷级枚举与权限成本�
 - 只读真实项目复核：`Yue-GPUI-Component`，确认 crates/docs/refer 的汇总与全量基准相符。正在构建时的变化单独标记，不能把不同时间的数据差解释成算法错误或性能提升。
 - 原生/并行候选只在完整性正确且实测有稳定收益时接入；如果元数据不是热点，就继续定位路径分配、匹配、锁、发布与缓存，不能再次回到硬截断。
 
-本次只完成调研，没有修改生产扫描逻辑或新增依赖。先前补写的“超时不能截断”测试已实际暴露旧行为，RED 日志和补丁保存在本机 `artifacts/statistics-complete/`；研究期间恢复原测试入口，避免把未实现的断言混入当前绿色版本。后续实施应首先恢复该 RED，再补充大目录真值测试并完成 GREEN。
+研究提交阶段未修改生产扫描器。随后实施已恢复“超时不能截断”的回归断言并通过 GREEN，加入超过 200,000 项的真值测试和只读真实项目对照。RED 日志、原始测量及最终回归保存在本机 `artifacts/statistics-complete/`；结果与复现入口见文档 42。

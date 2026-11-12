@@ -844,7 +844,7 @@ impl Overview {
                 Reply::Stats(key, ticket, result)
                     if ticket == self.detail_ticket && Some(&key) == self.detail_key.as_ref() =>
                 {
-                    self.detail_pending = false;
+                    self.detail_pending = result.disk_scanning;
                     self.sizes.insert(key.clone(), result.source_bytes);
                     self.activity.insert(key.clone(), result.activity);
                     if self.stats.len() >= 16
@@ -853,7 +853,9 @@ impl Overview {
                         self.stats.remove(&k);
                         self.dashboard.stats_at.remove(&k);
                     }
-                    self.dashboard.stats_at.insert(key.clone(), Instant::now());
+                    if !result.disk_scanning {
+                        self.dashboard.stats_at.insert(key.clone(), Instant::now());
+                    }
                     self.stats.insert(key, result);
                     rebuild = true
                 }
@@ -1030,7 +1032,7 @@ impl Overview {
             .as_ref()
             .map_or(Duration::ZERO, |(_, since)| since.elapsed());
         if stats_visible
-            && (!self.stats.contains_key(&key)
+            && (self.stats.get(&key).is_none_or(|s| !s.disk_ready)
                 || self.dashboard.stats_at.get(&key).is_some_and(|t| {
                     t.elapsed()
                         >= Duration::from_secs(

@@ -1112,6 +1112,72 @@ fn failed_persistence_restores_form_with_all_entered_values() {
     assert_eq!(app.pending_edits, 0);
 }
 #[test]
+fn statistics_progress_keeps_request_pending_and_canceled_scan_restarts_on_return() {
+    let t = worker::isolated();
+    let mut app = overview();
+    app.show_stats = true;
+    app.dashboard.overlay = Some(dashboard::Focus::Stats);
+    app.request_stats(&t.worker).unwrap();
+    let Detail::Stats(path, old_ticket) = t.details.try_recv().unwrap() else {
+        panic!("stats")
+    };
+    let key = config::key(&path);
+    t.replies
+        .send(Reply::Stats(
+            key.clone(),
+            old_ticket,
+            stats::Stats {
+                disk_scanning: true,
+                scanned_entries: 12,
+                files: 10,
+                source_ready: true,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+    app.poll(&t.worker).unwrap();
+    assert!(app.detail_pending);
+    assert!(app.stats[&key].disk_scanning);
+    assert!(!app.dashboard.stats_at.contains_key(&key));
+    assert!(t.details.try_recv().is_err());
+    app.dashboard.overlay = None;
+    app.dashboard.columns = None;
+    app.request_stats(&t.worker).unwrap();
+    assert!(!app.detail_pending);
+    app.dashboard.overlay = Some(dashboard::Focus::Stats);
+    app.request_stats(&t.worker).unwrap();
+    let Detail::Stats(_, current) = t.details.try_recv().unwrap() else {
+        panic!("restart")
+    };
+    assert_ne!(old_ticket, current);
+    t.replies
+        .send(Reply::Stats(
+            key.clone(),
+            old_ticket,
+            stats::Stats {
+                disk_ready: true,
+                files: 999,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+    t.replies
+        .send(Reply::Stats(
+            key.clone(),
+            current,
+            stats::Stats {
+                disk_ready: true,
+                files: 25,
+                ..Default::default()
+            },
+        ))
+        .unwrap();
+    app.poll(&t.worker).unwrap();
+    assert_eq!(app.stats[&key].files, 25);
+    assert!(!app.detail_pending && !app.stats[&key].disk_scanning);
+    assert!(app.dashboard.stats_at.contains_key(&key));
+}
+#[test]
 fn stale_background_results_cannot_replace_current_details() {
     let t = worker::isolated();
     let mut app = overview();

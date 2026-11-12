@@ -425,11 +425,24 @@ impl Workers {
                             )
                         }
 
-                        Detail::Stats(p, ticket) => Reply::Stats(
-                            config::key(&p),
-                            ticket,
-                            stats::cached(&p, &cancel, ticket),
-                        ),
+                        Detail::Stats(p, ticket) => {
+                            let key = config::key(&p);
+                            let result =
+                                stats::cached_with_progress(&p, &cancel, ticket, &mut |s| {
+                                    // Progress is replaceable; completion below is not.
+                                    // Never block traversal on an occupied UI channel.
+                                    if tx
+                                        .try_send(Reply::Stats(key.clone(), ticket, s.clone()))
+                                        .is_err()
+                                    {
+                                        crate::perf::add(
+                                            crate::perf::Count::StatisticsProgressDropped,
+                                            1,
+                                        );
+                                    }
+                                });
+                            Reply::Stats(key, ticket, result)
+                        }
                         Detail::History(p, agent, ticket) => {
                             let _perf = crate::perf::span(crate::perf::Metric::OverviewHistory);
                             Reply::History(

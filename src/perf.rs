@@ -145,6 +145,10 @@ pub fn record(metric: Metric, elapsed: Duration) {
 #[derive(Clone, Copy)]
 #[repr(usize)]
 pub enum Count {
+    StatisticsDiskEntries,
+    StatisticsDiskFiles,
+    StatisticsSourceFiles,
+    StatisticsProgressDropped,
     OverviewContextHits,
     OverviewStale,
     OverviewCanceled,
@@ -169,6 +173,10 @@ pub enum Count {
     ImageCompositionHits,
 }
 const COUNT_NAMES: &[&str] = &[
+    "overview.stats_disk_entries",
+    "overview.stats_disk_files",
+    "overview.stats_source_files",
+    "overview.stats_progress_dropped",
     "overview.context_cache_hits",
     "overview.stale_results",
     "overview.canceled_requests",
