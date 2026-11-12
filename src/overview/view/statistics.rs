@@ -807,7 +807,7 @@ mod tests {
                                 .filter(|l| l.spans.len() == 13
                                     && l.spans[1..]
                                         .iter()
-                                        .all(|s| matches!(s.content.as_ref(), "██" | "  ")))
+                                        .all(|s| matches!(s.content.as_ref(), "██" | "··")))
                                 .count(),
                             7
                         );
