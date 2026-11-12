@@ -17,6 +17,7 @@ pub mod reading;
 mod theme;
 pub mod tools;
 mod viewport;
+pub(crate) use markdown::{CodeCopy, MarkdownText};
 pub use markdown::{MarkdownCache, MarkdownStats};
 pub use reading::{ReadingAction, ReadingIndex};
 use unicode_segmentation::UnicodeSegmentation;
@@ -468,11 +469,22 @@ impl Rendered {
 pub fn render(source: &str, path: &Path, markdown: bool, width: u16, light: bool) -> Rendered {
     render_shared(Arc::from(source), path, markdown, width, light)
 }
-pub(crate) fn markdown_summary(
-    source: &str,
-    width: u16,
-    light: bool,
-) -> Vec<ratatui::text::Line<'static>> {
+/// Shared right-aligned language/copy label for all Markdown surfaces.
+pub(crate) fn code_header_label(language: &str, width: usize, copied: bool) -> Option<String> {
+    let label = crate::i18n::t(if copied { "ui.copied" } else { "ui.copy" });
+    if label.width() > width {
+        return None;
+    }
+    let language = safe_text(language);
+    Some(
+        if language.is_empty() || language.width() + label.width() + 1 > width {
+            label.into_owned()
+        } else {
+            format!("{language} {label}")
+        },
+    )
+}
+pub(crate) fn markdown_summary(source: &str, width: u16, light: bool) -> MarkdownText {
     markdown::summary(source, usize::from(width), light)
 }
 pub(crate) fn render_shared(

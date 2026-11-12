@@ -153,7 +153,11 @@ pub(super) struct Dashboard {
     pub expand_hits: Vec<(Rect, String)>,
     pub expanded_projects: BTreeSet<String>,
     pub history_query: String,
-    pub history_preview: Option<(String, Vec<Line<'static>>)>,
+    pub code_hits: Vec<(Rect, std::sync::Arc<str>)>,
+    pub copied_code: Option<Instant>,
+    pub summary_copies: Vec<crate::preview::CodeCopy>,
+    pub detail_copies: Vec<crate::preview::CodeCopy>,
+    pub history_preview: Option<(String, crate::preview::MarkdownText)>,
 }
 pub(super) struct TextSelection {
     pub buffer: ratatui::buffer::Buffer,
@@ -203,6 +207,7 @@ pub(super) struct Summary {
     pub key: String,
     pub lines: Vec<Line<'static>>,
     pub links: Vec<String>,
+    pub copies: Vec<crate::preview::CodeCopy>,
 }
 /// Strip numeric location suffixes from the right, preserving the drive colon.
 pub(super) fn local_reference(
@@ -405,6 +410,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
     app.dashboard.detail_hits.clear();
     app.dialog_list = None;
     app.dialog_preview = Rect::default();
+    app.dashboard.code_hits.clear();
     app.list_area = Rect::default();
     app.dashboard.columns = None;
     app.dashboard.summary = Rect::default();
@@ -664,6 +670,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
     }
     if let Some(focus) = app.dashboard.overlay.filter(|_| app.dialog.is_none()) {
         app.dashboard.heatmap_hits.clear();
+        app.dashboard.code_hits.clear();
         // This is a modal view, not another statistics column. Clear the whole
         // body so the original panels cannot peek out beside a centered popup.
         // Clear also resets old glyphs; a styled empty Block alone only paints.
@@ -773,6 +780,24 @@ fn detail_hits(app: &mut Overview, lines: &[Line<'static>], rect: Rect) {
         row.saturating_sub(inner.height as usize)
             .min(u16::MAX as usize) as u16,
     );
+    let copy_width = t("ui.copy").width() as u16;
+    for copy in &app.dashboard.detail_copies {
+        if let Some(row) = starts.get(copy.row).copied()
+            && row >= usize::from(app.detail_scroll)
+            && row - usize::from(app.detail_scroll) < usize::from(inner.height)
+            && inner.width >= copy_width
+        {
+            app.dashboard.code_hits.push((
+                Rect::new(
+                    inner.right() - copy_width,
+                    inner.y + (row - usize::from(app.detail_scroll)) as u16,
+                    copy_width,
+                    1,
+                ),
+                copy.text.clone(),
+            ));
+        }
+    }
     for (i, row) in starts.into_iter().enumerate() {
         if let Some((_, action)) = app.dashboard.detail_actions.iter().find(|(n, _)| *n == i)
             && row >= usize::from(app.detail_scroll)

@@ -2410,7 +2410,11 @@ fn history_dialog_sizes_the_catalogue_to_rows_and_renders_markdown() {
                     list.height <= count.min(8) as u16,
                     "unused catalogue rows must not reserve 35% of the popup"
                 );
-                assert!(app.dialog_preview.y <= list.bottom() + 2);
+                assert_eq!(
+                    app.dialog_preview.y,
+                    list.bottom() + 2,
+                    "one blank row before the conversation heading"
+                );
                 let preview = app.dialog_preview;
                 let text: String = (preview.y..preview.bottom())
                     .map(|y| {
@@ -2458,7 +2462,14 @@ fn history_dialog_scroll_clamps_and_worker_refresh_invalidates_markdown() {
         scroll: 0,
     });
     draw(&mut app, 120, 35);
-    let cache = app.dashboard.history_preview.as_ref().unwrap().1.as_ptr();
+    let cache = app
+        .dashboard
+        .history_preview
+        .as_ref()
+        .unwrap()
+        .1
+        .lines
+        .as_ptr();
     app.key(
         &workers.worker,
         KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
@@ -2466,7 +2477,13 @@ fn history_dialog_scroll_clamps_and_worker_refresh_invalidates_markdown() {
     .unwrap();
     draw(&mut app, 120, 35);
     assert_eq!(
-        app.dashboard.history_preview.as_ref().unwrap().1.as_ptr(),
+        app.dashboard
+            .history_preview
+            .as_ref()
+            .unwrap()
+            .1
+            .lines
+            .as_ptr(),
         cache,
         "scroll reuses parsed Markdown"
     );
@@ -2529,7 +2546,7 @@ fn history_code_blocks_fill_each_row_and_keep_prose_background_clean() {
     let source = include_str!("../../tests/fixtures/history-code-background.md");
     for light in [false, true] {
         for width in [20, 60, 104] {
-            let mut lines = crate::preview::markdown_summary(source, width, light);
+            let mut lines = crate::preview::markdown_summary(source, width, light).lines;
             let blocks: Vec<_> = lines
                 .iter()
                 .enumerate()
@@ -2662,7 +2679,7 @@ fn history_markdown_ansi_refresh_does_not_leave_background_cells_below_text() {
             (source, 0),
             ("进入总览后按 **F9** 测试。", 0),
         ] {
-            let mut lines = crate::preview::markdown_summary(body, width - 2, false);
+            let mut lines = crate::preview::markdown_summary(body, width - 2, false).lines;
             for line in &mut lines {
                 line.spans.insert(0, ratatui::text::Span::raw("▎ "));
             }
@@ -2701,4 +2718,156 @@ fn history_markdown_ansi_refresh_does_not_leave_background_cells_below_text() {
             }
         }
     }
+}
+
+#[test]
+fn history_modal_hides_the_dashboard_and_has_no_blank_header_row() {
+    crate::i18n::with_language(crate::i18n::Language::ZhCn, || {
+        let mut app = overview();
+        app.history = Some(history::History {
+            sessions: vec![history::Conversation {
+                id: "019a5394-62c5-7df0-8f25-123456789abc".into(),
+                prompt: "Session".into(),
+                timestamp: String::new(),
+                file: PathBuf::new(),
+                turns: vec![
+                    history::Turn {
+                        user: true,
+                        text: "Question".into(),
+                    },
+                    history::Turn {
+                        user: false,
+                        text: "```rust\nfn main() {}\n```".into(),
+                    },
+                ],
+            }],
+            ..Default::default()
+        });
+        app.dialog = Some(Dialog::History {
+            path: "a".into(),
+            agent: Agent::Codex,
+            selected: 0,
+            scroll: 0,
+        });
+        let buffer = draw(&mut app, 200, 42);
+        for y in 0..42 {
+            for x in 0..43 {
+                assert_eq!(
+                    buffer[(x, y)].symbol(),
+                    " ",
+                    "dashboard must be hidden while history is open"
+                );
+            }
+        }
+        let list = app.dialog_list.unwrap().0;
+        assert_eq!(list.y, 4, "header has two text rows after the popup border");
+        let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
+        assert!(text.replace(' ', "").contains("用户"));
+        assert!(text.replace(' ', "").contains("rust[复制]"));
+    });
+}
+
+#[test]
+fn project_history_table_shows_headers_and_full_resume_ids() {
+    crate::i18n::with_language(crate::i18n::Language::ZhCn, || {
+        let mut app = overview();
+        let id = "019a5394-62c5-7df0-8f25-123456789abc";
+        app.dashboard.store_context(
+            "a|Codex".into(),
+            history::History {
+                sessions: vec![history::Conversation {
+                    id: id.into(),
+                    prompt: "Feature".into(),
+                    timestamp: String::new(),
+                    file: PathBuf::new(),
+                    turns: vec![],
+                }],
+                ..Default::default()
+            },
+        );
+        for width in [28, 60, 100] {
+            let lines = view::detail_lines(&mut app, width);
+            let text = lines
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert!(text.contains("历史会话"));
+            assert!(text.contains("ID"));
+            assert!(text.contains("名称"));
+            assert!(text.replace(['\n', ' '], "").contains(id));
+        }
+    });
+}
+
+#[test]
+fn markdown_code_copy_actions_follow_visible_rows_and_modal_ownership() {
+    let mut app = overview();
+    let history = history::History {
+        sessions: vec![history::Conversation {
+            id: "copy".into(),
+            prompt: "Copy fixture".into(),
+            timestamp: String::new(),
+            file: PathBuf::new(),
+            turns: vec![history::Turn {
+                user: false,
+                text: "```rust\nfn main() {}\n```".into(),
+            }],
+        }],
+        ..Default::default()
+    };
+    app.dashboard
+        .store_context("a|Codex".into(), history.clone());
+    app.detail_scroll = u16::MAX;
+    draw(&mut app, 160, 45);
+    assert!(
+        !app.dashboard.code_hits.is_empty(),
+        "inline details must retain code actions"
+    );
+    let (rect, text) = app.dashboard.code_hits[0].clone();
+    assert_eq!(text.as_ref(), "fn main() {}\n");
+    assert_eq!(
+        app.code_copy_at((rect.x, rect.y).into()).as_deref(),
+        Some("fn main() {}\n")
+    );
+    app.dialog = Some(Dialog::Input(Input::Root, String::new()));
+    assert!(
+        app.code_copy_at((rect.x, rect.y).into()).is_none(),
+        "other dialogs must block hidden code buttons"
+    );
+    app.history = Some(history);
+    app.dialog = Some(Dialog::History {
+        path: "a".into(),
+        agent: Agent::Codex,
+        selected: 0,
+        scroll: 0,
+    });
+    draw(&mut app, 160, 45);
+    let (rect, _) = app.dashboard.code_hits[0].clone();
+    assert!(app.dialog_preview.contains((rect.x, rect.y).into()));
+    assert_eq!(
+        app.code_copy_at((rect.x, rect.y).into()).as_deref(),
+        Some("fn main() {}\n")
+    );
+    app.history.as_mut().unwrap().sessions[0].turns[0]
+        .text
+        .push_str(&"\nTail\n".repeat(100));
+    app.dashboard.history_preview = None;
+    if let Some(Dialog::History { scroll, .. }) = &mut app.dialog {
+        *scroll = u16::MAX;
+    }
+    draw(&mut app, 160, 45);
+    assert!(
+        app.dashboard.code_hits.is_empty(),
+        "offscreen code headers must not leave clickable targets"
+    );
+    let rendered = crate::preview::markdown_summary("```\nplain\n```", 30, false);
+    assert!(
+        rendered.lines[rendered.copies[0].row]
+            .to_string()
+            .trim()
+            .starts_with('['),
+        "unknown language stays empty"
+    );
+    assert_eq!(rendered.copies[0].text.as_ref(), "plain\n");
 }

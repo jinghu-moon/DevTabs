@@ -51,60 +51,70 @@ pub(super) fn render(source: &str, width: usize, light: bool) -> Output {
 }
 /// Bounded textual overview summary using the same writer. No spatial math,
 /// image decoding or diagram preparation is scheduled for this representation.
-pub(super) fn summary(
-    source: &str,
-    width: usize,
-    light: bool,
-) -> Vec<ratatui::text::Line<'static>> {
+#[derive(Clone, Default)]
+pub(crate) struct MarkdownText {
+    pub lines: Vec<ratatui::text::Line<'static>>,
+    pub copies: Vec<CodeCopy>,
+}
+#[derive(Clone)]
+pub(crate) struct CodeCopy {
+    pub row: usize,
+    pub text: std::sync::Arc<str>,
+}
+pub(super) fn summary(source: &str, width: usize, light: bool) -> MarkdownText {
+    let width = width.max(1);
     let events =
         pulldown_cmark::Parser::new_ext(source, super::reading::options()).into_offset_iter();
-    render_events(
-        source,
-        width.max(1),
-        light,
-        events,
-        &[],
-        true,
-        &Default::default(),
-    )
-    .rows
-    .into_iter()
-    .flat_map(|r| {
-        // Source previews can scroll long code horizontally. Overview summaries
-        // have a fixed width and role rails, so wrap those rows before prefixing
-        // them; Paragraph wrapping afterwards would lose the continuation rail.
-        if r.line.width() <= width.max(1) {
-            return vec![r.line];
+    let rows = render_events(source, width, light, events, &[], true, &Default::default()).rows;
+    let mut output = MarkdownText::default();
+    for mut row in rows {
+        if let (Some(language), Some(copy)) = (&row.source.code_language, &row.source.code_copy)
+            && let Some(label) = super::code_header_label(language, width, false)
+        {
+            row.line.spans.push(ratatui::text::Span::styled(
+                format!(
+                    "{}{label}",
+                    " ".repeat(width - layout::display_width(&label))
+                ),
+                row.line.style,
+            ));
+            output.copies.push(CodeCopy {
+                row: output.lines.len(),
+                text: copy.clone(),
+            });
         }
-        let pieces: Vec<_> = r
-            .line
-            .spans
-            .into_iter()
-            .map(|s| Piece::synthetic(s.content, s.style))
-            .collect();
-        layout::wrap(&pieces, &[], &[], width.max(1), r.source.kind, r.line.style)
-            .into_iter()
-            .map(|r| r.line)
-            .collect()
-    })
-    .map(|mut line| {
-        // File viewports paint row backgrounds themselves. Paragraph consumers
-        // need explicit cells, including blank code headers and wrapped tails.
-        // Keep the background on content spans so caller-added role rails do
-        // not inherit it from the whole Line.
-        if let Some(background) = line.style.bg {
-            let padding = width.max(1).saturating_sub(line.width());
-            if padding > 0 {
-                line.spans.push(ratatui::text::Span::styled(
-                    " ".repeat(padding),
-                    Style::new().bg(background),
-                ));
+        // The same Writer supplies every Markdown surface. Text consumers only
+        // adapt viewport-specific wrapping, explicit background cells and actions.
+        let lines = if row.line.width() <= width {
+            vec![row.line]
+        } else {
+            let pieces: Vec<_> = row
+                .line
+                .spans
+                .into_iter()
+                .map(|s| Piece::synthetic(s.content, s.style))
+                .collect();
+            layout::wrap(&pieces, &[], &[], width, row.source.kind, row.line.style)
+                .into_iter()
+                .map(|r| r.line)
+                .collect()
+        };
+        for mut line in lines {
+            if let Some(background) = line.style.bg {
+                let padding = width.saturating_sub(line.width());
+                if padding > 0 {
+                    line.spans.push(ratatui::text::Span::styled(
+                        " ".repeat(padding),
+                        Style::new().bg(background),
+                    ));
+                }
+                // Caller-added role rails must not inherit the code background.
+                line.style = Style::default();
             }
-            line.style = Style::default();
+            output.lines.push(line);
         }
-        line
-    })
-    .collect()
+    }
+    output
 }
 fn render_events<'a>(
     source: &str,

@@ -10,6 +10,7 @@ use ratatui::{
         Block, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
     },
 };
+use unicode_width::UnicodeWidthStr;
 fn block(title: impl Into<Line<'static>>) -> Block<'static> {
     Block::bordered()
         .title(title)
@@ -78,8 +79,19 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
         viewer.draw_overlay(frame);
         return;
     }
-    super::dashboard::draw(frame, app);
     let area = frame.area();
+    if matches!(app.dialog, Some(Dialog::History { .. })) {
+        app.dashboard.size = area;
+        app.dialog_list = None;
+        app.dialog_preview = Rect::default();
+        app.dashboard.code_hits.clear();
+        app.dashboard.detail_hits.clear();
+        app.dashboard.heatmap_hits.clear();
+        crate::ui::clear_popup(frame, area);
+        frame.render_widget(Block::default().style(style()), area);
+    } else {
+        super::dashboard::draw(frame, app);
+    }
     if let Some(dialog) = &app.dialog {
         match dialog {
             Dialog::Instances { path, selected } => {
@@ -522,8 +534,21 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     .max(1)
                     .min((inner.height / 3).max(1));
                 let sections = UiLayout::vertical([
-                    Constraint::Length(3),
-                    Constraint::Length(list_height),
+                    Constraint::Length(
+                        Paragraph::new(format!(
+                            "{}\n/ {}",
+                            t("history_hint"),
+                            if app.dashboard.history_query.is_empty() {
+                                t("overview.session_search").into_owned()
+                            } else {
+                                app.dashboard.history_query.clone()
+                            }
+                        ))
+                        .wrap(Wrap { trim: false })
+                        .line_count(inner.width)
+                        .min(u16::MAX as usize) as u16,
+                    ),
+                    Constraint::Length(list_height.saturating_add(1)),
                     Constraint::Min(1),
                     Constraint::Length(1),
                 ])
@@ -541,6 +566,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     .wrap(Wrap { trim: false }),
                     sections[0],
                 );
+                // Separate the selected session row from the conversation heading.
+                let list_rect = Rect {
+                    height: sections[1].height.saturating_sub(1),
+                    ..sections[1]
+                };
                 let rows = sessions
                     .iter()
                     .map(|s| {
@@ -565,10 +595,10 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                 frame.render_stateful_widget(
                     List::new(rows)
                         .highlight_style(Style::new().bg(palette().selected).fg(palette().accent)),
-                    sections[1],
+                    list_rect,
                     &mut state,
                 );
-                app.dialog_list = Some((sections[1], state.offset()));
+                app.dialog_list = Some((list_rect, state.offset()));
                 let preview = Rect::new(
                     sections[2].x,
                     sections[2].y.saturating_add(1),
@@ -598,36 +628,62 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                         .as_ref()
                         .is_none_or(|(cached, _)| *cached != key)
                     {
-                        let mut lines = Vec::new();
+                        let mut output = crate::preview::MarkdownText::default();
                         let light = crate::appearance::theme() == crate::appearance::Theme::Light;
                         for turn in &session.turns {
-                            lines.push(role_heading(turn.user));
+                            output.lines.push(role_heading(turn.user));
                             let color = role_color(turn.user);
-                            for mut line in crate::preview::markdown_summary(
+                            let mut rendered = crate::preview::markdown_summary(
                                 &turn.text,
                                 preview.width.saturating_sub(2).max(1),
                                 light,
-                            ) {
+                            );
+                            for copy in &mut rendered.copies {
+                                copy.row += output.lines.len();
+                            }
+                            output.copies.extend(rendered.copies);
+                            for mut line in rendered.lines {
                                 line.spans
                                     .insert(0, Span::styled("▎ ", Style::new().fg(color)));
-                                lines.push(line);
+                                output.lines.push(line);
                             }
-                            lines.push(Line::default());
+                            output.lines.push(Line::default());
                         }
-                        app.dashboard.history_preview = Some((key, lines));
+                        app.dashboard.history_preview = Some((key, output));
                     }
                     app.dashboard.history_preview.as_ref().unwrap().1.clone()
                 } else {
-                    vec![Line::from(t(if app.dashboard.history_pending {
-                        "loading"
-                    } else {
-                        "history_empty"
-                    }))]
+                    crate::preview::MarkdownText {
+                        lines: vec![Line::from(t(if app.dashboard.history_pending {
+                            "loading"
+                        } else {
+                            "history_empty"
+                        }))],
+                        copies: Vec::new(),
+                    }
                 };
-                let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+                let copies = lines.copies;
+                let paragraph = Paragraph::new(lines.lines).wrap(Wrap { trim: false });
                 let count = paragraph.line_count(preview.width).min(u16::MAX as usize) as u16;
                 let visible_scroll = (*scroll).min(count.saturating_sub(preview.height));
                 frame.render_widget(paragraph.scroll((visible_scroll, 0)), preview);
+                let copy_width = t("ui.copy").width() as u16;
+                for copy in copies {
+                    if copy.row >= visible_scroll as usize
+                        && copy.row - (visible_scroll as usize) < preview.height as usize
+                        && preview.width >= copy_width
+                    {
+                        app.dashboard.code_hits.push((
+                            Rect::new(
+                                preview.right() - copy_width,
+                                preview.y + (copy.row - visible_scroll as usize) as u16,
+                                copy_width,
+                                1,
+                            ),
+                            copy.text,
+                        ));
+                    }
+                }
                 if count > preview.height && preview.height > 0 {
                     frame.render_stateful_widget(
                         Scrollbar::new(ScrollbarOrientation::VerticalRight),
@@ -641,14 +697,24 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                 }
                 if let Some(h) = &app.history {
                     frame.render_widget(
-                        Paragraph::new(tf(
-                            "history_status",
-                            &[
-                                ("count", h.sessions.len().to_string()),
-                                ("skipped", h.skipped.to_string()),
-                                ("limited", t(if h.limited { "yes" } else { "no" }).into()),
-                            ],
-                        )),
+                        Paragraph::new(
+                            if app
+                                .dashboard
+                                .copied_code
+                                .is_some_and(|at| at.elapsed() < Duration::from_secs(2))
+                            {
+                                t("ui.copied_code_block").into_owned()
+                            } else {
+                                tf(
+                                    "history_status",
+                                    &[
+                                        ("count", h.sessions.len().to_string()),
+                                        ("skipped", h.skipped.to_string()),
+                                        ("limited", t(if h.limited { "yes" } else { "no" }).into()),
+                                    ],
+                                )
+                            },
+                        ),
                         sections[3],
                     )
                 }
@@ -706,6 +772,7 @@ pub(super) fn opening(options: &Options) -> String {
     )
 }
 pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>> {
+    app.dashboard.detail_copies.clear();
     use super::dashboard::DetailAction;
     app.dashboard.detail_actions.clear();
     if let Some(task) = app.selected_task() {
@@ -950,6 +1017,45 @@ pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>>
             ),
             width,
         ));
+        let width = usize::from(width);
+        let age_width = t("overview.session_updated").width().max(6);
+        let wide = width >= 36 + age_width + 12;
+        let name_width = width
+            .saturating_sub(if wide {
+                36 + age_width + 4
+            } else {
+                age_width + 2
+            })
+            .max(1);
+        let fit = super::dashboard::fit;
+        let header = if wide {
+            format!(
+                "{}  {}  {}",
+                fit(&t("name"), name_width),
+                fit(&t("overview.session_id"), 36),
+                t("overview.session_updated")
+            )
+        } else {
+            format!(
+                "{}  {}",
+                fit(&t("name"), name_width),
+                t("overview.session_updated")
+            )
+        };
+        lines.push(Line::from(Span::styled(
+            fit(&header, width),
+            Style::new().fg(palette().muted).bold(),
+        )));
+        if !wide {
+            lines.push(Line::from(Span::styled(
+                fit(&t("overview.session_id"), width),
+                Style::new().fg(palette().muted).bold(),
+            )));
+        }
+        lines.push(Line::from(Span::styled(
+            "─".repeat(width),
+            Style::new().fg(palette().muted),
+        )));
         for (i, c) in history
             .sessions
             .iter()
@@ -961,25 +1067,59 @@ pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>>
             })
         {
             let current = options.resume_id.as_ref().map_or(i == 0, |id| *id == c.id);
-            app.dashboard
-                .detail_actions
-                .push((lines.len(), DetailAction::Resume(c.id.clone())));
+            let style = if current {
+                Style::new().fg(palette().accent).bold()
+            } else {
+                Style::new().fg(palette().fg)
+            };
             let label = if c.prompt.is_empty() {
                 &c.id
             } else {
                 &c.prompt
             };
-            lines.push(Line::from(Span::styled(
-                super::dashboard::fit(
-                    &format!("{} {}", if current { "▸" } else { " " }, label),
-                    width as usize,
-                ),
-                if current {
-                    Style::new().fg(palette().accent).bold()
-                } else {
-                    Style::new().fg(palette().fg)
-                },
-            )));
+            let age = history
+                .updated
+                .get(&c.id)
+                .copied()
+                .map(history::age_label)
+                .unwrap_or_else(|| "—".into());
+            app.dashboard
+                .detail_actions
+                .push((lines.len(), DetailAction::Resume(c.id.clone())));
+            let row = if wide {
+                format!(
+                    "{}  {}  {}",
+                    fit(
+                        &format!("{} {}", if current { "▸" } else { " " }, label),
+                        name_width
+                    ),
+                    fit(&c.id, 36),
+                    fit(&age, age_width)
+                )
+            } else {
+                format!(
+                    "{}  {}",
+                    fit(
+                        &format!("{} {}", if current { "▸" } else { " " }, label),
+                        name_width
+                    ),
+                    fit(&age, age_width)
+                )
+            };
+            lines.push(Line::from(Span::styled(fit(&row, width), style)));
+            if !wide || c.id.width() > 36 {
+                let id = crate::preview::safe_text(&c.id);
+                let chars = id.chars().collect::<Vec<_>>();
+                for chunk in chars.chunks(width.saturating_sub(2).max(1)) {
+                    app.dashboard
+                        .detail_actions
+                        .push((lines.len(), DetailAction::Resume(c.id.clone())));
+                    lines.push(Line::from(Span::styled(
+                        fit(&format!("  {}", chunk.iter().collect::<String>()), width),
+                        Style::new().fg(palette().muted),
+                    )));
+                }
+            }
         }
         if !app.dashboard.expanded && history.sessions.len() > 4 {
             lines.push(Line::from(Span::styled(
@@ -996,7 +1136,18 @@ pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>>
         format!("{}  [F9]", t("overview.conversation")),
         width,
     ));
+    let offset = lines.len();
     lines.extend(conversation(app, &path, &options, width));
+    app.dashboard.detail_copies = app
+        .dashboard
+        .summary_copies
+        .iter()
+        .cloned()
+        .map(|mut copy| {
+            copy.row += offset;
+            copy
+        })
+        .collect();
     for target in &app.dashboard.summary_links {
         if super::dashboard::local_reference(&path, target).is_some() {
             app.dashboard
@@ -1078,6 +1229,7 @@ fn conversation(
     width: u16,
 ) -> Vec<Line<'static>> {
     app.dashboard.summary_links.clear();
+    app.dashboard.summary_copies.clear();
     if options.agent == Agent::Shell {
         return vec![Line::from(t("history_shell"))];
     }
@@ -1131,6 +1283,7 @@ fn conversation(
     {
         crate::perf::add(crate::perf::Count::OverviewContextHits, 1);
         app.dashboard.summary_links = cached.links.clone();
+        app.dashboard.summary_copies = cached.copies.clone();
         return cached.lines.clone();
     }
     let mut lines = vec![Line::from(Span::styled(
@@ -1193,16 +1346,37 @@ fn conversation(
                 app.dashboard.summary_links.push(dest_url.into_string());
             }
         }
-        let mut rendered =
+        let rendered =
             crate::preview::markdown_summary(&text, width.saturating_sub(2).max(1), light);
+        let copies = rendered.copies;
+        let mut rendered = rendered.lines;
+        let original_length = rendered.len();
+        let mut removed = 0;
         let max = if app.dashboard.expanded { 120 } else { 5 };
         if rendered.len() > max {
             if turn.user {
                 rendered.truncate(max);
                 rendered.push(Line::from("…"));
             } else {
-                rendered = rendered.split_off(rendered.len() - max);
+                removed = rendered.len() - max;
+                rendered = rendered.split_off(removed);
                 rendered.insert(0, Line::from("…"));
+            }
+        }
+        for mut copy in copies {
+            let retained = if original_length > max {
+                if turn.user {
+                    copy.row < max
+                } else {
+                    copy.row >= removed
+                }
+            } else {
+                true
+            };
+            if retained {
+                copy.row =
+                    lines.len() + copy.row - removed + usize::from(!turn.user && removed > 0);
+                app.dashboard.summary_copies.push(copy);
             }
         }
         for mut line in rendered {
@@ -1219,6 +1393,7 @@ fn conversation(
         key: cache_key,
         lines: lines.clone(),
         links: app.dashboard.summary_links.clone(),
+        copies: app.dashboard.summary_copies.clone(),
     });
     lines
 }

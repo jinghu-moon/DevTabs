@@ -2438,8 +2438,31 @@ impl Overview {
             Ok(Outcome::Stay)
         }
     }
+    fn code_copy_at(&self, point: ratatui::layout::Position) -> Option<std::sync::Arc<str>> {
+        if self.dashboard.viewer.is_some()
+            || self
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| !matches!(dialog, Dialog::History { .. }))
+        {
+            return None;
+        }
+        self.dashboard
+            .code_hits
+            .iter()
+            .find(|(rect, _)| rect.contains(point))
+            .map(|(_, text)| text.clone())
+    }
     fn mouse(&mut self, w: &Workers, mouse: crossterm::event::MouseEvent) -> Result<Outcome> {
         self.dirty = true;
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+            && let Some(text) = self.code_copy_at((mouse.column, mouse.row).into())
+        {
+            crate::files::copy(text.to_string())?;
+            self.dashboard.copied_code = Some(Instant::now());
+            self.message = t("ui.copied_code_block").into_owned();
+            return Ok(Outcome::Stay);
+        }
         if let Some(outcome) = self.dashboard_mouse(w, mouse)? {
             return Ok(outcome);
         }

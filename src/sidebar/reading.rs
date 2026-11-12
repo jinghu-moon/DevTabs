@@ -670,16 +670,10 @@ impl Sidebar {
             .reader
             .copied
             .is_some_and(|(r, t)| r == row && t.elapsed() < Duration::from_secs(2));
-        let label = if copied {
-            crate::i18n::t("ui.copied")
-        } else {
-            crate::i18n::t("ui.copy")
-        };
-        let available = content.width.saturating_sub(label.width() as u16 + 1) as usize;
-        let text = if language.width() <= available {
-            format!("{language} {label}")
-        } else {
-            label.into()
+        let Some(text) =
+            crate::preview::code_header_label(language, content.width as usize, copied)
+        else {
+            return;
         };
         if text.width() <= content.width as usize {
             frame.render_widget(
