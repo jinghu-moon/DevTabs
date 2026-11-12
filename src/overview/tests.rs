@@ -2760,7 +2760,10 @@ fn history_modal_hides_the_dashboard_and_has_no_blank_header_row() {
             }
         }
         let list = app.dialog_list.unwrap().0;
-        assert_eq!(list.y, 4, "header has two text rows after the popup border");
+        assert_eq!(
+            list.y, 6,
+            "prompt, search and table header each reserve their actual rows"
+        );
         let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
         assert!(text.replace(' ', "").contains("用户"));
         assert!(text.replace(' ', "").contains("rust[复制]"));
@@ -2870,4 +2873,83 @@ fn markdown_code_copy_actions_follow_visible_rows_and_modal_ownership() {
         "unknown language stays empty"
     );
     assert_eq!(rendered.copies[0].text.as_ref(), "plain\n");
+}
+
+#[test]
+fn history_popup_table_keeps_full_ids_headers_and_mouse_selection_after_scrolling() {
+    let workers = worker::isolated();
+    for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
+        crate::i18n::with_language(language, || {
+            let mut app = overview();
+            app.history = Some(history::History {
+                sessions: (0..20)
+                    .map(|i| history::Conversation {
+                        id: format!("019a5394-62c5-7df0-8f25-{i:012}"),
+                        prompt: format!("Session {i}"),
+                        timestamp: String::new(),
+                        file: PathBuf::new(),
+                        turns: vec![history::Turn {
+                            user: true,
+                            text: format!("Body {i}"),
+                        }],
+                    })
+                    .collect(),
+                ..Default::default()
+            });
+            app.dialog = Some(Dialog::History {
+                path: "a".into(),
+                agent: Agent::Codex,
+                selected: 15,
+                scroll: 0,
+            });
+            for width in [90, 120, 200] {
+                let buffer = draw(&mut app, width, 42);
+                let (rows, offset) = app.dialog_list.unwrap();
+                let row_text = |y| {
+                    (rows.x..rows.right())
+                        .map(|x| buffer[(x, y)].symbol())
+                        .collect::<String>()
+                };
+                let header = row_text(rows.y - 2).replace(' ', "");
+                assert!(header.contains(&t("name").replace(' ', "")));
+                assert!(header.contains(&t("overview.session_id").replace(' ', "")));
+                assert!(header.contains(&t("overview.session_updated").replace(' ', "")));
+                assert!(
+                    row_text(rows.y).contains(&format!("019a5394-62c5-7df0-8f25-{offset:012}"))
+                );
+                app.mouse(
+                    &workers.worker,
+                    mouse_at(MouseEventKind::Down(MouseButton::Left), rows.x + 1, rows.y),
+                )
+                .unwrap();
+                assert!(
+                    matches!(app.dialog, Some(Dialog::History { selected, .. }) if selected == offset)
+                );
+                app.mouse(
+                    &workers.worker,
+                    mouse_at(
+                        MouseEventKind::Down(MouseButton::Left),
+                        rows.x + 1,
+                        rows.y - 2,
+                    ),
+                )
+                .unwrap();
+                assert!(
+                    matches!(app.dialog, Some(Dialog::History { selected, .. }) if selected == offset),
+                    "header is not selectable"
+                );
+            }
+            app.dashboard.history_query = "000000000019".into();
+            if let Some(Dialog::History { selected, .. }) = &mut app.dialog {
+                *selected = 0;
+            }
+            let buffer = draw(&mut app, 120, 42);
+            let rows = app.dialog_list.unwrap().0;
+            let text: String = (rows.x..rows.right())
+                .map(|x| buffer[(x, rows.y)].symbol())
+                .collect();
+            assert!(text.contains("019a5394-62c5-7df0-8f25-000000000019"));
+            assert_eq!(rows.height, 1);
+        });
+    }
 }

@@ -7,7 +7,8 @@ use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
+        Block, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+        TableState, Wrap,
     },
 };
 use unicode_width::UnicodeWidthStr;
@@ -548,7 +549,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                         .line_count(inner.width)
                         .min(u16::MAX as usize) as u16,
                     ),
-                    Constraint::Length(list_height.saturating_add(1)),
+                    Constraint::Length(list_height.saturating_add(3)),
                     Constraint::Min(1),
                     Constraint::Length(1),
                 ])
@@ -566,37 +567,68 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     .wrap(Wrap { trim: false }),
                     sections[0],
                 );
-                // Separate the selected session row from the conversation heading.
-                let list_rect = Rect {
+                // Two header rows (labels + separator), followed by data rows.
+                // Keep the final section row blank before the conversation heading.
+                let table_rect = Rect {
                     height: sections[1].height.saturating_sub(1),
                     ..sections[1]
                 };
+                let age_width = t("overview.session_updated").width().max(7) as u16;
+                let name_width = table_rect.width.saturating_sub(36 + age_width + 4);
+                let header = ratatui::widgets::Row::new([
+                    t("name").into_owned(),
+                    t("overview.session_id").into_owned(),
+                    t("overview.session_updated").into_owned(),
+                ])
+                .style(Style::new().fg(palette().muted).bold())
+                .bottom_margin(1);
                 let rows = sessions
                     .iter()
-                    .map(|s| {
+                    .map(|session| {
                         let updated = app
                             .history
                             .as_ref()
-                            .and_then(|h| h.updated.get(&s.id))
+                            .and_then(|h| h.updated.get(&session.id))
                             .copied()
                             .unwrap_or(0);
-                        ListItem::new(crate::preview::safe_text(&format!(
-                            "{} · {}",
+                        ratatui::widgets::Row::new([
+                            super::dashboard::fit(
+                                &session.prompt.replace('\n', " "),
+                                name_width as usize,
+                            ),
+                            crate::preview::safe_text(&session.id),
                             history::age_label(updated),
-                            if s.prompt.is_empty() {
-                                s.id.clone()
-                            } else {
-                                s.prompt.replace('\n', " ")
-                            }
-                        )))
+                        ])
                     })
                     .collect::<Vec<_>>();
-                let mut state = ListState::default().with_selected(Some(*selected));
+                let mut state = TableState::default().with_selected(Some(*selected));
                 frame.render_stateful_widget(
-                    List::new(rows)
-                        .highlight_style(Style::new().bg(palette().selected).fg(palette().accent)),
-                    list_rect,
+                    Table::new(
+                        rows,
+                        [
+                            Constraint::Length(name_width),
+                            Constraint::Length(36),
+                            Constraint::Length(age_width),
+                        ],
+                    )
+                    .column_spacing(2)
+                    .header(header)
+                    .row_highlight_style(Style::new().bg(palette().selected).fg(palette().accent)),
+                    table_rect,
                     &mut state,
+                );
+                if table_rect.height >= 2 {
+                    frame.render_widget(
+                        Paragraph::new("─".repeat(table_rect.width as usize))
+                            .style(Style::new().fg(palette().muted)),
+                        Rect::new(table_rect.x, table_rect.y + 1, table_rect.width, 1),
+                    );
+                }
+                let list_rect = Rect::new(
+                    table_rect.x,
+                    table_rect.y.saturating_add(2),
+                    table_rect.width,
+                    table_rect.height.saturating_sub(2),
                 );
                 app.dialog_list = Some((list_rect, state.offset()));
                 let preview = Rect::new(
