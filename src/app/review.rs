@@ -6,10 +6,12 @@ use crate::{
 };
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Constraint, Rect},
     style::{Color, Style},
     text::Line,
-    widgets::{Block, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{
+        Block, Cell, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table, Wrap,
+    },
 };
 use std::sync::mpsc;
 #[derive(Default)]
@@ -600,6 +602,35 @@ impl App {
             }
             return false;
         }
+        if self.parallel.review.resources {
+            match event.kind {
+                MouseEventKind::ScrollDown => {
+                    self.parallel.review.scroll = self.parallel.review.scroll.saturating_add(4)
+                }
+                MouseEventKind::ScrollUp => {
+                    self.parallel.review.scroll = self.parallel.review.scroll.saturating_sub(4)
+                }
+                _ => {}
+            }
+            return true;
+        }
+        let g = layout(self, self.size);
+        if !g.body.contains((event.column, event.row).into()) {
+            return true;
+        }
+        if !self.parallel.review.inbox && self.parallel.review.data.diff.is_none() {
+            let key = match event.kind {
+                MouseEventKind::ScrollDown => Some(KeyCode::Down),
+                MouseEventKind::ScrollUp => Some(KeyCode::Up),
+                _ => None,
+            };
+            if let Some(key) = key {
+                for _ in 0..3 {
+                    self.review_key(KeyEvent::new(key, KeyModifiers::NONE));
+                }
+                return true;
+            }
+        }
         match event.kind {
             MouseEventKind::ScrollDown => {
                 self.parallel.review.scroll = self.parallel.review.scroll.saturating_add(4)
@@ -608,24 +639,160 @@ impl App {
                 self.parallel.review.scroll = self.parallel.review.scroll.saturating_sub(4)
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                let row = usize::from(event.row.saturating_sub(6));
-                if self.parallel.review.inbox {
-                    self.parallel.review.file = row.min(count.saturating_sub(1));
-                } else if let Some(r) = self
-                    .parallel
-                    .review
-                    .data
-                    .records
-                    .get(self.parallel.review.round)
-                {
-                    self.parallel.review.file = self.parallel.review.data.offset
-                        + row.min(r.changes.len().saturating_sub(1));
+                let s = &mut self.parallel.review;
+                let row = usize::from(event.row - g.body.y);
+                if s.inbox {
+                    let offset = s.scroll.min(
+                        (count + s.notices.diagnostic.len().min(5))
+                            .saturating_sub(usize::from(g.body.height)),
+                    );
+                    if row + offset < count {
+                        s.file = row + offset;
+                    }
+                } else if s.data.diff.is_none() && row > 0 {
+                    let offset = file_offset(s, usize::from(g.body.height.saturating_sub(1)));
+                    if s.data
+                        .records
+                        .get(s.round)
+                        .is_some_and(|r| row - 1 + offset < r.changes.len())
+                    {
+                        s.file = s.data.offset + offset + row - 1;
+                    }
                 }
             }
             _ => {}
         }
         true
     }
+}
+fn header(app: &App) -> Vec<Line<'static>> {
+    let s = &app.parallel.review;
+    let mut lines = Vec::new();
+    if s.pending.is_some() {
+        lines.push(Line::from(crate::i18n::t("parallel.working").into_owned()));
+    }
+    if !s.error.is_empty() {
+        lines.push(Line::styled(
+            crate::preview::safe_text(&s.error),
+            Style::new().fg(Color::Red),
+        ));
+    }
+    if let Some(c) = &s.check {
+        lines.push(Line::from(format!(
+            "{} · exit {:?} · {} ms · {}",
+            crate::i18n::t("review.check"),
+            c.exit,
+            c.elapsed_ms,
+            crate::i18n::t(if c.stale {
+                "review.stale"
+            } else {
+                "review.bound"
+            })
+        )));
+    }
+    if s.inbox {
+        lines.push(Line::from(format!(
+            "{}: {}",
+            crate::i18n::t("review.notifications"),
+            s.notices.enabled
+        )));
+    } else if let Some(r) = s.data.records.get(s.round) {
+        lines.push(Line::from(format!(
+            "#{} · {:?} · {} {} · {}{}",
+            s.round + 1,
+            r.mode,
+            r.file_count,
+            crate::i18n::t("review.files"),
+            crate::i18n::t(if r.late {
+                "review.late"
+            } else {
+                "review.manual"
+            }),
+            if r.ended.is_none() { " …" } else { "" }
+        )));
+        lines.extend(r.reasons.iter().take(2).map(|reason| {
+            Line::styled(
+                crate::preview::safe_text(reason),
+                Style::new().fg(Color::Yellow),
+            )
+        }));
+    }
+    lines
+}
+struct ReviewLayout {
+    area: Rect,
+    header: Rect,
+    body: Rect,
+    input: Rect,
+    footer: Rect,
+}
+fn layout(app: &App, area: Rect) -> ReviewLayout {
+    let s = &app.parallel.review;
+    let width = area.width.saturating_sub(4).min(120);
+    let text_width = width.saturating_sub(4).max(1);
+    let header_height = Paragraph::new(header(app))
+        .wrap(Wrap { trim: true })
+        .line_count(text_width)
+        .min(6) as u16;
+    let keys = crate::i18n::t(if s.inbox {
+        "review.inbox_keys"
+    } else {
+        "review.keys"
+    });
+    let footer_height = Paragraph::new(keys)
+        .wrap(Wrap { trim: true })
+        .line_count(text_width)
+        .clamp(1, 4) as u16;
+    let input_height = u16::from(s.search || s.editing_scope);
+    let rows = if s.inbox {
+        s.notices.pending.len() + s.notices.diagnostic.len().min(5)
+    } else if let Some(diff) = &s.data.diff {
+        diff.lines().count().min(28)
+    } else {
+        s.data.records.get(s.round).map_or(0, |r| r.changes.len()) + 1
+    };
+    let height = (header_height + footer_height + input_height + rows.clamp(3, 28) as u16 + 3)
+        .min(area.height.saturating_sub(4));
+    let area = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    let inner = area.inner(ratatui::layout::Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+    let header_height = header_height.min(inner.height);
+    let footer_height = footer_height.min(inner.height.saturating_sub(header_height));
+    let input_height = input_height.min(inner.height.saturating_sub(header_height + footer_height));
+    let body_height = inner
+        .height
+        .saturating_sub(header_height + footer_height + input_height + 1);
+    ReviewLayout {
+        area,
+        header: Rect::new(inner.x, inner.y, inner.width, header_height),
+        body: Rect::new(inner.x, inner.y + header_height, inner.width, body_height),
+        input: Rect::new(
+            inner.x,
+            inner.y + header_height + body_height,
+            inner.width,
+            input_height,
+        ),
+        footer: Rect::new(
+            inner.x,
+            inner.bottom().saturating_sub(footer_height),
+            inner.width,
+            footer_height,
+        ),
+    }
+}
+fn file_offset(s: &State, visible: usize) -> usize {
+    let count = s.data.records.get(s.round).map_or(0, |r| r.changes.len());
+    s.file
+        .saturating_sub(s.data.offset)
+        .saturating_sub(visible.saturating_sub(1))
+        .min(count.saturating_sub(visible))
 }
 pub(crate) fn draw(frame: &mut Frame, app: &App) {
     let s = &app.parallel.review;
@@ -635,13 +802,13 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
     }
     let area = frame.area();
     if !s.open {
-        let text = format!(
-            " {} {} ",
-            crate::i18n::t("review.inbox"),
-            s.notices.pending.len()
-        );
         frame.render_widget(
-            Paragraph::new(text).style(Style::default().fg(if s.notices.pending.is_empty() {
+            Paragraph::new(format!(
+                " {} {} ",
+                crate::i18n::t("review.inbox"),
+                s.notices.pending.len()
+            ))
+            .style(Style::new().fg(if s.notices.pending.is_empty() {
                 Color::Gray
             } else {
                 Color::Yellow
@@ -655,11 +822,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         );
         return;
     }
-    let r = area.inner(ratatui::layout::Margin {
-        horizontal: 2,
-        vertical: 2,
-    });
-    crate::ui::clear_popup(frame, r);
+    let g = layout(app, area);
+    let palette = crate::appearance::palette();
+    crate::ui::clear_popup(frame, g.area);
     frame.render_widget(
         Block::bordered()
             .title(crate::i18n::t(if s.inbox {
@@ -667,180 +832,169 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
             } else {
                 "review.title"
             }))
-            .style(crate::appearance::style()),
-        r,
+            .border_style(Style::new().fg(palette.accent))
+            .style(crate::appearance::style().bg(crate::ui::popup_background())),
+        g.area,
     );
-    let inner = crate::ui::content(r);
-    let mut lines = vec![Line::from(
-        crate::i18n::t(if s.inbox {
+    frame.render_widget(
+        Paragraph::new(header(app)).wrap(Wrap { trim: true }),
+        g.header,
+    );
+    frame.render_widget(
+        Paragraph::new(crate::i18n::t(if s.inbox {
             "review.inbox_keys"
         } else {
             "review.keys"
-        })
-        .into_owned(),
-    )];
-    if s.pending.is_some() {
-        lines.push(Line::from(crate::i18n::t("parallel.working").into_owned()));
-    }
-    if !s.error.is_empty() {
-        lines.push(Line::styled(
-            crate::preview::safe_text(&s.error),
-            Style::default().fg(Color::Red),
-        ));
-    }
-    if let Some(c) = &s.check {
-        lines.push(Line::from(format!(
-            "{} · exit {:?} · {} ms · {}",
-            crate::i18n::t("review.check"),
-            c.exit,
-            c.elapsed_ms,
-            if c.stale {
-                crate::i18n::t("review.stale")
-            } else {
-                crate::i18n::t("review.bound")
-            }
-        )));
+        }))
+        .style(Style::new().fg(palette.muted))
+        .wrap(Wrap { trim: true }),
+        g.footer,
+    );
+    if s.search || s.editing_scope {
+        frame.render_widget(
+            Paragraph::new(format!(
+                "{}{}",
+                if s.editing_scope { "scope: " } else { "/" },
+                crate::preview::safe_text(if s.editing_scope { &s.scope } else { &s.query })
+            )),
+            g.input,
+        );
     }
     if s.inbox {
-        lines.push(Line::from(format!(
-            "{}: {}",
-            crate::i18n::t("review.notifications"),
-            s.notices.enabled
-        )));
-        for (i, (t, a)) in s.notices.pending.iter().enumerate() {
-            let name = app
-                .parallel
-                .tasks
-                .iter()
-                .find(|x| x.id == t.task)
-                .map_or(t.task.as_str(), |t| t.name.as_str());
-            lines.push(Line::styled(
-                format!(
-                    "{} {} · {} · #{}",
-                    if i + s.data.offset == s.file {
-                        "▸"
+        let mut lines: Vec<_> = s
+            .notices
+            .pending
+            .iter()
+            .enumerate()
+            .map(|(i, (t, a))| {
+                let name = app
+                    .parallel
+                    .tasks
+                    .iter()
+                    .find(|x| x.id == t.task)
+                    .map_or(t.task.as_str(), |t| t.name.as_str());
+                Line::styled(
+                    format!(
+                        "{} {} · {} · #{}",
+                        if i == s.file { "▸" } else { " " },
+                        crate::preview::safe_text(name),
+                        crate::i18n::t(a.phase.label()),
+                        a.result
+                    ),
+                    Style::new().fg(if a.phase == crate::activity::Phase::Failed {
+                        Color::Red
                     } else {
-                        " "
-                    },
-                    name,
-                    crate::i18n::t(a.phase.label()),
-                    a.result
-                ),
-                Style::default().fg(if a.phase == crate::activity::Phase::Failed {
-                    Color::Red
-                } else {
-                    Color::Yellow
-                }),
-            ));
-        }
+                        Color::Yellow
+                    }),
+                )
+            })
+            .collect();
         lines.extend(
             s.notices
                 .diagnostic
                 .iter()
                 .rev()
                 .take(5)
-                .map(|s| Line::from(crate::preview::safe_text(s))),
+                .map(|v| Line::from(crate::preview::safe_text(v))),
         );
-    } else if let Some(record) = s
-        .data
-        .records
-        .get(s.round.min(s.data.records.len().saturating_sub(1)))
-    {
-        lines.push(Line::from(format!(
-            "{} · {:?} · {} {} · {}{}",
-            s.round + 1,
-            record.mode,
-            record.file_count,
-            crate::i18n::t("review.files"),
-            if record.late {
-                crate::i18n::t("review.late")
-            } else {
-                crate::i18n::t("review.manual")
-            },
-            if record.ended.is_none() { " …" } else { "" }
-        )));
-        for reason in record.reasons.iter().take(2) {
-            lines.push(Line::styled(
-                crate::preview::safe_text(reason),
-                Style::default().fg(Color::Yellow),
-            ));
-        }
-        if let Some(diff) = &s.data.diff {
-            let start = lines.len() as u16;
-            frame.render_widget(Paragraph::new(lines), inner);
-            let viewport = Rect::new(
-                inner.x,
-                inner.y + start,
-                inner.width,
-                inner.height.saturating_sub(start),
-            );
-            let total = diff.lines().count();
-            let offset = s.scroll.min(total.saturating_sub(1));
-            let visible = diff
-                .lines()
-                .skip(offset)
-                .take(usize::from(viewport.height))
-                .map(|l| {
-                    Line::styled(
-                        crate::preview::safe_text(l),
-                        Style::default().fg(if l.starts_with('+') {
-                            Color::Green
-                        } else if l.starts_with('-') {
-                            Color::Red
-                        } else if l.starts_with("@@") {
-                            Color::Cyan
-                        } else {
-                            crate::appearance::palette().fg
-                        }),
-                    )
-                })
-                .collect::<Vec<_>>();
-            frame.render_widget(Paragraph::new(visible), viewport);
+        let offset = s
+            .scroll
+            .min(lines.len().saturating_sub(usize::from(g.body.height)));
+        frame.render_widget(
+            Paragraph::new(lines).scroll((offset.min(u16::MAX as usize) as u16, 0)),
+            g.body,
+        );
+    } else if let Some(diff) = &s.data.diff {
+        let total = diff.lines().count();
+        let offset = s
+            .scroll
+            .min(total.saturating_sub(usize::from(g.body.height)));
+        let visible: Vec<_> = diff
+            .lines()
+            .skip(offset)
+            .take(usize::from(g.body.height))
+            .map(|l| {
+                Line::styled(
+                    crate::preview::safe_text(l),
+                    Style::new().fg(if l.starts_with('+') {
+                        Color::Green
+                    } else if l.starts_with('-') {
+                        Color::Red
+                    } else if l.starts_with("@@") {
+                        Color::Cyan
+                    } else {
+                        palette.fg
+                    }),
+                )
+            })
+            .collect();
+        frame.render_widget(Paragraph::new(visible), g.body);
+        if total > usize::from(g.body.height) && g.body.height > 0 {
             frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight),
-                viewport,
-                &mut ScrollbarState::new(total).position(offset),
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(None)
+                    .end_symbol(None),
+                Rect::new(g.body.right(), g.body.y, 1, g.body.height),
+                &mut ScrollbarState::new(total.saturating_sub(usize::from(g.body.height)) + 1)
+                    .position(offset),
             );
-            return;
         }
-        for (i, c) in record
+    } else if let Some(record) = s.data.records.get(s.round) {
+        let visible = usize::from(g.body.height.saturating_sub(1));
+        let offset = file_offset(s, visible);
+        let rows = record
             .changes
             .iter()
             .enumerate()
-            .skip(s.file.saturating_sub(s.data.offset).saturating_sub(3))
-            .take(inner.height as usize)
-        {
-            let (symbol, color) = if c.reason.is_some() {
-                ("?", Color::Yellow)
-            } else if c.before.is_none() {
-                ("+", Color::Green)
-            } else if c.after.is_none() {
-                ("-", Color::Red)
-            } else {
-                ("M", Color::Cyan)
-            };
-            lines.push(Line::styled(
-                format!(
-                    "{} {symbol} {}",
-                    if i + s.data.offset == s.file {
+            .skip(offset)
+            .take(visible)
+            .map(|(i, c)| {
+                let (label, color) = if c.reason.is_some() {
+                    ("unavailable", Color::Yellow)
+                } else if c.before.is_none() {
+                    ("added", Color::Green)
+                } else if c.after.is_none() {
+                    ("deleted", Color::Red)
+                } else {
+                    ("modified", Color::Cyan)
+                };
+                Row::new([
+                    Cell::from(if i + s.data.offset == s.file {
                         "▸"
                     } else {
                         " "
-                    },
-                    crate::preview::safe_text(&c.path.display().to_string())
-                ),
-                Style::default().fg(color),
-            ));
-        }
+                    }),
+                    Cell::from(crate::preview::safe_text(&c.path.display().to_string())),
+                    Cell::from(crate::i18n::t(&format!("files_panel.{label}")).into_owned())
+                        .style(Style::new().fg(color)),
+                ])
+                .style(if i + s.data.offset == s.file {
+                    Style::new().bg(palette.selected)
+                } else {
+                    Style::default()
+                })
+            });
+        frame.render_widget(
+            Table::new(
+                rows,
+                [
+                    Constraint::Length(1),
+                    Constraint::Min(1),
+                    Constraint::Length(12),
+                ],
+            )
+            .column_spacing(1)
+            .header(
+                Row::new([
+                    "".into(),
+                    crate::i18n::t("files_panel.file").into_owned(),
+                    crate::i18n::t("files_panel.status").into_owned(),
+                ])
+                .style(Style::new().fg(palette.muted)),
+            ),
+            g.body,
+        );
     }
-    if s.search || s.editing_scope {
-        lines.push(Line::from(format!(
-            "{}{}",
-            if s.editing_scope { "scope: " } else { "/" },
-            if s.editing_scope { &s.scope } else { &s.query }
-        )));
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
 }
 fn draw_resources(frame: &mut Frame, app: &App) {
     let s = &app.parallel.review;
@@ -926,4 +1080,126 @@ fn draw_resources(frame: &mut Frame, app: &App) {
         Paragraph::new(lines).scroll((s.scroll.min(u16::MAX as usize) as u16, 0)),
         inner,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn app() -> App {
+        let mut app = super::super::terminals::tests::app();
+        app.parallel.review.open = true;
+        app.parallel.review.data.records = vec![serde_json::from_value(serde_json::json!({
+            "logical_round":"turn", "order":1,"file_count":2,"id":"round","task":"task","run":"run",
+            "mode":"Git","result":1,"started":0,"ended":1,"revision":1,"read":false,"late":true,
+            "reasons":[],"changes":[
+                {"path":"docs/test1.md","before":null,"after":"hash","reason":null},
+                {"path":"docs/test2.md","before":null,"after":"hash","reason":null}
+            ],"root":"D:/project","head":null,"baseline":{}
+        })).unwrap()];
+        app
+    }
+    #[test]
+    fn file_review_is_compact_and_header_clicks_do_not_select_files() {
+        let mut app = app();
+        app.size = Rect::new(0, 0, 200, 70);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 70)).unwrap();
+        terminal.draw(|f| draw(f, &app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        let rows: Vec<_> = (0..70)
+            .filter(|y| (0..200).any(|x| buffer[(x, *y)].symbol() != " "))
+            .collect();
+        assert!(rows.len() < 20, "two files must not fill the terminal");
+        assert!(rows[0] > 10, "short review should be vertically centered");
+        app.parallel.review.file = 1;
+        app.review_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 1,
+            row: 1,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            app.parallel.review.file, 1,
+            "outside clicks cannot select a file"
+        );
+        let file_row = (0..70)
+            .find(|y| {
+                (0..200)
+                    .map(|x| buffer[(x, *y)].symbol())
+                    .collect::<String>()
+                    .contains("docs/test1.md")
+            })
+            .unwrap();
+        app.review_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 70,
+            row: file_row,
+            modifiers: KeyModifiers::NONE,
+        });
+        assert_eq!(
+            app.parallel.review.file, 0,
+            "file clicks use the actual table position"
+        );
+    }
+    #[test]
+    fn review_geometry_contains_diff_footer_and_scrollbar_after_resize_in_both_languages() {
+        for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
+            crate::i18n::with_language(language, || {
+                let mut app = app();
+                app.parallel.review.data.diff =
+                    Some((0..100).map(|n| format!("+line {n}\n")).collect());
+                app.parallel.review.scroll = 1000;
+                for (w, h) in [(40, 10), (80, 24), (120, 40), (200, 70)] {
+                    app.size = Rect::new(0, 0, w, h);
+                    let g = layout(&app, app.size);
+                    assert!(g.area.intersection(app.size) == g.area);
+                    assert!(g.header.intersection(g.body).is_empty());
+                    assert!(g.footer.intersection(g.body).is_empty());
+                    let mut terminal =
+                        ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+                    terminal.draw(|f| draw(f, &app)).unwrap();
+                    let buffer = terminal.backend().buffer();
+                    assert_eq!(buffer[(g.area.x, g.area.bottom() - 1)].symbol(), "└");
+                    for y in g.area.y + 1..g.area.bottom() - 1 {
+                        assert_eq!(buffer[(g.area.x, y)].symbol(), "│");
+                        assert_eq!(buffer[(g.area.right() - 1, y)].symbol(), "│");
+                    }
+                    if g.body.height > 0 {
+                        let last = (g.body.x..g.body.right())
+                            .map(|x| buffer[(x, g.body.bottom() - 1)].symbol())
+                            .collect::<String>();
+                        assert!(last.contains("line 99"));
+                    }
+                }
+            });
+        }
+    }
+    #[test]
+    fn review_hides_the_agent_cursor_and_file_wheel_keeps_selection_visible() {
+        let mut app = app();
+        app.size = Rect::new(0, 0, 120, 40);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+        assert!(!terminal.backend().cursor_visible());
+        let g = layout(&app, app.size);
+        assert!(app.review_mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: g.body.x,
+            row: g.body.y + 1,
+            modifiers: KeyModifiers::NONE
+        }));
+        assert_eq!(app.parallel.review.file, 1);
+        assert!(app.parallel.review.pending.is_none());
+        assert!(app.review_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: g.body.x,
+            row: g.body.y,
+            modifiers: KeyModifiers::NONE
+        }));
+        assert_eq!(
+            app.parallel.review.file, 1,
+            "table header does not select a file"
+        );
+    }
 }

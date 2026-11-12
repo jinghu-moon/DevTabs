@@ -130,6 +130,25 @@ fn confirm(frame: &mut Frame, app: &App) {
     }
 }
 
+pub(crate) fn terminal_border_style(app: &App, index: usize) -> Style {
+    let focused = app.terminal_focused(index);
+    let activity = &app.sessions[index].info.activity;
+    Style::new().fg(
+        if !focused
+            && activity.pending()
+            && activity
+                .ended
+                .is_some_and(|at| crate::config::now().saturating_sub(at) < 3)
+        {
+            Color::Yellow
+        } else if focused {
+            crate::appearance::palette().accent
+        } else {
+            crate::appearance::palette().muted
+        },
+    )
+}
+
 fn terminal(frame: &mut Frame, app: &App, index: usize, rect: Rect) {
     let state = app.sessions[index].state();
     let info = &app.sessions[index].info;
@@ -173,23 +192,7 @@ fn terminal(frame: &mut Frame, app: &App, index: usize, rect: Rect) {
         } else {
             Style::default()
         })
-        .border_style(
-            Style::new().fg(
-                if !focused
-                    && info.activity.pending()
-                    && info
-                        .activity
-                        .ended
-                        .is_some_and(|at| crate::config::now().saturating_sub(at) < 3)
-                {
-                    Color::Yellow
-                } else if focused {
-                    crate::appearance::palette().accent
-                } else {
-                    crate::appearance::palette().muted
-                },
-            ),
-        );
+        .border_style(terminal_border_style(app, index));
     let block = if let Some(task) = app
         .parallel
         .tasks
@@ -249,6 +252,7 @@ fn terminal(frame: &mut Frame, app: &App, index: usize, rect: Rect) {
     } else if focused
         && !snapshot.hide_cursor()
         && app.mode == Mode::Normal
+        && !app.parallel.review.open
         && !app.terminal_menu_open()
         && !app.popup_window.editing()
         && app.sidebar.as_ref().is_none_or(|s| !s.modal())
@@ -266,7 +270,7 @@ fn terminal(frame: &mut Frame, app: &App, index: usize, rect: Rect) {
     }
 }
 
-fn popup_background() -> Color {
+pub(crate) fn popup_background() -> Color {
     if crate::appearance::theme() == crate::appearance::Theme::Light {
         Color::Rgb(230, 236, 245)
     } else {

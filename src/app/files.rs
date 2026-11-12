@@ -530,11 +530,11 @@ fn table_body(area: Rect, side: usize) -> Rect {
         area.x + if side == 0 { 1 } else { half + 1 },
         area.y + 2,
         if side == 0 {
-            half.saturating_sub(2)
+            half.saturating_sub(3)
         } else {
-            area.width.saturating_sub(half + 2)
+            area.width.saturating_sub(half + 3)
         },
-        area.height.saturating_sub(3),
+        area.height.saturating_sub(4),
     )
 }
 fn status(change: Option<&crate::rounds::Change>, observe: bool) -> (&'static str, Color) {
@@ -553,11 +553,12 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     let _perf = crate::perf::span(crate::perf::Metric::FilePanelDraw);
     let palette = crate::appearance::palette();
     for (i, area) in app.file_panels() {
+        let border_style = crate::ui::terminal_border_style(app, i);
         let k = key(&app.sessions[i].info);
         let e = app.parallel.files.entries.entry(k).or_default();
         frame.render_widget(
             if area.height > 1 {
-                Block::bordered().border_style(Style::new().fg(palette.muted))
+                Block::bordered().border_style(border_style)
             } else {
                 Block::default()
             }
@@ -566,15 +567,22 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         );
         if area.height == 1 {
             frame.render_widget(
-                Paragraph::new("─".repeat(usize::from(area.width)))
-                    .style(Style::new().fg(palette.muted)),
+                Paragraph::new("─".repeat(usize::from(area.width))).style(border_style),
                 area,
             );
         }
         if area.height > 1 {
             for y in area.y + 1..area.bottom() - 1 {
                 frame.render_widget(
-                    Paragraph::new("│").style(Style::new().fg(palette.muted)),
+                    Paragraph::new("│").style(border_style),
+                    Rect::new(area.x + area.width / 2, y, 1, 1),
+                );
+            }
+        }
+        if area.height > 1 {
+            for (y, symbol) in [(area.y, "┬"), (area.bottom() - 1, "┴")] {
+                frame.render_widget(
+                    Paragraph::new(symbol).style(border_style),
                     Rect::new(area.x + area.width / 2, y, 1, 1),
                 );
             }
@@ -762,12 +770,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 crate::i18n::t(label).into_owned()
             }))
             .style(Style::new().fg(palette.muted)),
-            Rect::new(
-                area.x + 1,
-                area.bottom() - 1,
-                area.width.saturating_sub(2),
-                1,
-            ),
+            Rect::new(area.x + 1, area.bottom() - 2, half.saturating_sub(2), 1),
         );
     }
 }
@@ -972,6 +975,42 @@ mod tests {
                     let body = table_body(area, side);
                     assert!(body.x > area.x && body.right() < area.right());
                     assert!(body.y > area.y && body.bottom() < area.bottom());
+                }
+                for x in area.x + 1..area.right() - 1 {
+                    assert_eq!(
+                        buffer[(x, area.bottom() - 1)].symbol(),
+                        if x == area.x + area.width / 2 {
+                            "┴"
+                        } else {
+                            "─"
+                        }
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn file_panel_border_colors_follow_the_agent_focus_and_attention_state() {
+        let mut app = app();
+        for focus in [0, 1, 0, 1] {
+            for session in &mut app.sessions {
+                session.info.activity.phase = Phase::Input;
+                session.info.activity.ended = Some(crate::config::now());
+            }
+            app.focus = focus;
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 50)).unwrap();
+            terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+            for (i, area) in app.file_panels() {
+                let terminal_area = app.rects().into_iter().find(|(n, _)| *n == i).unwrap().1;
+                let color = terminal.backend().buffer()[(terminal_area.x, terminal_area.y + 1)].fg;
+                for (x, y) in [
+                    (area.x, area.y + 1),
+                    (area.right() - 1, area.y + 1),
+                    (area.x + 2, area.bottom() - 1),
+                    (area.x + area.width / 2, area.y + 1),
+                ] {
+                    assert_eq!(terminal.backend().buffer()[(x, y)].fg, color);
                 }
             }
         }
