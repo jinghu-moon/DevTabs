@@ -296,6 +296,33 @@ fn corrupt_journal_is_reported_and_never_silently_replaced() {
         "broken"
     );
 }
+
+#[test]
+fn journal_without_task_ids_remains_readable_without_inventing_task_ownership() {
+    let f = Fixture::new();
+    let mut journal = devtabs::recovery::Journal::default();
+    let spec = LaunchSpec::from_project(&f.0, Some(Agent::Shell), Project::default());
+    journal.register("old-workspace", &spec.options());
+    let mut value = serde_json::to_value(&journal).unwrap();
+    value["entries"]["old-workspace"]
+        .as_object_mut()
+        .unwrap()
+        .remove("task_ids");
+    let bytes = serde_json::to_vec(&value).unwrap();
+    fs::write(f.0.join("launches.json"), &bytes).unwrap();
+    let loaded = devtabs::recovery::Journal::load_at(&f.0).unwrap();
+    let record = &loaded.entries["old-workspace"];
+    assert!(record.task_ids.is_empty());
+    assert_eq!(record.options.project, f.0);
+    assert_eq!(record.opened, journal.entries["old-workspace"].opened);
+    assert_eq!(
+        fs::read(f.0.join("launches.json")).unwrap(),
+        bytes,
+        "reading must not rewrite old records"
+    );
+    value["entries"]["old-workspace"]["task_ids"] = serde_json::json!("invalid");
+    assert!(serde_json::from_value::<devtabs::recovery::Journal>(value).is_err());
+}
 #[test]
 fn project_profile_overrides_launch_fields_but_keeps_private_metadata() {
     let f = Fixture::new();

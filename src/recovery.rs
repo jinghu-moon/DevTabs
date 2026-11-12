@@ -12,6 +12,9 @@ pub struct Record {
     pub id: String,
     pub opened: u64,
     pub options: Options,
+    // Older records have no authoritative task identities. Reading them must
+    // not fail the whole journal or infer identities from paths/branches.
+    #[serde(default)]
     pub task_ids: Vec<String>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]

@@ -2198,3 +2198,120 @@ fn details_overlay_clears_calendar_hits_underneath_it() {
     draw(&mut app, 200, 40);
     assert!(app.dashboard.heatmap_hits.is_empty());
 }
+
+#[test]
+fn statistics_modal_covers_background_and_restores_it_after_mouse_close() {
+    use dashboard::{Focus, HeatmapAction};
+    let t = worker::isolated();
+    for width in [120, 200, 260] {
+        for action in [HeatmapAction::Period(true), HeatmapAction::Expand] {
+            let mut app = overview();
+            app.show_stats = true;
+            app.show_detail = false;
+            let path = app.path().unwrap();
+            let today = config::now() / 86400;
+            app.stats.insert(
+                config::key(&path),
+                stats::Stats {
+                    source_ready: true,
+                    disk_ready: true,
+                    weeks: vec![0; 12],
+                    days: vec![0; 84],
+                    calendar: Some(stats::Calendar {
+                        first_day: today - (today + 3) % 7 - 364,
+                        today,
+                        days: vec![0; 371],
+                    }),
+                    hotspots: vec![stats::Hotspot {
+                        path: "unique-hotspot.rs".into(),
+                        commits: 7531,
+                        added: 98765,
+                        removed: 4321,
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+            );
+            let original = draw(&mut app, width, 42);
+            let (button, _) = app
+                .dashboard
+                .heatmap_hits
+                .iter()
+                .find(|(_, hit)| *hit == action)
+                .copied()
+                .unwrap();
+            app.dashboard_mouse(
+                &t.worker,
+                mouse_at(MouseEventKind::Down(MouseButton::Left), button.x, button.y),
+            )
+            .unwrap();
+            assert_eq!(app.dashboard.overlay, Some(Focus::Stats));
+            let modal = draw(&mut app, width, 42);
+            let rect = app.detail_areas[0];
+            // A wide terminal used to leave another copy of the statistics
+            // visible on both sides of the centered popup, including numbers.
+            for y in 2..40 {
+                for x in 0..width {
+                    if !rect.contains((x, y).into()) {
+                        assert_eq!(
+                            modal[(x, y)].symbol(),
+                            " ",
+                            "background leak at {width} {x},{y}"
+                        );
+                    }
+                }
+            }
+            let text = (rect.y..rect.bottom())
+                .map(|y| {
+                    (rect.x..rect.right())
+                        .map(|x| modal[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(text.matches("7531").count(), 1);
+            let expected = if action == HeatmapAction::Period(true) {
+                371
+            } else {
+                84
+            };
+            assert_eq!(
+                app.dashboard
+                    .heatmap_hits
+                    .iter()
+                    .filter(|(_, hit)| matches!(hit, HeatmapAction::Day { .. }))
+                    .count(),
+                expected
+            );
+            // Click the popup's expand button again to close, independent of
+            // the underlying sidebar's old screen coordinates.
+            let (close, _) = app
+                .dashboard
+                .heatmap_hits
+                .iter()
+                .find(|(_, hit)| *hit == HeatmapAction::Expand)
+                .copied()
+                .unwrap();
+            app.dashboard_mouse(
+                &t.worker,
+                mouse_at(MouseEventKind::Down(MouseButton::Left), close.x, close.y),
+            )
+            .unwrap();
+            assert!(app.dashboard.overlay.is_none());
+            app.dashboard.stats_year = false;
+            app.dashboard.focus = Focus::Projects;
+            let restored = draw(&mut app, width, 42);
+            // Compare the body after restoration; transient focus and footer
+            // messages do not change the returned layout or statistics.
+            for y in 2..40 {
+                for x in 0..width {
+                    assert_eq!(
+                        original[(x, y)],
+                        restored[(x, y)],
+                        "restore {width} {x},{y}"
+                    );
+                }
+            }
+        }
+    }
+}

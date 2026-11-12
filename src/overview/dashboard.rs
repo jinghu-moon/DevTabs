@@ -660,6 +660,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
     }
     if let Some(focus) = app.dashboard.overlay.filter(|_| app.dialog.is_none()) {
         app.dashboard.heatmap_hits.clear();
+        // This is a modal view, not another statistics column. Clear the whole
+        // body so the original panels cannot peek out beside a centered popup.
+        // Clear also resets old glyphs; a styled empty Block alone only paints.
+        crate::ui::clear_popup(frame, body);
+        frame.render_widget(Block::default().style(style()), body);
         let r = super::view::popup(
             frame,
             if focus == Focus::Stats {
@@ -674,7 +679,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             app.dashboard.detail_hits.clear();
             app.dashboard.stats_max = panel(
                 frame,
-                t("statistics").into_owned(),
+                format!("{} · Esc", t("statistics")),
                 super::view::stats_lines(app, r.width.saturating_sub(4)),
                 r,
                 &mut app.dashboard.stats_scroll,
