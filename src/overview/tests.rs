@@ -2041,3 +2041,160 @@ fn returning_to_overview_reveals_origin_hidden_by_filter_and_collapsed_group() {
     app.rebuild();
     assert_eq!(app.path().as_deref(), Some(std::path::Path::new("a")));
 }
+
+#[test]
+fn contribution_calendar_switches_period_and_hits_only_visible_cells_after_scroll_and_resize() {
+    use dashboard::{Focus, HeatmapAction};
+    let t = worker::isolated();
+    let mut app = overview();
+    let path = app.path().unwrap();
+    let today = crate::config::now() / 86400;
+    let first_day = today - (today + 3) % 7 - 364;
+    app.stats.insert(
+        config::key(&path),
+        stats::Stats {
+            source_ready: true,
+            disk_ready: true,
+            weeks: vec![0; 12],
+            days: vec![0; 84],
+            calendar: Some(stats::Calendar {
+                first_day,
+                today,
+                days: vec![0; 371],
+            }),
+            ..Default::default()
+        },
+    );
+    app.dashboard.focus = Focus::Stats;
+    app.dashboard_key(
+        &t.worker,
+        KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert!(app.dashboard.stats_year);
+    assert_eq!(app.dashboard.overlay, Some(Focus::Stats));
+    draw(&mut app, 200, 48);
+    assert_eq!(
+        app.dashboard
+            .heatmap_hits
+            .iter()
+            .filter(|(_, action)| matches!(action, HeatmapAction::Day { .. }))
+            .count(),
+        371
+    );
+    let (rect, action) = app
+        .dashboard
+        .heatmap_hits
+        .iter()
+        .find(|(_, action)| {
+            matches!(
+                action,
+                HeatmapAction::Day {
+                    commits: Some(_),
+                    ..
+                }
+            )
+        })
+        .copied()
+        .unwrap();
+    app.dashboard_mouse(&t.worker, mouse_at(MouseEventKind::Moved, rect.x, rect.y))
+        .unwrap();
+    assert!(
+        app.dashboard
+            .heatmap_hover
+            .as_ref()
+            .unwrap()
+            .1
+            .contains("UTC")
+    );
+    assert!(matches!(action, HeatmapAction::Day { .. }));
+    app.dashboard_mouse(
+        &t.worker,
+        mouse_at(MouseEventKind::Down(MouseButton::Left), rect.x, rect.y),
+    )
+    .unwrap();
+    assert!(app.message.contains("UTC"));
+    assert!(app.dashboard.heatmap_hover.is_none());
+    let (toggle, _) = app
+        .dashboard
+        .heatmap_hits
+        .iter()
+        .find(|(_, action)| *action == HeatmapAction::Period(false))
+        .copied()
+        .unwrap();
+    app.dashboard_mouse(
+        &t.worker,
+        mouse_at(MouseEventKind::Down(MouseButton::Left), toggle.x, toggle.y),
+    )
+    .unwrap();
+    assert!(!app.dashboard.stats_year);
+    draw(&mut app, 200, 28);
+    assert_eq!(
+        app.dashboard
+            .heatmap_hits
+            .iter()
+            .filter(|(_, action)| matches!(action, HeatmapAction::Day { .. }))
+            .count(),
+        84
+    );
+    app.dashboard.stats_scroll = 6;
+    draw(&mut app, 200, 20);
+    let scroll = app.dashboard.stats_scroll;
+    assert!(scroll > 0);
+    assert!(
+        !app.dashboard
+            .heatmap_hits
+            .iter()
+            .any(|(_, action)| matches!(action, HeatmapAction::Period(_)))
+    );
+    let inner = app.detail_areas[0].inner(ratatui::layout::Margin::new(2, 1));
+    assert!(
+        app.dashboard
+            .heatmap_hits
+            .iter()
+            .all(|(rect, _)| inner.contains(rect.as_position())
+                && rect.right() <= inner.right()
+                && rect.bottom() <= inner.bottom())
+    );
+    // Restore width after a narrow redraw; hidden/offscreen hits are rebuilt.
+    draw(&mut app, 70, 20);
+    assert!(
+        app.dashboard
+            .heatmap_hits
+            .iter()
+            .all(|(rect, _)| rect.right() <= 70)
+    );
+    app.dashboard_key(&t.worker, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(app.dashboard.overlay.is_none());
+    app.dashboard.focus = Focus::Stats;
+    app.dashboard_key(
+        &t.worker,
+        KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert_eq!(app.dashboard.overlay, Some(Focus::Stats));
+    assert_eq!(app.dashboard.stats_scroll, 0);
+}
+
+#[test]
+fn details_overlay_clears_calendar_hits_underneath_it() {
+    let mut app = overview();
+    let path = app.path().unwrap();
+    app.stats.insert(
+        config::key(&path),
+        stats::Stats {
+            source_ready: true,
+            disk_ready: true,
+            weeks: vec![0; 12],
+            days: vec![0; 84],
+            ..Default::default()
+        },
+    );
+    app.show_stats = true;
+    draw(&mut app, 200, 40);
+    assert!(!app.dashboard.heatmap_hits.is_empty());
+    app.dashboard.overlay = Some(dashboard::Focus::Detail);
+    draw(&mut app, 200, 40);
+    assert!(app.dashboard.heatmap_hits.is_empty());
+}

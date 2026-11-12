@@ -1193,9 +1193,23 @@ pub(super) fn stats_lines(app: &Overview, width: u16) -> Vec<Line<'static>> {
         .get(&key)
         .or_else(|| app.dashboard.sources.get(&key))
     {
-        Some(stats) => statistics::lines(stats, width as usize),
+        Some(stats) => statistics::lines_for(stats, width as usize, app.dashboard.stats_year),
         None => vec![Line::from(t("loading"))],
     }
+}
+pub(super) fn stats_chart_hits(
+    app: &Overview,
+    width: u16,
+) -> Vec<(usize, usize, usize, dashboard::HeatmapAction)> {
+    let Some(path) = app.active_path() else {
+        return Vec::new();
+    };
+    let key = config::key(&path);
+    app.stats
+        .get(&key)
+        .or_else(|| app.dashboard.sources.get(&key))
+        .map(|s| statistics::chart_hits(s, width as usize, app.dashboard.stats_year))
+        .unwrap_or_default()
 }
 pub(super) fn stable_color(key: &str) -> ratatui::style::Color {
     use ratatui::style::Color;

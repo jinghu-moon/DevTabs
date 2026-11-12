@@ -19,6 +19,32 @@ pub(super) enum Focus {
     Stats,
     Queue,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum HeatmapAction {
+    Period(bool),
+    Expand,
+    Day { day: u64, commits: Option<u32> },
+}
+impl HeatmapAction {
+    fn description(self) -> Option<String> {
+        let Self::Day { day, commits } = self else {
+            return None;
+        };
+        Some(match commits {
+            Some(count) => crate::i18n::format(
+                "overview.activity_day",
+                &[
+                    ("date", crate::utc::label(day)),
+                    ("count", count.to_string()),
+                ],
+            ),
+            None => crate::i18n::format(
+                "overview.activity_future_day",
+                &[("date", crate::utc::label(day))],
+            ),
+        })
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Columns {
     pub list: Rect,
@@ -77,6 +103,9 @@ pub(super) struct Dashboard {
     pub row_hits: Vec<(Rect, usize)>,
     pub summary: Rect,
     pub stats_scroll: u16,
+    pub stats_year: bool,
+    pub heatmap_hits: Vec<(Rect, HeatmapAction)>,
+    pub heatmap_hover: Option<(Rect, String)>,
     pub detail_max: u16,
     pub stats_max: u16,
     pub drag: Option<(usize, Option<u16>, Option<u16>)>,
@@ -361,6 +390,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
     let area = frame.area();
     app.dashboard.size = area;
     app.detail_areas.clear();
+    app.dashboard.heatmap_hits.clear();
     app.filter_hits.clear();
     app.dashboard.row_hits.clear();
     app.dashboard.agent_hits.clear();
@@ -529,6 +559,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             &mut app.dashboard.stats_scroll,
             app.dashboard.focus == Focus::Stats,
         );
+        heatmap_hits(app, r);
     }
     app.dashboard.summary = Rect::new(footer.x, footer.y, footer.width, 1);
     let summary = if app.marked.is_empty() {
@@ -628,7 +659,16 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
         );
     }
     if let Some(focus) = app.dashboard.overlay.filter(|_| app.dialog.is_none()) {
-        let r = super::view::popup(frame, 100, area.height.saturating_sub(4));
+        app.dashboard.heatmap_hits.clear();
+        let r = super::view::popup(
+            frame,
+            if focus == Focus::Stats {
+                area.width.saturating_sub(4).min(180)
+            } else {
+                100
+            },
+            area.height.saturating_sub(4),
+        );
         app.detail_areas = vec![r];
         if focus == Focus::Stats {
             app.dashboard.detail_hits.clear();
@@ -640,6 +680,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                 &mut app.dashboard.stats_scroll,
                 true,
             );
+            heatmap_hits(app, r);
         } else {
             let lines = super::view::detail_lines(app, r.width.saturating_sub(4));
             app.dashboard.detail_hits.clear();
@@ -654,6 +695,28 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             );
         }
     }
+    if app.dialog.is_none()
+        && app.dashboard.text_selection.is_none()
+        && let Some((hit, text)) = &app.dashboard.heatmap_hover
+        && app
+            .dashboard
+            .heatmap_hits
+            .iter()
+            .any(|(rect, action)| rect == hit && action.description().as_ref() == Some(text))
+    {
+        let width = (text.width() as u16 + 2).min(area.width);
+        let x = hit.x.min(area.right().saturating_sub(width));
+        let y = if hit.y + 1 < area.bottom() {
+            hit.y + 1
+        } else {
+            hit.y.saturating_sub(1)
+        };
+        frame.render_widget(
+            Paragraph::new(format!(" {text} "))
+                .style(Style::new().fg(palette().fg).bg(palette().selected)),
+            Rect::new(x, y, width, 1),
+        );
+    }
     if let Some(selection) = &app.dashboard.text_selection {
         let r = selection.buffer.area;
         for y in r.y..r.bottom() {
@@ -666,6 +729,21 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     frame.buffer_mut()[(x, y)].set_bg(palette().selected);
                 }
             }
+        }
+    }
+}
+fn heatmap_hits(app: &mut Overview, rect: Rect) {
+    let inner = rect.inner(Margin::new(2, 1));
+    for (row, col, width, action) in super::view::stats_chart_hits(app, inner.width) {
+        if row < app.dashboard.stats_scroll as usize {
+            continue;
+        }
+        let y = row - app.dashboard.stats_scroll as usize;
+        if y < inner.height as usize && col + width <= inner.width as usize {
+            app.dashboard.heatmap_hits.push((
+                Rect::new(inner.x + col as u16, inner.y + y as u16, width as u16, 1),
+                action,
+            ));
         }
     }
 }
@@ -1088,6 +1166,24 @@ impl Overview {
             return Ok(Some(Outcome::Stay));
         }
         self.dashboard.text_selection = None;
+        self.dashboard.heatmap_hover = None;
+        if (self.dashboard.overlay == Some(Stats) || self.dashboard.focus == Stats)
+            && !key
+                .modifiers
+                .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
+        {
+            match key.code {
+                KeyCode::Char('y' | 'Y') => {
+                    self.heatmap_action(HeatmapAction::Period(!self.dashboard.stats_year));
+                    return Ok(Some(Outcome::Stay));
+                }
+                KeyCode::Char('z' | 'Z') => {
+                    self.heatmap_action(HeatmapAction::Expand);
+                    return Ok(Some(Outcome::Stay));
+                }
+                _ => {}
+            }
+        }
         if self.dashboard.focus == Projects && scroll_key(key.code).is_some() {
             self.dashboard.list_detached = false;
         }
@@ -1271,6 +1367,7 @@ impl Overview {
         Ok(None)
     }
     fn scroll_panel(&mut self, stats: bool, delta: i32) {
+        self.dashboard.heatmap_hover = None;
         let (scroll, max) = if stats {
             (&mut self.dashboard.stats_scroll, self.dashboard.stats_max)
         } else {
@@ -1279,6 +1376,35 @@ impl Overview {
         *scroll = i32::from(*scroll)
             .saturating_add(delta)
             .clamp(0, i32::from(max)) as u16;
+    }
+    fn heatmap_action(&mut self, action: HeatmapAction) {
+        self.dashboard.focus = Focus::Stats;
+        self.dashboard.heatmap_hover = None;
+        match action {
+            HeatmapAction::Period(year) => {
+                self.dashboard.stats_year = year;
+                self.dashboard.stats_scroll = 0;
+                if year {
+                    self.dashboard.overlay = Some(Focus::Stats);
+                    if self.dashboard.size.width < 116 {
+                        self.message = t("overview.activity_narrow").into_owned();
+                    }
+                }
+            }
+            HeatmapAction::Expand => {
+                self.dashboard.overlay = if self.dashboard.overlay == Some(Focus::Stats) {
+                    None
+                } else {
+                    Some(Focus::Stats)
+                };
+                self.dashboard.stats_scroll = 0;
+            }
+            HeatmapAction::Day { .. } => {
+                if let Some(text) = action.description() {
+                    self.message = text;
+                }
+            }
+        }
     }
     pub(super) fn dashboard_mouse(
         &mut self,
@@ -1335,6 +1461,29 @@ impl Overview {
         if self.dialog.is_some() {
             self.last_click = None;
             return Ok(None);
+        }
+        if self.dashboard.text_selection.is_none()
+            && self.dashboard.drag.is_none()
+            && self.dashboard.scrollbar.is_none()
+            && !mouse.modifiers.contains(KeyModifiers::ALT)
+        {
+            let hit = self
+                .dashboard
+                .heatmap_hits
+                .iter()
+                .find(|(r, _)| r.contains(point))
+                .copied();
+            if matches!(mouse.kind, MouseEventKind::Moved) {
+                self.dashboard.heatmap_hover =
+                    hit.and_then(|(rect, action)| action.description().map(|text| (rect, text)));
+            }
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
+                && let Some((_, action)) = hit
+            {
+                self.heatmap_action(action);
+                self.last_click = None;
+                return Ok(Some(Outcome::Stay));
+            }
         }
         if self.dashboard.overlay.is_none()
             && matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))

@@ -48,11 +48,15 @@ fn count(value: u64) -> String {
     out
 }
 
+#[cfg(test)]
 pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
+    lines_for(s, width, false)
+}
+pub(super) fn lines_for(s: &stats::Stats, width: usize, year: bool) -> Vec<Line<'static>> {
     if width == 0 {
         return vec![];
     }
-    let mut lines = pulse::lines(s, width);
+    let mut lines = pulse::lines_for(s, width, year);
     lines.push(heading(&t("overview.codebase"), "", width));
     if s.disk_scanning {
         let message = crate::i18n::format(
@@ -336,6 +340,19 @@ pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
             }
         })
         .collect()
+}
+
+pub(super) fn chart_hits(
+    s: &stats::Stats,
+    width: usize,
+    year: bool,
+) -> Vec<(
+    usize,
+    usize,
+    usize,
+    crate::overview::dashboard::HeatmapAction,
+)> {
+    pulse::chart(s, width, crate::config::now() / 86400, year).hits
 }
 
 /// Largest remainders keep the stacked bar exactly as wide as the viewport.
@@ -801,16 +818,17 @@ mod tests {
                             .find(|l| l.to_string().starts_with(t("overview.stats_disk").as_ref()))
                             .unwrap();
                         assert!(disk.to_string().contains('≥'));
-                        assert_eq!(
-                            lines
-                                .iter()
-                                .filter(|l| l.spans.len() == 13
-                                    && l.spans[1..]
-                                        .iter()
-                                        .all(|s| matches!(s.content.as_ref(), "██" | "··")))
-                                .count(),
-                            7
-                        );
+                        let cells = pulse::chart(&s, width, crate::config::now() / 86400, false)
+                            .hits
+                            .iter()
+                            .filter(|(_, _, _, action)| {
+                                matches!(
+                                    action,
+                                    crate::overview::dashboard::HeatmapAction::Day { .. }
+                                )
+                            })
+                            .count();
+                        assert_eq!(cells, 84);
                         assert!(
                             lines
                                 .iter()

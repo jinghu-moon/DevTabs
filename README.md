@@ -12,38 +12,38 @@ Windows Rust 项目工作区：原生 Codex / Claude Code 与 PowerShell Debug �
 
 ## 开始使用
 
-最新测试程序为 `artifacts/DevTabs-0.4.0-pulse-heatmap/devtabs.exe`，包含完整 12×7 热力图、未来日期占位与精简图例，以及无数量/时间硬截断的完整统计扫描、后台进度、明确的根目录文件标签，以及单行项目与可展开会话、最近用户消息修复、常驻返回总览按钮、提交热力图与改动热点，以及详情分区、可点击搜索和宿主断线恢复、按实际栏宽排版的统计卡片与目录扫描优化、响应式项目/详情/概况三栏、Markdown 工作上下文、可审阅启动队列、真实单 Agent 终端组合，并保留侧栏、图片、编辑、终端浮层与中英文界面；构建哈希与检查记录在同目录 `build.json`。当前 IPC 使用 v6 并按构建自动隔离宿主，避免新版连接到仍在运行的旧宿主；`--version` 可查看构建标识。旧版运行中的窗口和会话由旧版正常退出，新版不接管。详见 [宿主构建隔离](docs/31-Host-Build-Isolation.md)。
+最新测试程序为 `artifacts/DevTabs-0.4.0-contribution-calendar/devtabs.exe`，包含独立方格提交日历、月份刻度、12 周／全年切换、悬停详情与精简图例，以及无数量/时间硬截断的完整统计扫描、后台进度、明确的根目录文件标签，以及单行项目与可展开会话、最近用户消息修复、常驻返回总览按钮、提交热力图与改动热点，以及详情分区、可点击搜索和宿主断线恢复、按实际栏宽排版的统计卡片与目录扫描优化、响应式项目/详情/概况三栏、Markdown 工作上下文、可审阅启动队列、真实单 Agent 终端组合，并保留侧栏、图片、编辑、终端浮层与中英文界面；构建哈希与检查记录在同目录 `build.json`。当前 IPC 使用 v6 并按构建自动隔离宿主，避免新版连接到仍在运行的旧宿主；`--version` 可查看构建标识。旧版运行中的窗口和会话由旧版正常退出，新版不接管。详见 [宿主构建隔离](docs/31-Host-Build-Isolation.md)。
 
 若同时运行旧版，重新编译不会更新已经打开的界面；同一构建的总览也可能激活已运行的前端。测试当前渲染时，明确指定程序路径并加 `--new-instance`，在新的界面打开 `tests/fixtures/markdown-reading.md`：
 
 ```powershell
-& "D:\100_Projects\110_Daily\new-project\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe" --project "D:\100_Projects\110_Daily\new-project" --agent codex --layout split --new-instance
+& "D:\100_Projects\110_Daily\new-project\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe" --project "D:\100_Projects\110_Daily\new-project" --agent codex --layout split --new-instance
 ```
 
 可用 `Get-CimInstance Win32_Process -Filter "Name = 'devtabs.exe'" | Select-Object ProcessId, ExecutablePath, CommandLine` 核对实际运行路径。0.4.0 的本地源码渲染器已支持 `rust,no_run` 元数据、有限 Mermaid/公式、任务框和引用续行；0.3.2 的旧预览不能用于判断这些能力。针对这份完整样本，`cargo test --test markdown_viewport reading_fixture -- --test-threads=1` 覆盖实际 Sidebar 的 LF/CRLF、明暗主题、代码颜色、图形、公式及与完整渲染逐行一致性。
 
 ```powershell
 # 首次设置默认 Agent 和项目根目录，可添加多个根
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe config agent codex
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe config root 'D:\100_Projects\110_Daily'
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe config agent codex
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe config root 'D:\100_Projects\110_Daily'
 
 # 项目总览
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe
 
 # 只创建 Agent，一个 PTY；保留文件树与预览
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe --project 'D:\Projects\Demo' --composition agent-only
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe --project 'D:\Projects\Demo' --composition agent-only
 
 # 默认 Float：Agent 主界面 + 界面内终端浮层
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe --project 'D:\Projects\Demo' --agent claude --debug-command 'cargo run'
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe --project 'D:\Projects\Demo' --agent claude --debug-command 'cargo run'
 
 # 左右内嵌分屏 / Windows Terminal 两个标签页
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe --project 'D:\Projects\Demo' --layout split
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe --project 'D:\Projects\Demo' --layout tabs
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe --project 'D:\Projects\Demo' --layout split
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe --project 'D:\Projects\Demo' --layout tabs
 
 # 原生历史选择器 / 显式另开实例 / 双 shell 诊断
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe --agent codex --resume
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe --new-instance
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe --agent shell --layout split
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe --agent codex --resume
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe --new-instance
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe --agent shell --layout split
 ```
 
 同一项目已经运行时，启动参数不会替换原会话；需要另一组进程时使用 `--new-instance`。标签页布局使用 DevTabs 命名的 WT 窗口，避免按标签序号或“最近窗口”定位。总览 Enter 优先激活可定位的现有工作区；否则打开视图并接管原会话，旧视图退出，不重启 shell。
@@ -60,7 +60,9 @@ Windows Rust 项目工作区：原生 Codex / Claude Code 与 PowerShell Debug �
 
 `--composition agent-only` 创建一个终端；`agent-debug` 创建两个；`custom` 创建 Agent、Debug 和配置的全部额外命名终端。切换组合不会删除额外终端配置，视觉布局由 `--layout` 独立决定。
 
-设计与实测见 [总览重构](docs/33-Overview-Refactor-Design.md)、[验证记录](docs/34-Overview-Refactor-Verification.md)。统计面板新样式与老项目的速度对照见 [统计优化](docs/35-Statistics-Panel-Refinement.md)。详情、搜索与宿主连接修复见 [验证记录](docs/36-Overview-Detail-Interaction-Fixes.md)。本轮统计、会话、扫描口径与返回导航见 [项目脉搏](docs/38-Project-Pulse-and-Session-Navigation.md)。完整扫描的实测、资源取舍和复现命令见 [统计扫描验证](docs/42-Complete-Statistics-Scan-Verification.md)。热力图末列占位和信息精简见 [热力图优化](docs/43-Pulse-Heatmap-Refinement.md)。
+设计与实测见 [总览重构](docs/33-Overview-Refactor-Design.md)、[验证记录](docs/34-Overview-Refactor-Verification.md)。统计面板新样式与老项目的速度对照见 [统计优化](docs/35-Statistics-Panel-Refinement.md)。详情、搜索与宿主连接修复见 [验证记录](docs/36-Overview-Detail-Interaction-Fixes.md)。本轮统计、会话、扫描口径与返回导航见 [项目脉搏](docs/38-Project-Pulse-and-Session-Navigation.md)。完整扫描的实测、资源取舍和复现命令见 [统计扫描验证](docs/42-Complete-Statistics-Scan-Verification.md)。提交日历样式、全年视图和格子详情见 [日历重构](docs/44-Contribution-Calendar-Refactor.md)。
+
+统计日历默认近 12 周；点击顶部 `[年]` / `[1y]` 或聚焦统计后按 Y 切全年，`[+]` / Z 放大。悬停或点击格子查看日期与提交次数；全年需要宽窗，空间不足时保留近 12 周。
 
 ## 操作
 
@@ -160,10 +162,10 @@ devtabs config debug 'D:\Projects\Demo' 'cargo watch -x run'
 devtabs config edit
 
 # 当前用户安装到 %LOCALAPPDATA%\Programs\DevTabs，并添加用户 PATH
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe install
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe install
 
 # 关闭新版工作区后，从另一份 exe 卸载；保留用户配置
-.\artifacts\DevTabs-0.4.0-pulse-heatmap\devtabs.exe uninstall
+.\artifacts\DevTabs-0.4.0-contribution-calendar\devtabs.exe uninstall
 ```
 
 安装/卸载支持 `--directory` 指定目录、`--no-path` 跳过 PATH 修改。PATH 更新保留其他条目及 `%USERPROFILE%` 等变量；新终端获得新 PATH，已打开的 shell 保持原环境。不会修改 Profile 或 WT 配置。更新前先关闭安装目录内运行的 DevTabs。

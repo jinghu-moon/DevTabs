@@ -704,17 +704,7 @@ fn format_utc(time: std::time::SystemTime) -> String {
         return crate::i18n::t("ui.before_1970").into();
     };
     let seconds = elapsed.as_secs();
-    // Gregorian calendar conversion from days since Unix epoch.
-    let z = (seconds / 86400) as i64 + 719468;
-    let era = z / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let mut year = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = mp + if mp < 10 { 3 } else { -9 };
-    year += i64::from(month <= 2);
+    let (year, month, day) = crate::utc::date(seconds / 86400);
     format!(
         "{year:04}-{month:02}-{day:02} {:02}:{:02}:{:02} UTC",
         seconds / 3600 % 24,

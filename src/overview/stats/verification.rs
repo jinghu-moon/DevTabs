@@ -128,7 +128,7 @@ fn old_truncated_cache_and_in_progress_cache_are_not_reused() {
     });
     let path = home.0.join("stats").join(format!("{hash:016x}.json"));
     fs::create_dir(path.parent().unwrap()).unwrap();
-    for (schema, scanning) in [(4, false), (5, true)] {
+    for (schema, scanning) in [(5, false), (6, true)] {
         let mut stamp = cache_stamp(&f.0);
         stamp.push(schema);
         stamp.extend(cache_stamp(&home.0.join("stats-refresh")));

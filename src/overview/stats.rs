@@ -26,6 +26,30 @@ pub enum ScanIssue {
     ReadError,
 }
 #[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct Calendar {
+    pub first_day: u64,
+    pub today: u64,
+    pub days: Vec<u32>,
+}
+impl Calendar {
+    fn new(today: u64) -> Self {
+        Self {
+            first_day: today.saturating_sub((today + 3) % 7 + 364),
+            today,
+            days: vec![0; 371],
+        }
+    }
+    fn record(&mut self, timestamp: u64) {
+        let day = timestamp / 86400;
+        if day >= self.first_day
+            && day <= self.today
+            && let Some(value) = self.days.get_mut((day - self.first_day) as usize)
+        {
+            *value += 1;
+        }
+    }
+}
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Stats {
     pub files: u64,
@@ -51,6 +75,7 @@ pub struct Stats {
     pub dependency_bytes: u64,
     pub artifacts: Vec<(String, u64)>,
     pub days: Vec<u32>,
+    pub calendar: Option<Calendar>,
     pub hotspots: Vec<Hotspot>,
     pub directory_hotspots: Vec<Hotspot>,
     pub hotspots_error: Option<String>,
@@ -149,13 +174,14 @@ fn collect_git(root: &Path, generation: &Arc<AtomicU64>, ticket: u64, out: &mut 
     {
         out.weeks = vec![0; 12];
         out.days = vec![0; 84];
+        out.calendar = Some(Calendar::new(crate::config::now() / 86400));
         out.total_commits = Some(0);
         return;
     }
-    let recent = crate::explorer::git_output(
-        root,
-        &["log", "--since=84.days", "--format=%ct%x09%h %cs %s"],
-    );
+    let now = crate::config::now();
+    let mut calendar = Calendar::new(now / 86400);
+    let since = format!("--since-as-filter=@{}", calendar.first_day * 86400);
+    let recent = crate::explorer::git_output(root, &["log", &since, "--format=%ct%x09%h %cs %s"]);
     if generation.load(Ordering::Relaxed) != ticket {
         return;
     }
@@ -163,7 +189,6 @@ fn collect_git(root: &Path, generation: &Arc<AtomicU64>, ticket: u64, out: &mut 
         Ok(bytes) => {
             out.weeks = vec![0; 12];
             out.days = vec![0; 84];
-            let now = crate::config::now();
             for line in String::from_utf8_lossy(&bytes).lines() {
                 let Some((timestamp, summary)) = line.split_once('\t') else {
                     continue;
@@ -176,17 +201,14 @@ fn collect_git(root: &Path, generation: &Arc<AtomicU64>, ticket: u64, out: &mut 
                     if age < 30 * 86400 {
                         out.activity += 1;
                     }
-                    let today = now / 86400;
-                    let first = today.saturating_sub((today + 3) % 7 + 77);
-                    if timestamp / 86400 >= first && timestamp <= now {
-                        let day = (timestamp / 86400 - first) as usize;
-                        if day < 84 {
-                            out.days[day] += 1;
-                        }
+                    if timestamp <= now {
+                        calendar.record(timestamp);
                     }
                 }
             }
+            out.days = calendar.days[287..].to_vec();
             out.weeks = out.days.chunks(7).map(|days| days.iter().sum()).collect();
+            out.calendar = Some(calendar);
             // Still show old commits when the project has little recent activity.
             if out.commits.len() < 6
                 && let Ok(bytes) =
@@ -390,7 +412,7 @@ pub fn source_at(root: &Path, home: &Path, generation: &Arc<AtomicU64>, ticket: 
         (h ^ u64::from(b)).wrapping_mul(16777619)
     });
     let mut stamp = cache_stamp(root);
-    stamp.push(5);
+    stamp.push(6);
     stamp.extend(cache_stamp(&home.join("stats-refresh")));
     let now = crate::config::now();
     for suffix in [".json", "-source.json"] {
@@ -806,7 +828,7 @@ pub fn cached_at_with_progress(
     });
     let path = home.join("stats").join(format!("{hash:016x}.json"));
     let mut stamp = cache_stamp(root);
-    stamp.push(5);
+    stamp.push(6);
     stamp.extend(cache_stamp(&home.join("stats-refresh")));
     let now = crate::config::now();
     let old = read_cache(&path, &key, &stamp)

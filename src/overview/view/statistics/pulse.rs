@@ -1,129 +1,15 @@
 //! Project pulse uses background Git data only; no commands run during drawing.
 use super::*;
-pub(super) fn lines(s: &stats::Stats, width: usize) -> Vec<Line<'static>> {
-    lines_at(s, width, crate::config::now() / 86400)
+mod calendar;
+pub(super) use calendar::render as chart;
+
+pub(super) fn lines_for(s: &stats::Stats, width: usize, year: bool) -> Vec<Line<'static>> {
+    lines_at(s, width, crate::config::now() / 86400, year)
 }
-fn lines_at(s: &stats::Stats, width: usize, today: u64) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
+fn lines_at(s: &stats::Stats, width: usize, today: u64, year: bool) -> Vec<Line<'static>> {
+    let mut lines = calendar::render(s, width, today, year).lines;
     let ready =
         (s.source_ready || !s.weeks.is_empty() || !s.commits.is_empty()) && s.git_error.is_none();
-    let streak = s.weeks.iter().rev().take_while(|n| **n > 0).count();
-    let latest = s
-        .commits
-        .first()
-        .and_then(|c| c.split_whitespace().nth(1))
-        .unwrap_or("—");
-    let recent = s.weeks.iter().map(|n| u64::from(*n)).sum::<u64>();
-    let recent_total =
-        crate::i18n::format("overview.stats_commit_count", &[("count", count(recent))]);
-    lines.push(heading(
-        &t("overview.stats_weeks"),
-        if ready { &recent_total } else { "" },
-        width,
-    ));
-    if ready && t("overview.stats_weeks").width() + recent_total.width() + 5 > width {
-        lines.push(Line::from(Span::styled(clip(&recent_total, width), dim())));
-    }
-    if ready {
-        let mut summary = crate::i18n::format(
-            "overview.pulse_summary",
-            &[("date", latest.into()), ("streak", streak.to_string())],
-        );
-        // The heading already shows the period total. Keep the lifetime total
-        // only when it adds information instead of repeating the same number.
-        if let Some(total) = s.total_commits.filter(|total| *total != recent) {
-            summary.push_str(" · ");
-            summary.push_str(&crate::i18n::format(
-                "overview.activity_total",
-                &[("total", count(total))],
-            ));
-        }
-        for text in textwrap::wrap(&summary, width.max(1)) {
-            lines.push(Line::from(Span::styled(text.into_owned(), dim())));
-        }
-    }
-    if let Some(error) = &s.git_error {
-        lines.push(Line::from(Span::styled(clip(error, width), dim())));
-    } else if s.weeks.is_empty() {
-        lines.push(Line::from(Span::styled(clip(&t("loading"), width), dim())));
-    } else {
-        let max = s.days.iter().copied().max().unwrap_or(0).max(1);
-        if s.days.len() == 84 && width >= 28 {
-            let monday = today - (today + 3) % 7;
-            let first = monday.saturating_sub(77);
-            let label_width = (0..7)
-                .map(|day| t(&format!("overview.weekday.{day}")).width())
-                .max()
-                .unwrap_or(0)
-                + 1;
-            let start = crate::i18n::format("overview.weeks_ago", &[("count", "11".into())]);
-            let end = t("overview.this_week");
-            lines.push(Line::from(Span::styled(
-                format!(
-                    "{}{start}{}{end}",
-                    " ".repeat(label_width),
-                    " ".repeat(24usize.saturating_sub(start.width() + end.width())),
-                ),
-                dim(),
-            )));
-            for day in 0..7 {
-                let mut row = vec![Span::styled(
-                    fit(&t(&format!("overview.weekday.{day}")), label_width),
-                    dim(),
-                )];
-                for week in 0..12 {
-                    let index = week * 7 + day;
-                    let n = s.days[index];
-                    let future = first + index as u64 > today;
-                    let color = if future {
-                        palette().muted
-                    } else {
-                        activity_color(if n == 0 {
-                            0
-                        } else {
-                            1 + (u64::from(n) * 3 / u64::from(max)) as usize
-                        })
-                    };
-                    row.push(Span::styled(
-                        if future { "··" } else { "██" },
-                        Style::new().fg(color),
-                    ));
-                }
-                lines.push(Line::from(row));
-            }
-            let mut legend = vec![Span::styled(
-                format!("UTC {} ", t("overview.activity_low")),
-                dim(),
-            )];
-            legend.extend(
-                (0..5).map(|level| Span::styled("■", Style::new().fg(activity_color(level)))),
-            );
-            legend.push(Span::styled(
-                format!(
-                    " {} ·· {}",
-                    t("overview.activity_high"),
-                    t("overview.activity_future")
-                ),
-                dim(),
-            ));
-            lines.push(Line::from(legend));
-        } else {
-            let max = s.weeks.iter().copied().max().unwrap_or(1).max(1);
-            let glyphs = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
-            lines.push(Line::from(
-                s.weeks
-                    .iter()
-                    .take(width.min(12))
-                    .map(|n| {
-                        Span::styled(
-                            glyphs[(u64::from(*n) * 7 / u64::from(max)) as usize].to_string(),
-                            Style::new().fg(if *n == 0 { palette().muted } else { green() }),
-                        )
-                    })
-                    .collect::<Vec<_>>(),
-            ));
-        }
-    }
     let times = t("overview.times");
     let binary = t("overview.binary");
     // Both rankings share column widths; file names never move numeric columns.
@@ -225,7 +111,7 @@ fn lines_at(s: &stats::Stats, width: usize, today: u64) -> Vec<Line<'static>> {
     lines
 }
 
-fn activity_color(level: usize) -> Color {
+pub(super) fn activity_color(level: usize) -> Color {
     if level == 0 {
         palette().selected
     } else if crate::appearance::theme() == crate::appearance::Theme::Light {
@@ -264,6 +150,54 @@ mod tests {
     }
 
     #[test]
+    fn calendar_cells_have_separators_month_labels_and_a_right_aligned_legend() {
+        for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
+            crate::i18n::with_language(language, || {
+                let rendered = lines_at(&fixture(), 76, 20_769, false);
+                let rows: Vec<_> = rendered
+                    .iter()
+                    .filter(|line| {
+                        line.spans
+                            .iter()
+                            .filter(|span| span.style.bg.is_some())
+                            .count()
+                            >= 11
+                    })
+                    .collect();
+                assert_eq!(rows.len(), 7, "use independent background cells");
+                for row in rows {
+                    assert!(
+                        row.spans
+                            .iter()
+                            .filter(|span| span.content == " " && span.style.bg.is_none())
+                            .count()
+                            >= 11
+                    );
+                }
+                let text = rendered
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(!text.contains("··"));
+                assert!(text.contains(if language == crate::i18n::Language::ZhCn {
+                    "11月"
+                } else {
+                    "Nov"
+                }));
+                let legend = rendered
+                    .iter()
+                    .find(|line| {
+                        line.to_string()
+                            .contains(t("overview.activity_low").as_ref())
+                    })
+                    .unwrap();
+                assert_eq!(legend.width(), 76);
+            });
+        }
+    }
+
+    #[test]
     fn every_weekday_keeps_twelve_visible_cells_and_distinguishes_future_days() {
         for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
             crate::i18n::with_language(language, || {
@@ -271,25 +205,40 @@ mod tests {
                 for elapsed in 0..7 {
                     let today = 20_766 + elapsed;
                     assert_eq!((today + 3) % 7, elapsed);
-                    let rendered = lines_at(&fixture(), 76, today);
-                    let rows: Vec<_> = rendered
+                    let chart = calendar::render(&fixture(), 76, today, false);
+                    let cells: Vec<_> = chart
+                        .hits
                         .iter()
-                        .filter(|line| {
-                            line.spans.len() == 13
-                                && line.spans[1..]
-                                    .iter()
-                                    .all(|span| matches!(span.content.as_ref(), "██" | "··" | "  "))
+                        .filter_map(|(row, col, width, action)| {
+                            if let crate::overview::dashboard::HeatmapAction::Day { day, commits } =
+                                action
+                            {
+                                Some((*row, *col, *width, *day, *commits))
+                            } else {
+                                None
+                            }
                         })
                         .collect();
-                    assert_eq!(rows.len(), 7);
-                    for (day, row) in rows.iter().enumerate() {
-                        for (week, cell) in row.spans[1..].iter().enumerate() {
-                            if week == 11 && day as u64 > elapsed {
-                                assert_eq!(cell.content, "··", "missing future day {day}");
-                                assert_ne!(cell.style.fg, row.spans[1].style.fg);
-                            } else {
-                                assert_eq!(cell.content, "██");
-                            }
+                    assert_eq!(cells.len(), 84);
+                    for (row, col, width, day, commits) in cells {
+                        assert_eq!(commits.is_none(), day > today);
+                        let line = &chart.lines[row];
+                        let mut offset = 0;
+                        let cell = line
+                            .spans
+                            .iter()
+                            .find(|span| {
+                                let found = offset == col;
+                                offset += span.width();
+                                found
+                            })
+                            .unwrap();
+                        assert_eq!(cell.width(), width);
+                        if day > today {
+                            assert!(cell.content.contains('□'));
+                            assert!(cell.style.bg.is_none());
+                        } else {
+                            assert!(cell.style.bg.is_some());
                         }
                     }
                 }
@@ -301,7 +250,7 @@ mod tests {
     fn activity_card_removes_duplicate_titles_counts_and_long_explanations() {
         for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
             crate::i18n::with_language(language, || {
-                let rendered = lines_at(&fixture(), 76, 20_769);
+                let rendered = lines_at(&fixture(), 76, 20_769, false);
                 let text = rendered
                     .iter()
                     .map(ToString::to_string)
@@ -319,12 +268,12 @@ mod tests {
                     })
                     .unwrap();
                 assert!(
-                    first_hotspots <= 13,
+                    first_hotspots <= 23,
                     "too many explanatory rows: {first_hotspots}"
                 );
                 let mut historical = fixture();
                 historical.total_commits = Some(1_000);
-                let text = lines_at(&historical, 76, 20_769)
+                let text = lines_at(&historical, 76, 20_769, false)
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()

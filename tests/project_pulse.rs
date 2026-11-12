@@ -169,6 +169,49 @@ fn real_git_pulse_separates_artifacts_and_counts_activity_hotspots_and_categorie
 }
 
 #[test]
+fn calendar_collects_old_commits_outside_twelve_weeks_and_caches_the_day_anchor() {
+    let f = Fixture::new();
+    git(&f.0, &["init", "-q"]);
+    git(&f.0, &["config", "user.email", "fixture@example.test"]);
+    git(&f.0, &["config", "user.name", "Fixture"]);
+    let today = devtabs::config::now() / 86400;
+    let old = (today - 150) * 86400 + 3600;
+    let recent = today * 86400 + 1;
+    for (timestamp, message) in [(old, "old activity"), (recent, "recent activity")] {
+        let status = Command::new("git")
+            .current_dir(&f.0)
+            .env("GIT_AUTHOR_DATE", format!("@{timestamp} +0000"))
+            .env("GIT_COMMITTER_DATE", format!("@{timestamp} +0000"))
+            .args(["commit", "--allow-empty", "-qm", message])
+            .output()
+            .unwrap();
+        assert!(
+            status.status.success(),
+            "{}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+    }
+    let flag = Arc::new(AtomicU64::new(1));
+    let home = Fixture::new();
+    let s = stats::cached_at(&f.0, &home.0, &flag, 1, false);
+    let calendar = s.calendar.as_ref().unwrap();
+    assert_eq!(calendar.today, today);
+    assert_eq!(calendar.days.len(), 371);
+    assert_eq!(calendar.days.iter().sum::<u32>(), 2);
+    assert_eq!(
+        calendar.days[(old / 86400 - calendar.first_day) as usize],
+        1
+    );
+    assert_eq!(s.days.iter().sum::<u32>(), 1);
+    assert_eq!(s.weeks.iter().sum::<u32>(), 1);
+    let cached = stats::cached_at(&f.0, &home.0, &flag, 1, false);
+    assert_eq!(
+        serde_json::to_value(cached.calendar).unwrap(),
+        serde_json::to_value(s.calendar).unwrap()
+    );
+}
+
+#[test]
 fn fixed_entry_limit_does_not_cause_repeated_heavy_scans() {
     let mut s = stats::Stats::default();
     assert_eq!(stats::refresh_secs(&s), 600);
