@@ -33,3 +33,22 @@ cargo fmt --check
 ```
 
 选择项目后按 F9，检查列表与对话之间没有不必要的大片空白，标题、粗体、表格和代码块已排版；PageDown 或滚轮滚到末尾后不应变为空白，筛选和切换会话仍可使用。
+
+## 代码块背景与滚动条端点补正
+
+真机反馈中，无语言围栏的空标题行显示一个小背景格，代码背景只与文字等宽，消息下方还出现零散背景格。文件预览和会话预览已经共用同一个 Markdown Writer；差异在输出适配：文件视口根据行样式填充背景，而会话文本行交给 Paragraph 后没有这一步。
+
+本次在共用的 `markdown_summary` 输出适配层补齐每一条代码行（含空标题行、空代码行及换行尾部）的背景空格，保持文本区域全宽；把背景保留在内容 Span 上，避免调用方追加的角色侧线继承代码背景。总览详情和会话弹窗同时生效，语法解析、主题及排版继续共用原 Writer，不增加新的 Markdown 方案。
+
+滚动条原来把总行数传作可滚动位置数量。在当前依赖的计算中，正确范围是 `总行数 - 视口行数 + 1`，其中 `+1` 包含位置 0。会话弹窗和共用 pane 均按同一口径修正；pane 同时按实际换行后的行数计算范围。顶部/底部滑块现在与正文位置一致。
+
+使用用户原文作为 `tests/fixtures/history-code-background.md`。实际 RED 日志复现角色侧线被代码背景污染、末尾滑块仍在轨道中部；GREEN 验证浅/深色、不同宽度、代码全宽背景、角色边界和轨道两端。
+
+额外捕获 CrosstermBackend 的实际 ANSI 字节，经项目现有 VT100 解析器回放，对照每一格背景，覆盖代码块、滚动往返和切换短中文消息，检查增量刷新不会在文字下方留下背景块；测试临时启用 ANSI 颜色输出后恢复进程设置，不启动真实 Agent 或终端窗口。真机像素效果仍由用户验收。
+
+```powershell
+cargo test --locked --lib --test overview --test reference_parity --test i18n --test markdown_viewport --test preview_rendering --target-dir target/perf -- --test-threads=1
+.\artifacts\DevTabs-0.4.0-history-background-scrollbar\devtabs.exe
+```
+
+相关回归 **188 通过、0 失败、10 忽略**；fmt、Clippy、Release 及命令冒烟记录、构建指纹在新版交付目录 `build.json` / `source-files.sha256`，过程日志在 `artifacts/history-background-scrollbar/`。

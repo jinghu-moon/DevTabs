@@ -2519,3 +2519,186 @@ fn history_dialog_scroll_clamps_and_worker_refresh_invalidates_markdown() {
     draw(&mut app, 90, 30);
     assert_eq!(app.dialog_list.unwrap().0.height, 1);
 }
+
+#[test]
+fn history_code_blocks_fill_each_row_and_keep_prose_background_clean() {
+    use ratatui::{
+        style::Color,
+        widgets::{Paragraph, Widget},
+    };
+    let source = include_str!("../../tests/fixtures/history-code-background.md");
+    for light in [false, true] {
+        for width in [20, 60, 104] {
+            let mut lines = crate::preview::markdown_summary(source, width, light);
+            let blocks: Vec<_> = lines
+                .iter()
+                .enumerate()
+                .filter_map(|(i, line)| {
+                    // All fenced-code rows carry the same background as their code content.
+                    line.style
+                        .bg
+                        .or_else(|| {
+                            line.spans
+                                .first()
+                                .and_then(|span| span.style.bg)
+                                .filter(|bg| {
+                                    line.width() == usize::from(width)
+                                        && line.spans.iter().all(|span| span.style.bg == Some(*bg))
+                                })
+                        })
+                        .map(|background| (i, background))
+                })
+                .collect();
+            assert!(
+                blocks.len() >= 2,
+                "must cover the code header and code body"
+            );
+            for line in &mut lines {
+                line.spans.insert(0, ratatui::text::Span::raw("▎ "));
+            }
+            let area = Rect::new(0, 0, width + 2, lines.len() as u16 + 2);
+            let mut buffer = ratatui::buffer::Buffer::empty(area);
+            Paragraph::new(lines).render(area, &mut buffer);
+            for (row, background) in blocks {
+                assert_eq!(
+                    buffer[(0, row as u16)].bg,
+                    Color::Reset,
+                    "block must not color the role rail"
+                );
+                for x in 2..width + 2 {
+                    assert_eq!(
+                        buffer[(x, row as u16)].bg,
+                        background,
+                        "partial code background width={width} row={row} col={x}"
+                    );
+                }
+            }
+            for y in area.bottom() - 2..area.bottom() {
+                for x in 0..area.width {
+                    assert_eq!(buffer[(x, y)].bg, Color::Reset);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn history_scrollbar_thumb_reaches_both_ends_of_the_track() {
+    let mut app = overview();
+    app.history = Some(history::History {
+        sessions: vec![history::Conversation {
+            id: "scrollbar".into(),
+            timestamp: String::new(),
+            prompt: "Session".into(),
+            file: PathBuf::new(),
+            turns: vec![history::Turn {
+                user: false,
+                text: (0..90).map(|i| format!("Line {i}\n\n")).collect(),
+            }],
+        }],
+        ..Default::default()
+    });
+    for (width, height) in [(90, 30), (120, 50)] {
+        for (scroll, bottom) in [(0, false), (u16::MAX, true)] {
+            app.dialog = Some(Dialog::History {
+                path: "a".into(),
+                agent: Agent::Codex,
+                selected: 0,
+                scroll,
+            });
+            let buffer = draw(&mut app, width, height);
+            let r = app.dialog_preview;
+            let y = if bottom { r.bottom() - 2 } else { r.y + 1 };
+            assert_eq!(
+                buffer[(r.right(), y)].symbol(),
+                "█",
+                "thumb must touch the {} end of track",
+                if bottom { "bottom" } else { "top" }
+            );
+        }
+    }
+}
+
+#[test]
+fn history_markdown_ansi_refresh_does_not_leave_background_cells_below_text() {
+    use ratatui::{
+        backend::CrosstermBackend,
+        widgets::{Block, Paragraph, Wrap},
+    };
+    struct RestoreColor(bool);
+    impl Drop for RestoreColor {
+        fn drop(&mut self) {
+            crossterm::style::Colored::set_ansi_color_disabled(self.0);
+        }
+    }
+    let _restore = RestoreColor(crossterm::style::Colored::ansi_color_disabled_memoized());
+    crossterm::style::Colored::set_ansi_color_disabled(false);
+    #[derive(Clone, Default)]
+    struct Recording(std::rc::Rc<std::cell::RefCell<Vec<u8>>>);
+    impl std::io::Write for Recording {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.borrow_mut().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let source = include_str!("../../tests/fixtures/history-code-background.md");
+    for width in [60, 106] {
+        let area = Rect::new(0, 0, width, 40);
+        let recording = Recording::default();
+        let mut terminal = ratatui::Terminal::with_options(
+            CrosstermBackend::new(recording.clone()),
+            ratatui::TerminalOptions {
+                viewport: ratatui::Viewport::Fixed(area),
+            },
+        )
+        .unwrap();
+        let mut screen = crate::terminal::Terminal::new(40, width, 0);
+        for (body, scroll) in [
+            (source, 0),
+            (source, 4),
+            (source, 0),
+            ("进入总览后按 **F9** 测试。", 0),
+        ] {
+            let mut lines = crate::preview::markdown_summary(body, width - 2, false);
+            for line in &mut lines {
+                line.spans.insert(0, ratatui::text::Span::raw("▎ "));
+            }
+            let expected = terminal
+                .draw(|frame| {
+                    frame.render_widget(Block::default(), area);
+                    frame.render_widget(
+                        Paragraph::new(lines)
+                            .wrap(Wrap { trim: false })
+                            .scroll((scroll, 0)),
+                        area,
+                    );
+                })
+                .unwrap()
+                .buffer
+                .clone();
+            let bytes = std::mem::take(&mut *recording.0.borrow_mut());
+            screen.process(&bytes);
+            for y in 0..area.height {
+                for x in 0..area.width {
+                    // The continuation cell inherits its wide glyph's style in a real terminal.
+                    if screen.screen().cell(y, x).unwrap().is_wide_continuation() {
+                        continue;
+                    }
+                    let background = match expected[(x, y)].bg {
+                        ratatui::style::Color::Rgb(r, g, b) => vt100::Color::Rgb(r, g, b),
+                        ratatui::style::Color::Reset => vt100::Color::Default,
+                        other => panic!("unexpected background {other:?}"),
+                    };
+                    assert_eq!(
+                        screen.screen().cell(y, x).unwrap().bgcolor(),
+                        background,
+                        "ANSI background residue width={width} scroll={scroll} row={y} col={x}"
+                    );
+                }
+            }
+        }
+    }
+}

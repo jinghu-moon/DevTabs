@@ -87,6 +87,23 @@ pub(super) fn summary(
             .map(|r| r.line)
             .collect()
     })
+    .map(|mut line| {
+        // File viewports paint row backgrounds themselves. Paragraph consumers
+        // need explicit cells, including blank code headers and wrapped tails.
+        // Keep the background on content spans so caller-added role rails do
+        // not inherit it from the whole Line.
+        if let Some(background) = line.style.bg {
+            let padding = width.max(1).saturating_sub(line.width());
+            if padding > 0 {
+                line.spans.push(ratatui::text::Span::styled(
+                    " ".repeat(padding),
+                    Style::new().bg(background),
+                ));
+            }
+            line.style = Style::default();
+        }
+        line
+    })
     .collect()
 }
 fn render_events<'a>(

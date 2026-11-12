@@ -45,22 +45,20 @@ fn pane(
     rect: Rect,
     scroll: u16,
 ) {
-    let count = lines.len();
     let inner = rect.inner(Margin::new(1, 1));
     let content = inner.inner(Margin::new(1, 0));
     frame.render_widget(block(format!(" {} ", title.as_ref())), rect);
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .scroll((scroll, 0)),
-        content,
-    );
-    if count > usize::from(content.height) {
+    let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let count = paragraph.line_count(content.width);
+    let max = count.saturating_sub(content.height.into());
+    let scroll = usize::from(scroll).min(max);
+    frame.render_widget(paragraph.scroll((scroll as u16, 0)), content);
+    if max > 0 {
         frame.render_stateful_widget(
             Scrollbar::new(ScrollbarOrientation::VerticalRight),
             inner,
-            &mut ScrollbarState::new(count)
-                .position(scroll.into())
+            &mut ScrollbarState::new(max + 1)
+                .position(scroll)
                 .viewport_content_length(content.height.into()),
         )
     }
@@ -634,9 +632,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     frame.render_stateful_widget(
                         Scrollbar::new(ScrollbarOrientation::VerticalRight),
                         Rect::new(sections[2].x, preview.y, sections[2].width, preview.height),
-                        &mut ScrollbarState::new(count.into())
-                            .position(visible_scroll.into())
-                            .viewport_content_length(preview.height.into()),
+                        &mut ScrollbarState::new(
+                            usize::from(count.saturating_sub(preview.height)) + 1,
+                        )
+                        .position(visible_scroll.into())
+                        .viewport_content_length(preview.height.into()),
                     );
                 }
                 if let Some(h) = &app.history {
