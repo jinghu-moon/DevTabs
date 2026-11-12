@@ -81,3 +81,19 @@ cargo test --locked --release --test file_references incremental_reference_workl
 ```
 
 之后在已有 Hook 可用的测试工作区完成一轮，让 Agent 的答复含有本地文件 Markdown 链接并实际修改一个文件，检查两表来源、数量与点击目标。再测试两个隔离任务的独立列表、面板调整、收起/恢复以及浮动 Debug 的覆盖顺序。缺少完成事件或日志路径时应显示等待/不可用；不要将无数据解释为没有修改。Hook 的安装与诊断沿用已有命令和用户确认流程，本次自动测试未替用户更改配置。
+
+## Hook 显示名称补齐
+
+2026-11-12：安装器为各受管 Hook 写入原生 `statusMessage`，例如 `DevTabs · Codex · UserPromptSubmit`、`DevTabs · Codex · Stop`；Claude 使用 `DevTabs · Claude · 事件名`。Codex `/hooks` 使用该字段作为列表名称，无需增加自定义 `name` 字段。
+
+重新安装通过既有所有权记录替换旧的无名条目，不重复追加；其他工具的 Hook、执行命令和信任数据库不因加名而被改写。当前本机 Codex 的五个 DevTabs Hook 已仅添加显示名称，并同步所有权记录、保留原配置备份。显示名称不代表已信任或运行验证，是否需要重新审核由 Codex 决定，DevTabs 不自动写入信任哈希。
+
+TDD 先在旧实现复现缺少名称，再验证 Codex/Claude 名称、旧无名条目升级、重复安装、其他工具保留、命令不变、信任文件不变和卸载。相关 Hook/事件/引用/改动回归 15 通过、0 失败、1 性能用例忽略；过程证据见 `artifacts/hook-display-names/`。新增测试只使用临时配置，当前真实配置的更名依据用户明确要求单独完成。
+
+后续安装使用包含名称的新交付版本：
+
+```powershell
+.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe hooks codex
+```
+
+当前已按用户要求更名的配置无需为了名称再次安装。关闭并重新打开 `/hooks` 查看；若当前进程保留旧配置，则重新启动 Codex 后加载。旧交付目录内的程序仍保留其原始行为，请勿用旧安装器覆盖新名称。

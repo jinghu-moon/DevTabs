@@ -97,7 +97,14 @@ pub fn install(path: &Path, provider: &str, exe: &Path, remove: bool) -> Result<
         crate::launch::encode_script(&format!("& '{quoted}' __hook {provider}"))
     );
     for event in events {
-        let group = json!({"hooks":[{"type":"command","command":command,"timeout":2}]});
+        // Codex /hooks uses statusMessage as the list title (not a name field).
+        let title = if provider == "codex" {
+            "Codex"
+        } else {
+            "Claude"
+        };
+        let group = json!({"hooks":[{"type":"command","command":command,"timeout":2,
+            "statusMessage":format!("DevTabs · {title} · {event}")}]});
         let groups = hooks
             .entry(event)
             .or_insert_with(|| json!([]))
