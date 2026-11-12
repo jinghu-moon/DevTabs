@@ -150,41 +150,36 @@ mod tests {
     }
 
     #[test]
-    fn calendar_cells_have_separators_month_labels_and_a_right_aligned_legend() {
+    fn calendar_keeps_compact_cells_month_labels_and_a_local_legend() {
         for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
             crate::i18n::with_language(language, || {
                 let rendered = lines_at(&fixture(), 76, 20_769, false);
                 let rows: Vec<_> = rendered
                     .iter()
                     .filter(|line| {
-                        line.spans
-                            .iter()
-                            .filter(|span| span.style.bg.is_some())
-                            .count()
-                            >= 11
+                        line.spans.len() == 13
+                            && line.spans[1..]
+                                .iter()
+                                .all(|span| matches!(span.content.as_ref(), "██" | "··"))
                     })
                     .collect();
-                assert_eq!(rows.len(), 7, "use independent background cells");
-                for row in rows {
-                    assert!(
-                        row.spans
-                            .iter()
-                            .filter(|span| span.content == " " && span.style.bg.is_none())
-                            .count()
-                            >= 11
-                    );
-                }
+                assert_eq!(rows.len(), 7);
+                assert!(rows.iter().all(|line| line.width() <= 27));
                 let text = rendered
                     .iter()
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join("\n");
-                assert!(!text.contains("··"));
+                assert!(text.contains("··"));
                 assert!(text.contains(if language == crate::i18n::Language::ZhCn {
                     "11月"
                 } else {
                     "Nov"
                 }));
+                assert!(
+                    text.contains(t("overview.month.9").as_ref()),
+                    "do not lose September behind the year label"
+                );
                 let legend = rendered
                     .iter()
                     .find(|line| {
@@ -192,7 +187,14 @@ mod tests {
                             .contains(t("overview.activity_low").as_ref())
                     })
                     .unwrap();
-                assert_eq!(legend.width(), 76);
+                assert_eq!(
+                    legend.width(),
+                    if language == crate::i18n::Language::ZhCn {
+                        27
+                    } else {
+                        26
+                    }
+                );
             });
         }
     }
@@ -235,10 +237,11 @@ mod tests {
                             .unwrap();
                         assert_eq!(cell.width(), width);
                         if day > today {
-                            assert!(cell.content.contains('□'));
+                            assert_eq!(cell.content, "··");
                             assert!(cell.style.bg.is_none());
                         } else {
-                            assert!(cell.style.bg.is_some());
+                            assert_eq!(cell.content, "██");
+                            assert!(cell.style.fg.is_some());
                         }
                     }
                 }

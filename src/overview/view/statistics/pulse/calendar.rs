@@ -22,7 +22,7 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
         .max()
         .unwrap_or(0)
         + 1;
-    let annual = year && width >= label_width + 105 && s.calendar.is_some();
+    let annual = year && width >= label_width + 106 && s.calendar.is_some();
     let (first, today, days) =
         if let Some(calendar) = s.calendar.as_ref().filter(|c| c.days.len() == 371) {
             let skip = if annual { 0 } else { 287 };
@@ -38,6 +38,11 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
                 s.days.as_slice(),
             )
         };
+    let weeks = days.len() / 7;
+    let calendar_width = label_width + weeks * 2;
+    // The calendar is a compact card within the statistics panel. Its controls
+    // and legend must not inherit the full panel's potentially huge width.
+    let width = width.min(calendar_width.max(48));
     let total = if days.is_empty() {
         s.weeks.iter().map(|n| u64::from(*n)).sum()
     } else {
@@ -128,8 +133,7 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
             .push(Line::from(Span::styled(clip(&t("loading"), width), dim())));
         return out;
     }
-    let weeks = days.len() / 7;
-    if !matches!(weeks, 12 | 53) || width < label_width + weeks * 2 - 1 {
+    if !matches!(weeks, 12 | 53) || width < calendar_width {
         let max = s.weeks.iter().copied().max().unwrap_or(1).max(1);
         let glyphs = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
         out.lines.push(Line::from(
@@ -146,68 +150,63 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
         ));
         return out;
     }
-    let cell_width = if width >= label_width + weeks * 3 - 1 {
-        2
-    } else {
-        1
-    };
-    let step = cell_width + 1;
-    let grid_width = weeks * step - 1;
-    let mut axis = String::from(" ").repeat(label_width);
-    let mut used = 0;
+    let cell_width = 2;
+    let step = cell_width;
+    let grid_width = weeks * step;
+    // Keep years on their own axis so a long year prefix never hides a month.
+    let mut months = Vec::new();
+    let mut years = Vec::new();
     let mut previous = None;
     for week in 0..weeks {
-        // Label a new month at the first week containing one of its days.
         let (year, month, _) = crate::utc::date((first + week as u64 * 7 + 6).min(today));
         if previous == Some((year, month)) {
             continue;
         }
-        let mut name = t(&format!("overview.month.{month}")).into_owned();
         if previous.is_none() || previous.is_some_and(|(old_year, _)| old_year != year) {
-            name = format!("{year} {name}");
+            years.push((week * step, year.to_string()));
         }
-        let position = week * step;
-        if position >= used && position + name.width() <= grid_width {
-            axis.push_str(&" ".repeat(position - used));
-            axis.push_str(&name);
-            used = position + name.width() + 1;
-            // One trailing gap prevents adjacent month labels from touching.
-            axis.push(' ');
-        }
+        months.push((
+            week * step,
+            t(&format!("overview.month.{month}")).into_owned(),
+        ));
         previous = Some((year, month));
     }
-    out.lines
-        .push(Line::from(Span::styled(axis.trim_end().to_owned(), dim())));
+    for labels in [&years, &months] {
+        let mut axis = " ".repeat(label_width);
+        let mut used = 0;
+        for (index, (position, text)) in labels.iter().enumerate() {
+            let next = labels.get(index + 1).map_or(grid_width, |(pos, _)| *pos);
+            // A partial opening month can be shorter than its label. Preserve
+            // the next month at its correct week instead of silently hiding it.
+            if *position >= used && position + text.width() <= next {
+                axis.push_str(&" ".repeat(position - used));
+                axis.push_str(text);
+                used = position + text.width();
+            }
+        }
+        out.lines.push(Line::from(Span::styled(axis, dim())));
+    }
     let max = days.iter().copied().max().unwrap_or(0).max(1);
     for day in 0..7 {
-        if day > 0 {
-            out.lines.push(Line::default());
-        }
         let row_index = out.lines.len();
         let mut row = vec![Span::styled(
             fit(&t(&format!("overview.weekday.{day}")), label_width),
             dim(),
         )];
         for week in 0..weeks {
-            if week > 0 {
-                row.push(Span::raw(" "));
-            }
             let index = week * 7 + day;
             let date = first + index as u64;
             let future = date > today;
             let n = days[index];
             row.push(if future {
-                Span::styled(if cell_width == 2 { "□ " } else { "□" }, dim())
+                Span::styled("··", dim())
             } else {
                 let level = if n == 0 {
                     0
                 } else {
                     1 + (u64::from(n) * 3 / u64::from(max)) as usize
                 };
-                Span::styled(
-                    " ".repeat(cell_width),
-                    Style::new().bg(activity_color(level)),
-                )
+                Span::styled("██", Style::new().fg(activity_color(level)))
             });
             out.hits.push((
                 row_index,
@@ -227,10 +226,7 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
         dim(),
     )];
     for level in 0..5 {
-        if level > 0 {
-            legend.push(Span::raw(" "));
-        }
-        legend.push(Span::styled(" ", Style::new().bg(activity_color(level))));
+        legend.push(Span::styled("■", Style::new().fg(activity_color(level))));
     }
     legend.push(Span::styled(
         format!(" {}", t("overview.activity_high")),
@@ -239,7 +235,7 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
     let legend_width = Line::from(legend.clone()).width();
     let mut footer = vec![
         Span::styled("UTC", dim()),
-        Span::raw(" ".repeat(width.saturating_sub(3 + legend_width))),
+        Span::raw(" ".repeat(calendar_width.saturating_sub(3 + legend_width))),
     ];
     footer.extend(legend);
     out.lines.push(Line::from(footer));
@@ -269,6 +265,50 @@ mod tests {
             ..Default::default()
         }
     }
+    #[test]
+    fn compact_rows_and_controls_do_not_stretch_to_the_panel_width() {
+        for year in [false, true] {
+            let chart = render(&fixture(), 180, 20_769, year);
+            let cells: Vec<_> = chart
+                .hits
+                .iter()
+                .filter(|(_, _, _, action)| matches!(action, HeatmapAction::Day { .. }))
+                .collect();
+            let weeks = if year { 53 } else { 12 };
+            assert_eq!(cells.len(), weeks * 7);
+            let mut rows: Vec<_> = cells.iter().map(|(row, _, _, _)| *row).collect();
+            rows.sort_unstable();
+            rows.dedup();
+            assert_eq!(rows.len(), 7);
+            assert!(
+                rows.windows(2).all(|pair| pair[1] == pair[0] + 1),
+                "remove blank rows between weekdays"
+            );
+            assert_eq!(cells[1].1, cells[0].1 + 2, "contiguous two-character cells");
+            let grid_right = cells
+                .iter()
+                .map(|(_, col, width, _)| col + width)
+                .max()
+                .unwrap();
+            let legend = chart
+                .lines
+                .iter()
+                .find(|line| {
+                    line.to_string()
+                        .contains(t("overview.activity_low").as_ref())
+                })
+                .unwrap();
+            assert_eq!(legend.width(), grid_right, "legend belongs to the calendar");
+            assert!(
+                chart
+                    .lines
+                    .iter()
+                    .all(|line| line.width() <= grid_right.max(48)),
+                "buttons must stay near the chart"
+            );
+        }
+    }
+
     #[test]
     fn yearly_and_recent_views_share_anchored_day_buckets_across_midnight() {
         let stats = fixture();
@@ -355,14 +395,18 @@ mod tests {
                                 }
                         })
                         .unwrap();
-                    // Render actual styled cells into a buffer, including gaps.
+                    // Verify the restored contiguous foreground cells in a real buffer.
                     use ratatui::widgets::Widget;
                     let area = Rect::new(0, 0, 176, chart.lines.len() as u16);
                     let mut buffer = ratatui::buffer::Buffer::empty(area);
                     Paragraph::new(chart.lines).render(area, &mut buffer);
-                    assert_eq!(buffer[(cell.1 as u16, cell.0 as u16)].bg, activity_color(4));
-                    assert_eq!(buffer[(cell.1 as u16 - 1, cell.0 as u16)].bg, Color::Reset);
-                    assert_eq!(buffer[(cell.1 as u16, cell.0 as u16 + 1)].bg, Color::Reset);
+                    assert_eq!(buffer[(cell.1 as u16, cell.0 as u16)].fg, activity_color(4));
+                    assert_eq!(buffer[(cell.1 as u16, cell.0 as u16)].symbol(), "█");
+                    assert_eq!(
+                        buffer[(cell.1 as u16 + 1, cell.0 as u16)].fg,
+                        activity_color(4)
+                    );
+                    assert_eq!(buffer[(cell.1 as u16, cell.0 as u16)].bg, Color::Reset);
                 });
             }
         }
