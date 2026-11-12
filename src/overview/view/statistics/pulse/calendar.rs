@@ -203,7 +203,7 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
             } else {
                 1 + (u64::from(n) * 3 / u64::from(max)) as usize
             };
-            row.push(Span::styled("██", Style::new().fg(activity_color(level))));
+            row.push(Span::styled("  ", Style::new().bg(activity_color(level))));
             out.hits.push((
                 row_index,
                 label_width + week * step,
@@ -222,7 +222,7 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
         dim(),
     )];
     for level in 0..5 {
-        legend.push(Span::styled("■", Style::new().fg(activity_color(level))));
+        legend.push(Span::styled(" ", Style::new().bg(activity_color(level))));
     }
     legend.push(Span::styled(
         format!(" {}", t("overview.activity_high")),
@@ -391,18 +391,28 @@ mod tests {
                                 }
                         })
                         .unwrap();
-                    // Verify the restored contiguous foreground cells in a real buffer.
+                    // Verify background fills both columns without relying on font glyphs.
                     use ratatui::widgets::Widget;
                     let area = Rect::new(0, 0, 176, chart.lines.len() as u16);
                     let mut buffer = ratatui::buffer::Buffer::empty(area);
                     Paragraph::new(chart.lines).render(area, &mut buffer);
-                    assert_eq!(buffer[(cell.1 as u16, cell.0 as u16)].fg, activity_color(4));
-                    assert_eq!(buffer[(cell.1 as u16, cell.0 as u16)].symbol(), "█");
-                    assert_eq!(
-                        buffer[(cell.1 as u16 + 1, cell.0 as u16)].fg,
-                        activity_color(4)
-                    );
-                    assert_eq!(buffer[(cell.1 as u16, cell.0 as u16)].bg, Color::Reset);
+                    for column in cell.1..cell.1 + cell.2 {
+                        let rendered = &buffer[(column as u16, cell.0 as u16)];
+                        assert_eq!(rendered.bg, activity_color(4));
+                        assert_eq!(rendered.symbol(), " ");
+                    }
+                    for (row, col, width, action) in &chart.hits {
+                        if let HeatmapAction::Day { commits, .. } = action {
+                            for column in *col..col + width {
+                                let rendered = &buffer[(column as u16, *row as u16)];
+                                assert_eq!(rendered.symbol(), " ");
+                                assert_ne!(rendered.bg, Color::Reset);
+                                if commits.is_none() || *commits == Some(0) {
+                                    assert_eq!(rendered.bg, activity_color(0));
+                                }
+                            }
+                        }
+                    }
                 });
             }
         }

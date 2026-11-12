@@ -158,7 +158,9 @@ mod tests {
                     .iter()
                     .filter(|line| {
                         line.spans.len() == 13
-                            && line.spans[1..].iter().all(|span| span.content == "██")
+                            && line.spans[1..]
+                                .iter()
+                                .all(|span| span.content == "  " && span.style.bg.is_some())
                     })
                     .collect();
                 assert_eq!(rows.len(), 7);
@@ -236,12 +238,12 @@ mod tests {
                             .unwrap();
                         assert_eq!(cell.width(), width);
                         if day > today {
-                            assert_eq!(cell.content, "██");
-                            assert_eq!(cell.style.fg, Some(activity_color(0)));
-                            assert!(cell.style.bg.is_none());
+                            assert_eq!(cell.content, "  ");
+                            assert_eq!(cell.style.bg, Some(activity_color(0)));
+                            assert!(cell.style.fg.is_none());
                         } else {
-                            assert_eq!(cell.content, "██");
-                            assert!(cell.style.fg.is_some());
+                            assert_eq!(cell.content, "  ");
+                            assert!(cell.style.bg.is_some());
                         }
                     }
                 }
