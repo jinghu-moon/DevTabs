@@ -69,6 +69,22 @@ fn explicit_links_only_deduplicated_scoped_to_requested_turn_and_task() {
     );
 }
 #[test]
+#[cfg(windows)]
+fn codex_slash_prefixed_drive_links_match_the_file_in_the_completed_turn() {
+    let f = Fixture::new();
+    f.start("t1");
+    let path = f.root.join("docs/test1.md");
+    let target = format!("/{}", path.to_string_lossy().replace('\\', "/"));
+    f.append(json!({"type":"response_item","payload":{
+        "type":"message","role":"assistant","phase":"final_answer",
+        "content":[{"type":"output_text","text":format!("Created [docs/test1.md]({target}:11).") }]
+    }}));
+    let refs = f.read(&mut Cursor::default(), "t1");
+    assert_eq!(refs.len(), 1);
+    assert_eq!(refs[0].path, path);
+    assert_eq!(refs[0].line, Some(11));
+}
+#[test]
 fn incremental_reads_wait_for_complete_utf8_and_do_not_reread_history() {
     let f = Fixture::new();
     for _ in 0..256 {

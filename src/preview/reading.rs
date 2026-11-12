@@ -350,9 +350,23 @@ pub fn destination(base: &Path, target: &str) -> anyhow::Result<Destination> {
         return Ok(Destination::Anchor(decode_url(anchor.unwrap_or(""))?));
     }
     let path = decode_url(path)?;
+    let path = path.as_str();
+    // Codex emits Windows file links as /D:/...; the leading slash is a
+    // Markdown URL convention, not part of the native absolute path.
+    #[cfg(windows)]
+    let path = path
+        .strip_prefix('/')
+        .filter(|p| {
+            let bytes = p.as_bytes();
+            bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && bytes[2] == b'/'
+        })
+        .unwrap_or(path);
     anyhow::ensure!(!path.chars().any(char::is_control), "Invalid path");
     anyhow::ensure!(
-        !path.contains("://") && (!path.contains(':') || Path::new(&path).is_absolute()),
+        !path.contains("://") && (!path.contains(':') || Path::new(path).is_absolute()),
         "Unsupported link scheme"
     );
     let path = base.parent().unwrap_or(Path::new(".")).join(path);

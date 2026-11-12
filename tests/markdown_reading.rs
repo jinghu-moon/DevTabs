@@ -227,6 +227,22 @@ fn relative_encoded_links_anchors_and_unsupported_schemes() {
     }
 }
 #[test]
+#[cfg(windows)]
+fn codex_drive_links_use_the_actual_absolute_path() {
+    let base = Path::new("D:/project/docs/read.md");
+    for target in ["/D:/project/docs/test1.md", "/D%3A/project/docs/test1.md"] {
+        assert_eq!(
+            preview::reading::destination(base, target).unwrap(),
+            Destination::File(PathBuf::from("D:/project/docs/test1.md"), None),
+        );
+    }
+    assert_eq!(
+        preview::reading::destination(base, "/C:/other/a%20b.md#L3").unwrap(),
+        Destination::File(PathBuf::from("C:/other/a b.md"), Some("L3".into())),
+    );
+    assert!(preview::reading::destination(base, "/D:relative.md").is_err());
+}
+#[test]
 fn details_toggle_nested_content_and_preserve_original_source() {
     let text = "# Before\n\n<details>\n<summary>More **info**</summary>\n\n## Hidden\n\nsecret $x^2$\n\n<details open>\n<summary>Inner</summary>\n\ninner body\n\n</details>\n</details>\n\nAfter\n";
     let closed = md(text);

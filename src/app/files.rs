@@ -427,13 +427,17 @@ impl App {
             });
         }
         if event.kind == MouseEventKind::Down(MouseButton::Left) && event.row == area.y {
-            if event.column >= area.right().saturating_sub(3) {
+            let controls_right = area.right().saturating_sub(u16::from(area.height > 1));
+            if event.column >= controls_right {
+                return true;
+            }
+            if event.column >= controls_right.saturating_sub(3) {
                 let settings = self.parallel.layout.file_panels.entry(k).or_default();
                 settings.collapsed = !settings.collapsed;
                 self.selection = None;
                 self.save_task_layout();
                 let _ = self.attach_visible();
-            } else if event.column >= area.right().saturating_sub(7) {
+            } else if event.column >= controls_right.saturating_sub(7) {
                 if let Some(e) = self.parallel.files.entries.get_mut(&k) {
                     e.attempts = 0;
                 }
@@ -551,12 +555,22 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
     for (i, area) in app.file_panels() {
         let k = key(&app.sessions[i].info);
         let e = app.parallel.files.entries.entry(k).or_default();
-        frame.render_widget(Block::default().style(crate::appearance::style()), area);
         frame.render_widget(
-            Paragraph::new("─".repeat(usize::from(area.width)))
-                .style(Style::new().fg(palette.muted)),
-            Rect::new(area.x, area.y, area.width, 1),
+            if area.height > 1 {
+                Block::bordered().border_style(Style::new().fg(palette.muted))
+            } else {
+                Block::default()
+            }
+            .style(crate::appearance::style()),
+            area,
         );
+        if area.height == 1 {
+            frame.render_widget(
+                Paragraph::new("─".repeat(usize::from(area.width)))
+                    .style(Style::new().fg(palette.muted)),
+                area,
+            );
+        }
         if area.height > 1 {
             for y in area.y + 1..area.bottom() - 1 {
                 frame.render_widget(
@@ -569,6 +583,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         let changes = e.view.records.first().map_or(0, |r| r.file_count);
         let generation = e.identity.as_ref().map_or(0, |id| id.generation);
         let half = area.width / 2;
+        let inset = u16::from(area.height > 1);
         let heading = |label: &str, count| format!("─ {} {count} ", crate::i18n::t(label));
         let left = if area.height == 1 {
             format!(
@@ -582,12 +597,12 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(
             Paragraph::new(left).style(Style::new().fg(palette.accent)),
             Rect::new(
-                area.x,
+                area.x + inset,
                 area.y,
                 if area.height == 1 {
                     area.width.saturating_sub(8)
                 } else {
-                    half
+                    half.saturating_sub(inset)
                 },
                 1,
             ),
@@ -601,9 +616,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 ))
                 .style(Style::new().fg(palette.accent)),
                 Rect::new(
-                    area.x + half,
+                    area.x + half + inset,
                     area.y,
-                    area.width.saturating_sub(half + 8),
+                    area.width.saturating_sub(half + 8 + inset),
                     1,
                 ),
             );
@@ -615,7 +630,7 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 "[↻] [−]"
             })
             .style(Style::new().fg(palette.accent)),
-            Rect::new(area.right().saturating_sub(7), area.y, 7, 1),
+            Rect::new(area.right().saturating_sub(7 + inset), area.y, 7, 1),
         );
         if area.height == 1 {
             continue;
@@ -930,6 +945,78 @@ mod tests {
                 .values()
                 .all(|e| e.pending.is_none())
         );
+    }
+    #[test]
+    fn expanded_file_panels_keep_the_outer_border_and_table_cells_inside_it() {
+        let mut app = app();
+        for (width, height) in [(200, 50), (100, 32), (80, 24)] {
+            app.size = Rect::new(0, 0, width, height);
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+            for (_, area) in app.file_panels() {
+                if area.height <= 1 {
+                    continue;
+                }
+                let buffer = terminal.backend().buffer();
+                assert_eq!(buffer[(area.x, area.y)].symbol(), "┌");
+                assert_eq!(buffer[(area.right() - 1, area.y)].symbol(), "┐");
+                assert_eq!(buffer[(area.x, area.bottom() - 1)].symbol(), "└");
+                assert_eq!(buffer[(area.right() - 1, area.bottom() - 1)].symbol(), "┘");
+                for y in area.y + 1..area.bottom() - 1 {
+                    for x in [area.x, area.x + area.width / 2, area.right() - 1] {
+                        assert_eq!(buffer[(x, y)].symbol(), "│");
+                    }
+                }
+                for side in 0..2 {
+                    let body = table_body(area, side);
+                    assert!(body.x > area.x && body.right() < area.right());
+                    assert!(body.y > area.y && body.bottom() < area.bottom());
+                }
+            }
+        }
+    }
+    #[test]
+    fn bordered_panel_controls_remain_clickable_without_treating_the_corner_as_a_button() {
+        let mut app = app();
+        let area = app.file_panels()[0].1;
+        app.parallel.files.entries.insert(
+            "task-0".into(),
+            Entry {
+                attempts: 3,
+                ..Default::default()
+            },
+        );
+        assert!(app.files_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.right() - 1,
+            area.y,
+        )));
+        assert!(!app.file_settings(0).collapsed);
+        app.cancel_file_drag();
+        assert!(app.files_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.right() - 7,
+            area.y,
+        )));
+        assert_eq!(app.parallel.files.entries["task-0"].attempts, 0);
+        app.cancel_file_drag();
+        assert!(app.files_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            area.right() - 2,
+            area.y,
+        )));
+        assert!(app.file_settings(0).collapsed);
+        assert!(!app.file_settings(1).collapsed);
+        app.cancel_file_drag();
+        let summary = app.file_panels()[0].1;
+        assert_eq!(summary.height, 1);
+        assert!(app.files_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            summary.right() - 2,
+            summary.y,
+        )));
+        assert!(!app.file_settings(0).collapsed);
     }
     #[test]
     fn tables_have_headers_isolated_scroll_bars_and_mouse_never_reaches_pty() {

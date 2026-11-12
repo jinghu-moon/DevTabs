@@ -126,3 +126,13 @@ RED：`parallel_foundations` 中超预算接收与旧 generation 覆盖两个行
 ```
 
 `Ctrl+G → +` 新建隔离任务；`Ctrl+G → g` 审阅轮次；`Ctrl+G → !` 待处理与通知策略；`Ctrl+G → M` 合并/归档/清理。Provider hooks/信任、Windows 横幅与回调、WT 标签激活和实际渲染仍按 U01–U07 验收，未自动测试真实组合，不声明整体验收已完成。
+
+### 2026-11-12 文件面板引用、边框与本机通知修复
+
+用户真实 Codex 0.167.1 日志中的最终回答含 `[docs/test1.md](/D:/100_Projects/110_Daily/new-project/docs/test1.md)`。引用扫描已读到正文，但共享链接解析器把 `/D:/...` 判断为非绝对路径并因冒号拒绝，因此修改表有记录、引用表为零。Windows 下现在只对 `/字母:/` 形式去除首个斜杠，仍先 URL 解码、校验控制字符及不支持的 scheme；共享预览链接与引用表使用同一修复，不从工具输出或普通文件名推断引用。
+
+文件面板原先只有顶部分隔线和中线，现在展开时绘制完整外框，标题和刷新/折叠按钮避开左右角，点击范围同步内移；折叠时保留单行摘要。表头、可滚动数据及底部状态分别占用已有行，不额外挤占 Agent 高度。
+
+TDD：先添加 Windows 驱动器链接解析、完整最终回答 JSONL 引用和文件面板外框三项回归，实际得到 `Unsupported link scheme`、引用 `0 != 1`、左上角 `─ != ┌` 三项失败；修复后通过，并补充按钮点击及角点不误触验证。最终串行 lib 回归 155 通过、7 忽略，七项相关集成 suite 合计 46 通过、1 忽略；Clippy 全目标、fmt 和 Release 构建通过。扩大回归首次并行运行出现三个涉及共享主题颜色状态的失败，串行复核全部通过；原始失败输出保留，不将该次并行运行记为通过。
+
+证据位于 `artifacts/agent-files-fixes/`，新版程序为 `artifacts/DevTabs-0.4.0-agent-files-fixes/devtabs.exe`，旁边 `build.json` 及源码指纹记录构建。UI 仍由用户真机验收。按照用户本轮修复要求，另外执行了显式 `notify register`，确认当前用户注册表显示名为 DevTabs、身份文件 AUMID 为 `DevTabs.Workspace`；没有自动发送测试通知，不将本机注册成功等同于横幅/点击验收通过。新安装用户仍通过 `devtabs notify register` 显式注册。

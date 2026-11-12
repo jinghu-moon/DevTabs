@@ -12,38 +12,38 @@ Windows Rust 项目工作区：原生 Codex / Claude Code 与 PowerShell Debug �
 
 ## 开始使用
 
-最新测试程序为 `artifacts/DevTabs-0.4.0-hook-names/devtabs.exe`，包含 F9 历史会话表格（名称、完整 ID、更新）、会话代码块语言与复制按钮、完整 ID 历史会话表、F9 独立弹窗、共享 Markdown 代码块全宽背景、会话滚动条端点修复、自适应高度的会话弹窗、Markdown 消息与角色标记、对话滚动边界保护、背景色填充的连续热力图、未来日期统一灰色块、统计栏最小 32 列保护、统计弹窗背景隔离和旧启动记录读取修复、紧凑连续色块日历、局部对齐的按钮与图例、月份刻度、12 周／全年切换、悬停详情与精简图例，以及无数量/时间硬截断的完整统计扫描、后台进度、明确的根目录文件标签，以及单行项目与可展开会话、最近用户消息修复、常驻返回总览按钮、提交热力图与改动热点，以及详情分区、可点击搜索和宿主断线恢复、按实际栏宽排版的统计卡片与目录扫描优化、响应式项目/详情/概况三栏、Markdown 工作上下文、可审阅启动队列、真实单 Agent 终端组合，并保留侧栏、图片、编辑、终端浮层与中英文界面；Agent 底部新增按任务隔离的引用/修改文件表格，受管 Hook 具有明确的 DevTabs 名称；构建哈希与检查记录在同目录 `build.json`。当前 IPC 使用 v6 并按构建自动隔离宿主，避免新版连接到仍在运行的旧宿主；`--version` 可查看构建标识。旧版运行中的窗口和会话由旧版正常退出，新版不接管。详见 [宿主构建隔离](docs/31-Host-Build-Isolation.md)。
+最新测试程序为 `artifacts/DevTabs-0.4.0-agent-files-fixes/devtabs.exe`，包含 F9 历史会话表格（名称、完整 ID、更新）、会话代码块语言与复制按钮、完整 ID 历史会话表、F9 独立弹窗、共享 Markdown 代码块全宽背景、会话滚动条端点修复、自适应高度的会话弹窗、Markdown 消息与角色标记、对话滚动边界保护、背景色填充的连续热力图、未来日期统一灰色块、统计栏最小 32 列保护、统计弹窗背景隔离和旧启动记录读取修复、紧凑连续色块日历、局部对齐的按钮与图例、月份刻度、12 周／全年切换、悬停详情与精简图例，以及无数量/时间硬截断的完整统计扫描、后台进度、明确的根目录文件标签，以及单行项目与可展开会话、最近用户消息修复、常驻返回总览按钮、提交热力图与改动热点，以及详情分区、可点击搜索和宿主断线恢复、按实际栏宽排版的统计卡片与目录扫描优化、响应式项目/详情/概况三栏、Markdown 工作上下文、可审阅启动队列、真实单 Agent 终端组合，并保留侧栏、图片、编辑、终端浮层与中英文界面；Agent 底部新增按任务隔离的引用/修改文件表格，受管 Hook 具有明确的 DevTabs 名称；修复 Codex `/D:/...` 文件引用识别及底部文件面板外边框，刷新/折叠按钮保留边框间距；构建哈希与检查记录在同目录 `build.json`。当前 IPC 使用 v6 并按构建自动隔离宿主，避免新版连接到仍在运行的旧宿主；`--version` 可查看构建标识。旧版运行中的窗口和会话由旧版正常退出，新版不接管。详见 [宿主构建隔离](docs/31-Host-Build-Isolation.md)。
 
 若同时运行旧版，重新编译不会更新已经打开的界面；同一构建的总览也可能激活已运行的前端。测试当前渲染时，明确指定程序路径并加 `--new-instance`，在新的界面打开 `tests/fixtures/markdown-reading.md`：
 
 ```powershell
-& "D:\100_Projects\110_Daily\new-project\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe" --project "D:\100_Projects\110_Daily\new-project" --agent codex --layout split --new-instance
+& "D:\100_Projects\110_Daily\new-project\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe" --project "D:\100_Projects\110_Daily\new-project" --agent codex --layout split --new-instance
 ```
 
 可用 `Get-CimInstance Win32_Process -Filter "Name = 'devtabs.exe'" | Select-Object ProcessId, ExecutablePath, CommandLine` 核对实际运行路径。0.4.0 的本地源码渲染器已支持 `rust,no_run` 元数据、有限 Mermaid/公式、任务框和引用续行；0.3.2 的旧预览不能用于判断这些能力。针对这份完整样本，`cargo test --test markdown_viewport reading_fixture -- --test-threads=1` 覆盖实际 Sidebar 的 LF/CRLF、明暗主题、代码颜色、图形、公式及与完整渲染逐行一致性。
 
 ```powershell
 # 首次设置默认 Agent 和项目根目录，可添加多个根
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe config agent codex
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe config root 'D:\100_Projects\110_Daily'
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe config agent codex
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe config root 'D:\100_Projects\110_Daily'
 
 # 项目总览
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe
 
 # 只创建 Agent，一个 PTY；保留文件树与预览
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe --project 'D:\Projects\Demo' --composition agent-only
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe --project 'D:\Projects\Demo' --composition agent-only
 
 # 默认 Float：Agent 主界面 + 界面内终端浮层
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe --project 'D:\Projects\Demo' --agent claude --debug-command 'cargo run'
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe --project 'D:\Projects\Demo' --agent claude --debug-command 'cargo run'
 
 # 左右内嵌分屏 / Windows Terminal 两个标签页
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe --project 'D:\Projects\Demo' --layout split
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe --project 'D:\Projects\Demo' --layout tabs
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe --project 'D:\Projects\Demo' --layout split
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe --project 'D:\Projects\Demo' --layout tabs
 
 # 原生历史选择器 / 显式另开实例 / 双 shell 诊断
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe --agent codex --resume
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe --new-instance
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe --agent shell --layout split
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe --agent codex --resume
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe --new-instance
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe --agent shell --layout split
 ```
 
 同一项目已经运行时，启动参数不会替换原会话；需要另一组进程时使用 `--new-instance`。标签页布局使用 DevTabs 命名的 WT 窗口，避免按标签序号或“最近窗口”定位。总览 Enter 优先激活可定位的现有工作区；否则打开视图并接管原会话，旧视图退出，不重启 shell。
@@ -165,10 +165,10 @@ devtabs config debug 'D:\Projects\Demo' 'cargo watch -x run'
 devtabs config edit
 
 # 当前用户安装到 %LOCALAPPDATA%\Programs\DevTabs，并添加用户 PATH
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe install
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe install
 
 # 关闭新版工作区后，从另一份 exe 卸载；保留用户配置
-.\artifacts\DevTabs-0.4.0-hook-names\devtabs.exe uninstall
+.\artifacts\DevTabs-0.4.0-agent-files-fixes\devtabs.exe uninstall
 ```
 
 安装/卸载支持 `--directory` 指定目录、`--no-path` 跳过 PATH 修改。PATH 更新保留其他条目及 `%USERPROFILE%` 等变量；新终端获得新 PATH，已打开的 shell 保持原环境。不会修改 Profile 或 WT 配置。更新前先关闭安装目录内运行的 DevTabs。
