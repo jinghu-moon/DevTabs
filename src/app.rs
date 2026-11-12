@@ -1,4 +1,5 @@
 pub(crate) mod chrome;
+pub(crate) mod files;
 pub(crate) mod parallel;
 pub(crate) mod popup;
 pub(crate) mod review;
@@ -436,7 +437,11 @@ impl App {
         rects
     }
     pub fn rects(&self) -> Vec<(usize, ratatui::layout::Rect)> {
-        let mut rects = self.docked_rects();
+        let mut rects: Vec<_> = self
+            .docked_rects()
+            .into_iter()
+            .map(|(i, r)| (i, self.file_terminal_rect(i, r)))
+            .collect();
         if let Some(i) = self.popup
             && self.zoom.is_none()
             && self.size.width >= 60
@@ -743,6 +748,11 @@ impl App {
             self.task_key(key);
             return;
         }
+        if pressed && key.code == KeyCode::Esc && self.cancel_file_drag() {
+            self.consumed_keys.insert(key.code);
+            let _ = self.attach_visible();
+            return;
+        }
         if self.parallel.drag && key.code == KeyCode::Esc {
             self.cancel_task_drag();
             let _ = self.attach_visible();
@@ -772,6 +782,7 @@ impl App {
                 self.consumed_keys.insert(key.code);
             }
             match key.code {
+                KeyCode::Char('.') => self.toggle_file_panel(),
                 KeyCode::Char('z' | 'Z') => self.toggle_zoom(),
                 KeyCode::Char('w' | 'W') => self.terminal_menu = Some(self.focus),
                 KeyCode::Char('+') => self.new_task(),
@@ -1116,6 +1127,9 @@ impl App {
         }
     }
     fn mouse(&mut self, event: MouseEvent) {
+        if self.file_dragging() && self.files_mouse(event) {
+            return;
+        }
         if self.review_mouse(event) {
             return;
         }
@@ -1184,6 +1198,9 @@ impl App {
                 .popup_window
                 .rect(self.size)
                 .contains((event.column, event.row).into());
+        if !on_popup && self.files_mouse(event) {
+            return;
+        }
         if !on_popup && let Some(sidebar) = &mut self.sidebar {
             match sidebar.mouse_with_agent(event, agent) {
                 Ok((true, action)) => {
@@ -1307,6 +1324,7 @@ impl App {
                 self.send(self.focus, bytes);
             }
             Event::Resize(width, height) => {
+                self.cancel_file_drag();
                 self.cancel_task_drag();
                 if let Some(s) = &mut self.sidebar {
                     s.cancel_drag(true);
@@ -1319,6 +1337,9 @@ impl App {
             }
             Event::FocusGained | Event::FocusLost => {
                 if event == Event::FocusLost {
+                    if self.cancel_file_drag() {
+                        self.attach_visible()?;
+                    }
                     self.cancel_task_drag();
                     self.chrome_capture = false;
                     self.hover = None;
@@ -1402,6 +1423,7 @@ pub fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     loop {
         changed |= app.task_tick();
         changed |= app.review_tick();
+        changed |= app.files_tick();
         let sidebar_active = app.sidebar_active();
         app.update_image_occlusion();
         if let Some(sidebar) = &mut app.sidebar {

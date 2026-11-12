@@ -26,6 +26,7 @@ pub mod preview;
 pub mod project_profile;
 pub mod protocol;
 pub mod recovery;
+pub mod references;
 pub mod remote;
 pub mod rounds;
 pub mod selection;

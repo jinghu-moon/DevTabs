@@ -512,7 +512,7 @@ pub(super) fn short_name(s: &str, limit: usize) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     #[test]
     fn single_task_layout_uses_roles_when_debug_precedes_agent() {
@@ -788,7 +788,21 @@ mod tests {
         assert_eq!(app.focus, focus);
         assert!(app.parallel.review.pending.is_none());
     }
-    fn app() -> App {
+    #[test]
+    fn agent_reserves_a_real_bottom_file_panel_without_shrinking_debug() {
+        let mut app = app();
+        app.sessions.truncate(2);
+        app.sessions[0].info.placement = Placement::Docked;
+        app.sessions[1].info.placement = Placement::Docked;
+        app.sessions[1].info.task.role = crate::tasks::Role::Debug;
+        app.options.layout = Layout::Split;
+        let original = crate::ui::panes(app.size).unwrap();
+        let rects = app.rects();
+        assert_eq!(rects[0].1.height, original[0].height - 7);
+        assert_eq!(rects[1].1, original[1]);
+        assert!(crate::ui::content(rects[0].1).height >= 5);
+    }
+    pub(crate) fn app() -> App {
         let sessions = (0..8)
             .map(|i| {
                 Client::hidden(crate::protocol::SessionInfo {
@@ -1255,7 +1269,8 @@ mod tests {
         app.sidebar.as_mut().unwrap().focus = Focus::Tree;
         app.update_sidebar_layout();
         let r = app.rects()[0].1;
-        assert_eq!(r.bottom(), 29);
+        assert_eq!(r.bottom(), 22);
+        assert_eq!(app.file_panels()[0].1.bottom(), 29);
         assert!(!app.terminal_focused(0));
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();

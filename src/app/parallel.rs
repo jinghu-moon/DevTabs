@@ -27,11 +27,14 @@ pub struct LayoutState {
     pub ratio: u16,
     pub focus: Option<String>,
     pub focused_task: Option<String>,
+    #[serde(default)]
+    pub file_panels: BTreeMap<String, super::files::Settings>,
 }
 #[derive(Default)]
 pub struct State {
     pub view_leases: Option<BTreeMap<String, std::fs::File>>,
     pub review: super::review::State,
+    pub files: super::files::State,
     pub tasks: Vec<Task>,
     pub context: String,
     pub sidebars: BTreeMap<String, crate::sidebar::Sidebar>,

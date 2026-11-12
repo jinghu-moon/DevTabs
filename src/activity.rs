@@ -34,11 +34,15 @@ pub struct Event {
     pub kind: String,
     pub child: bool,
     pub cwd: std::path::PathBuf,
+    #[serde(default)]
+    pub transcript: Option<std::path::PathBuf>,
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct State {
     #[serde(default)]
     pub results: Vec<Outcome>,
+    #[serde(default)]
+    pub transcript: Option<std::path::PathBuf>,
     pub phase: Phase,
     pub conversation: Option<String>,
     pub turn: Option<String>,
@@ -120,6 +124,9 @@ impl State {
             if self.results.len() > 20 {
                 self.results.remove(0);
             }
+        }
+        if let Some(path) = &e.transcript {
+            self.transcript = Some(path.clone());
         }
         self.conversation = Some(e.conversation.clone());
         self.phase = phase;

@@ -41,6 +41,20 @@ pub struct State {
     pub marks_pending: bool,
 }
 impl App {
+    pub(super) fn open_file_change(&mut self, task: String, round: String, file: usize) {
+        // A fresh view prevents an old task's pending list/diff from replacing this click.
+        self.parallel.review = State {
+            open: true,
+            task,
+            file,
+            ..Default::default()
+        };
+        self.review_action(Action::Open {
+            round,
+            path: Some(file),
+        });
+    }
+
     pub(super) fn open_review(&mut self, inbox: bool) {
         self.parallel.review.resources = false;
         self.parallel.review.open = true;

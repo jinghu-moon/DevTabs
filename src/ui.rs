@@ -73,6 +73,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     if let Some(sidebar) = &mut app.sidebar {
         sidebar.draw(frame);
     }
+    crate::app::files::draw(frame, app);
     if let Some(i) = app.popup.filter(|_| app.zoom.is_none()) {
         let r = app.popup_window.rect(area);
         prepare_popup(frame, r);

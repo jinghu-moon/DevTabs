@@ -1,6 +1,7 @@
 use devtabs::activity::{Event, Phase, State};
 fn event(turn: &str, kind: &str) -> Event {
     Event {
+        transcript: None,
         provider: "codex".into(),
         conversation: "conversation".into(),
         turn: Some(turn.into()),
@@ -58,4 +59,25 @@ fn reading_latest_result_keeps_previous_unread_results_and_late_prompt_does_not_
     assert!(!s.pending());
     assert!(!s.apply(&event("A", "UserPromptSubmit"), 5));
     assert_eq!(s.turn.as_deref(), Some("B"));
+}
+
+#[test]
+fn only_accepted_provider_events_update_the_transcript_binding() {
+    let mut s = State::default();
+    let mut start = event("A", "UserPromptSubmit");
+    start.transcript = Some("C:/sessions/own.jsonl".into());
+    assert!(s.apply(&start, 1));
+    assert_eq!(s.transcript, start.transcript);
+    let mut child = event("A", "Stop");
+    child.child = true;
+    child.transcript = Some("C:/sessions/child.jsonl".into());
+    assert!(!s.apply(&child, 2));
+    assert_eq!(s.transcript, start.transcript);
+    let mut stop = event("A", "Stop");
+    stop.transcript = Some("C:/sessions/final.jsonl".into());
+    assert!(s.apply(&stop, 3));
+    assert_eq!(s.transcript, stop.transcript);
+    let json = serde_json::to_string(&s).unwrap();
+    let restored: State = serde_json::from_str(&json).unwrap();
+    assert_eq!(restored.transcript, stop.transcript);
 }

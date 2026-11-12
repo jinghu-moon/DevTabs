@@ -114,6 +114,58 @@ fn clean_user(text: &str) -> String {
     }
     value.into()
 }
+pub(crate) fn message(v: &Value) -> Option<Turn> {
+    if v["isSidechain"] == true || v["isMeta"] == true {
+        return None;
+    }
+    let p = &v["payload"];
+    let pair = match v["type"].as_str() {
+        Some("user") if v["isMeta"] != true && v["isSidechain"] != true => {
+            Some((true, content(&v["message"]["content"])))
+        }
+        Some("assistant") => Some((false, content(&v["message"]["content"]))),
+        Some("event_msg") if p["type"] == "user_message" => Some((true, content(&p["message"]))),
+        Some("event_msg") if p["type"] == "agent_message" && p["phase"] != "commentary" => {
+            Some((false, content(&p["message"])))
+        }
+        Some("response_item") if p["type"] == "message" && p["phase"] != "commentary" => {
+            match p["role"].as_str() {
+                Some("user") => Some((
+                    true,
+                    p["content"]
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .map(|v| clean_user(&content(&v["text"])))
+                                .filter(|s| real_user(s))
+                                .collect::<Vec<_>>()
+                                .join("\n")
+                        })
+                        .unwrap_or_default(),
+                )),
+                Some("assistant") => Some((false, content(&p["content"]))),
+                _ => None,
+            }
+        }
+        Some("event_msg") if p["type"] == "item_completed" => {
+            let i = &p["item"];
+            match i["type"].as_str() {
+                Some("UserMessage") => Some((true, content(&i["content"]))),
+                Some("AgentMessage") if i["phase"] != "commentary" => {
+                    Some((false, content(&i["content"])))
+                }
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let (user, text) = pair?;
+    let text = if user { clean_user(&text) } else { text };
+    if text.trim().is_empty() || (user && !real_user(&text)) {
+        return None;
+    }
+    Some(Turn { user, text })
+}
 pub fn turns(text: &str) -> Vec<Turn> {
     let mut out: Vec<Turn> = vec![];
     let mut previous = None;
@@ -121,54 +173,9 @@ pub fn turns(text: &str) -> Vec<Turn> {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let p = &v["payload"];
-        let pair = match v["type"].as_str() {
-            Some("user") if v["isMeta"] != true && v["isSidechain"] != true => {
-                Some((true, content(&v["message"]["content"])))
-            }
-            Some("assistant") => Some((false, content(&v["message"]["content"]))),
-            Some("event_msg") if p["type"] == "user_message" => {
-                Some((true, content(&p["message"])))
-            }
-            Some("event_msg") if p["type"] == "agent_message" && p["phase"] != "commentary" => {
-                Some((false, content(&p["message"])))
-            }
-            Some("response_item") if p["type"] == "message" && p["phase"] != "commentary" => {
-                match p["role"].as_str() {
-                    Some("user") => Some((
-                        true,
-                        p["content"]
-                            .as_array()
-                            .map(|a| {
-                                a.iter()
-                                    .map(|v| clean_user(&content(&v["text"])))
-                                    .filter(|s| real_user(s))
-                                    .collect::<Vec<_>>()
-                                    .join("\n")
-                            })
-                            .unwrap_or_default(),
-                    )),
-                    Some("assistant") => Some((false, content(&p["content"]))),
-                    _ => None,
-                }
-            }
-            Some("event_msg") if p["type"] == "item_completed" => {
-                let i = &p["item"];
-                match i["type"].as_str() {
-                    Some("UserMessage") => Some((true, content(&i["content"]))),
-                    Some("AgentMessage") if i["phase"] != "commentary" => {
-                        Some((false, content(&i["content"])))
-                    }
-                    _ => None,
-                }
-            }
-            _ => None,
-        };
-        let Some((user, text)) = pair else { continue };
-        let text = if user { clean_user(&text) } else { text };
-        if text.trim().is_empty() || (user && !real_user(&text)) {
+        let Some(Turn { user, text }) = message(&v) else {
             continue;
-        }
+        };
         let text = text.chars().take(4000).collect::<String>();
         if previous.as_ref() == Some(&(user, text.clone())) {
             continue;
@@ -221,7 +228,7 @@ fn segment(file: &mut File, start: u64, limit: u64) -> std::io::Result<String> {
 pub fn read(path: &Path, project: &Path, agent: Agent) -> anyhow::Result<Option<Conversation>> {
     read_inner(path, project, agent, true)
 }
-fn read_inner(
+pub(crate) fn read_inner(
     path: &Path,
     project: &Path,
     agent: Agent,

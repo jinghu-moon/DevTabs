@@ -227,6 +227,7 @@ pub fn helper(provider: &str) {
             kind,
             child,
             cwd: v["cwd"].as_str().context("No cwd")?.into(),
+            transcript: v["transcript_path"].as_str().map(PathBuf::from),
         };
         use interprocess::local_socket::{GenericNamespaced, Stream, prelude::*};
         let mut stream = Stream::connect(

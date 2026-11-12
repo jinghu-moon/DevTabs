@@ -209,38 +209,8 @@ pub(super) struct Summary {
     pub links: Vec<String>,
     pub copies: Vec<crate::preview::CodeCopy>,
 }
-/// Strip numeric location suffixes from the right, preserving the drive colon.
-pub(super) fn local_reference(
-    root: &std::path::Path,
-    target: &str,
-) -> Option<(PathBuf, Option<usize>)> {
-    let mut path = target;
-    let mut line = None;
-    if let Some((prefix, number)) = path.rsplit_once(':')
-        && let Ok(n) = number.parse::<usize>()
-    {
-        path = prefix;
-        line = Some(n);
-        if let Some((prefix, number)) = path.rsplit_once(':')
-            && let Ok(n) = number.parse::<usize>()
-        {
-            path = prefix;
-            line = Some(n);
-        }
-    }
-    if let Some((prefix, fragment)) = path.split_once("#L")
-        && let Ok(n) = fragment.parse::<usize>()
-    {
-        path = prefix;
-        line = Some(n);
-    }
-    match crate::preview::reading::destination(&root.join("__overview__.md"), path).ok()? {
-        crate::preview::reading::Destination::File(path, _) => {
-            Some((path, line.filter(|n| *n > 0)))
-        }
-        _ => None,
-    }
-}
+pub(super) use crate::references::local_reference;
+
 impl Dashboard {
     pub fn cancel(&mut self, prefs: &mut model::Preferences) {
         if let Some((_, a, b)) = self.drag.take() {

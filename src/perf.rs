@@ -18,6 +18,7 @@ macro_rules! metrics {
     };
 }
 metrics! {
+    FileReferences => "files_panel.references", FilePanelDraw => "files_panel.draw",
     RoundBegin=>"round.begin",RoundEnd=>"round.end",RoundDiff=>"round.diff",RoundStore=>"round.store",TaskLifecycle=>"task.lifecycle",
     FloatingFirstFrame => "terminal.floating_first_frame", FloatingOpen => "terminal.panel_open", FloatingAttach => "terminal.floating_attach",
     OverviewStats => "overview.stats", OverviewHistory => "overview.history", OverviewGit => "overview.git", OverviewLaunch => "overview.launch",
@@ -153,6 +154,7 @@ pub enum Count {
     OverviewStale,
     OverviewCanceled,
     OverviewHistoryBytes,
+    ReferenceBytes,
     FloatingFailures,
     TerminalAttaches,
     TerminalDetaches,
@@ -181,6 +183,7 @@ const COUNT_NAMES: &[&str] = &[
     "overview.stale_results",
     "overview.canceled_requests",
     "overview.history_read_bytes",
+    "files_panel.reference_bytes",
     "terminal.window_failures",
     "terminal.attaches",
     "terminal.detaches",
