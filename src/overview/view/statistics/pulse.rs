@@ -158,9 +158,7 @@ mod tests {
                     .iter()
                     .filter(|line| {
                         line.spans.len() == 13
-                            && line.spans[1..]
-                                .iter()
-                                .all(|span| matches!(span.content.as_ref(), "██" | "□ "))
+                            && line.spans[1..].iter().all(|span| span.content == "██")
                     })
                     .collect();
                 assert_eq!(rows.len(), 7);
@@ -171,7 +169,7 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join("\n");
                 assert!(!text.contains("··"));
-                assert!(text.contains("□"));
+                assert!(!text.contains("□"));
                 assert!(text.contains(if language == crate::i18n::Language::ZhCn {
                     "11月"
                 } else {
@@ -238,7 +236,8 @@ mod tests {
                             .unwrap();
                         assert_eq!(cell.width(), width);
                         if day > today {
-                            assert_eq!(cell.content, "□ ");
+                            assert_eq!(cell.content, "██");
+                            assert_eq!(cell.style.fg, Some(activity_color(0)));
                             assert!(cell.style.bg.is_none());
                         } else {
                             assert_eq!(cell.content, "██");

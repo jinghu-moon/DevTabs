@@ -37,4 +37,4 @@ cargo fmt --check
 
 ## 未来日期样式补正
 
-随后根据真机反馈，将紧凑布局中误恢复的点号改回每日期一个空心方框 `□`，仍占两个字符，保留日历宽度与命中。七种当前星期的既有断言先复现点号错误，再验证方框；日志在 `artifacts/calendar-future-cells/`。当前测试程序为 `artifacts/DevTabs-0.4.0-calendar-future-cells/devtabs.exe`。
+随后根据真机反馈，将紧凑布局中误恢复的点号改回每日期一个空心方框 `□`，仍占两个字符，保留日历宽度与命中。七种当前星期的既有断言先复现点号错误，再验证方框；日志在 `artifacts/calendar-future-cells/`。当时的测试程序为 `artifacts/DevTabs-0.4.0-calendar-future-cells/devtabs.exe`。此样式随后被文档 47 的统一灰色实心格取代。

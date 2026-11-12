@@ -52,6 +52,9 @@ pub(super) struct Columns {
     pub stats: Option<Rect>,
     pub dividers: [Option<Rect>; 2],
 }
+// 24 heatmap columns + widest weekday label (3) + panel padding (4),
+// rounded up to leave one spare column. Applies even to saved narrow ratios.
+const MIN_STATS_WIDTH: u16 = 32;
 pub(super) fn columns(
     body: Rect,
     detail: bool,
@@ -75,7 +78,7 @@ pub(super) fn columns(
         / 10000) as u16;
     a = a.clamp(
         if three { 44 } else { 42 },
-        usable.saturating_sub(if three { 90 } else { 60 }),
+        usable.saturating_sub(if three { 60 + MIN_STATS_WIDTH } else { 60 }),
     );
     out.list.width = a;
     out.dividers[0] = Some(Rect::new(body.x + a, body.y, 1, body.height));
@@ -83,7 +86,7 @@ pub(super) fn columns(
     let remaining = usable - a;
     if three {
         let b = ((u32::from(usable) * u32::from(middle.unwrap_or(3800).min(10000))) / 10000) as u16;
-        let b = b.clamp(60, remaining - 30);
+        let b = b.clamp(60, remaining - MIN_STATS_WIDTH);
         out.detail = Some(Rect::new(x, body.y, b, body.height));
         out.dividers[1] = Some(Rect::new(x + b, body.y, 1, body.height));
         out.stats = Some(Rect::new(x + b + 1, body.y, remaining - b, body.height));
@@ -1689,11 +1692,12 @@ impl Overview {
                                 );
                             }
                         } else if let Some(r) = c.detail {
-                            self.config.overview.detail_ratio = Some(
-                                (u32::from(mouse.column.saturating_sub(r.x)) * 10000
-                                    / u32::from(width))
-                                .min(10000) as u16,
-                            );
+                            let max =
+                                r.width + c.stats.map_or(0, |stats| stats.width) - MIN_STATS_WIDTH;
+                            let wanted = mouse.column.saturating_sub(r.x).clamp(60, max);
+                            self.config.overview.detail_ratio =
+                                Some((u32::from(wanted) * 10000 / u32::from(width)).min(10000)
+                                    as u16);
                         }
                     }
                 }

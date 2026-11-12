@@ -2315,3 +2315,71 @@ fn statistics_modal_covers_background_and_restores_it_after_mouse_close() {
         }
     }
 }
+
+#[test]
+fn minimum_statistics_width_keeps_the_full_heatmap_after_dragging_to_the_limit() {
+    let t = worker::isolated();
+    for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
+        crate::i18n::with_language(language, || {
+            let mut app = overview();
+            app.show_detail = true;
+            app.show_stats = true;
+            app.config.overview.detail_ratio = Some(10000);
+            let path = app.path().unwrap();
+            app.stats.insert(
+                config::key(&path),
+                stats::Stats {
+                    source_ready: true,
+                    disk_ready: true,
+                    weeks: vec![0; 12],
+                    days: vec![0; 84],
+                    ..Default::default()
+                },
+            );
+            for width in [160, 180, 200, 260] {
+                draw(&mut app, width, 42);
+                let columns = app.dashboard.columns.unwrap();
+                let rect = columns.stats.unwrap();
+                assert!(
+                    rect.width >= 32,
+                    "statistics must reserve the heatmap and padding"
+                );
+                let divider = columns.dividers[1].unwrap();
+                app.dashboard_mouse(
+                    &t.worker,
+                    mouse_at(
+                        MouseEventKind::Down(MouseButton::Left),
+                        divider.x,
+                        divider.y + 2,
+                    ),
+                )
+                .unwrap();
+                app.dashboard_mouse(
+                    &t.worker,
+                    mouse_at(
+                        MouseEventKind::Drag(MouseButton::Left),
+                        width - 1,
+                        divider.y + 2,
+                    ),
+                )
+                .unwrap();
+                draw(&mut app, width, 42);
+                assert!(app.dashboard.columns.unwrap().stats.unwrap().width >= 32);
+                assert_eq!(
+                    app.dashboard
+                        .heatmap_hits
+                        .iter()
+                        .filter(|(_, action)| matches!(
+                            action,
+                            dashboard::HeatmapAction::Day { .. }
+                        ))
+                        .count(),
+                    84
+                );
+                // Cancel the transient drag without editing any real config.
+                app.dashboard_key(&t.worker, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                    .unwrap();
+            }
+        });
+    }
+}

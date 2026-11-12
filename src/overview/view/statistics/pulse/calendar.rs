@@ -198,16 +198,12 @@ pub(in crate::overview) fn render(s: &stats::Stats, width: usize, today: u64, ye
             let date = first + index as u64;
             let future = date > today;
             let n = days[index];
-            row.push(if future {
-                Span::styled("□ ", dim())
+            let level = if future || n == 0 {
+                0
             } else {
-                let level = if n == 0 {
-                    0
-                } else {
-                    1 + (u64::from(n) * 3 / u64::from(max)) as usize
-                };
-                Span::styled("██", Style::new().fg(activity_color(level)))
-            });
+                1 + (u64::from(n) * 3 / u64::from(max)) as usize
+            };
+            row.push(Span::styled("██", Style::new().fg(activity_color(level))));
             out.hits.push((
                 row_index,
                 label_width + week * step,
