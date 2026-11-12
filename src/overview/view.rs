@@ -509,13 +509,27 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             } => {
                 let rect = popup(frame, 110, area.height.saturating_sub(3));
                 frame.render_widget(block(format!(" {} ", t("history"))), rect);
+                let sessions = app
+                    .history
+                    .as_ref()
+                    .map(|h| {
+                        h.sessions
+                            .iter()
+                            .filter(|c| history::matches(c, &app.dashboard.history_query))
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let inner = rect.inner(Margin::new(2, 1));
+                let list_height = (sessions.len().min(8) as u16)
+                    .max(1)
+                    .min((inner.height / 3).max(1));
                 let sections = UiLayout::vertical([
                     Constraint::Length(3),
-                    Constraint::Percentage(35),
+                    Constraint::Length(list_height),
                     Constraint::Min(1),
-                    Constraint::Length(2),
+                    Constraint::Length(1),
                 ])
-                .split(rect.inner(Margin::new(2, 1)));
+                .split(inner);
                 frame.render_widget(
                     Paragraph::new(format!(
                         "{}\n/ {}",
@@ -529,16 +543,6 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     .wrap(Wrap { trim: false }),
                     sections[0],
                 );
-                let sessions = app
-                    .history
-                    .as_ref()
-                    .map(|h| {
-                        h.sessions
-                            .iter()
-                            .filter(|c| history::matches(c, &app.dashboard.history_query))
-                            .collect::<Vec<_>>()
-                    })
-                    .unwrap_or_default();
                 let rows = sessions
                     .iter()
                     .map(|s| {
@@ -567,30 +571,74 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     &mut state,
                 );
                 app.dialog_list = Some((sections[1], state.offset()));
-                app.dialog_preview = sections[2];
-                let mut lines = vec![];
-                if let Some(session) = sessions.get(*selected) {
-                    for turn in &session.turns {
-                        lines.push(Line::from(Span::styled(
-                            t(if turn.user { "user" } else { "assistant" }),
-                            Style::new().fg(palette().accent),
-                        )));
-                        lines.extend(turn.text.lines().map(|s| Line::from(s.to_owned())));
-                        lines.push(Line::from(""))
-                    }
-                } else {
-                    lines.push(Line::from(if app.dashboard.history_pending {
-                        t("loading")
-                    } else {
-                        t("history_empty")
-                    }))
-                }
+                let preview = Rect::new(
+                    sections[2].x,
+                    sections[2].y.saturating_add(1),
+                    sections[2].width.saturating_sub(1),
+                    sections[2].height.saturating_sub(1),
+                );
+                app.dialog_preview = preview;
                 frame.render_widget(
-                    Paragraph::new(lines)
-                        .wrap(Wrap { trim: false })
-                        .scroll((*scroll, 0)),
+                    Block::default()
+                        .borders(ratatui::widgets::Borders::TOP)
+                        .title(format!(" {} ", t("overview.conversation")))
+                        .border_style(Style::new().fg(palette().muted)),
                     sections[2],
                 );
+                let lines = if let Some(session) = sessions.get(*selected) {
+                    let key = format!(
+                        "{:?}|{}|{}|{:?}|{:?}",
+                        session.file,
+                        session.id,
+                        preview.width,
+                        crate::appearance::theme(),
+                        crate::i18n::language()
+                    );
+                    if app
+                        .dashboard
+                        .history_preview
+                        .as_ref()
+                        .is_none_or(|(cached, _)| *cached != key)
+                    {
+                        let mut lines = Vec::new();
+                        let light = crate::appearance::theme() == crate::appearance::Theme::Light;
+                        for turn in &session.turns {
+                            lines.push(role_heading(turn.user));
+                            let color = role_color(turn.user);
+                            for mut line in crate::preview::markdown_summary(
+                                &turn.text,
+                                preview.width.saturating_sub(2).max(1),
+                                light,
+                            ) {
+                                line.spans
+                                    .insert(0, Span::styled("▎ ", Style::new().fg(color)));
+                                lines.push(line);
+                            }
+                            lines.push(Line::default());
+                        }
+                        app.dashboard.history_preview = Some((key, lines));
+                    }
+                    app.dashboard.history_preview.as_ref().unwrap().1.clone()
+                } else {
+                    vec![Line::from(t(if app.dashboard.history_pending {
+                        "loading"
+                    } else {
+                        "history_empty"
+                    }))]
+                };
+                let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });
+                let count = paragraph.line_count(preview.width).min(u16::MAX as usize) as u16;
+                let visible_scroll = (*scroll).min(count.saturating_sub(preview.height));
+                frame.render_widget(paragraph.scroll((visible_scroll, 0)), preview);
+                if count > preview.height && preview.height > 0 {
+                    frame.render_stateful_widget(
+                        Scrollbar::new(ScrollbarOrientation::VerticalRight),
+                        Rect::new(sections[2].x, preview.y, sections[2].width, preview.height),
+                        &mut ScrollbarState::new(count.into())
+                            .position(visible_scroll.into())
+                            .viewport_content_length(preview.height.into()),
+                    );
+                }
                 if let Some(h) = &app.history {
                     frame.render_widget(
                         Paragraph::new(tf(
@@ -603,6 +651,9 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                         )),
                         sections[3],
                     )
+                }
+                if let Some(Dialog::History { scroll, .. }) = &mut app.dialog {
+                    *scroll = visible_scroll;
                 }
             }
             Dialog::Batch => {
@@ -999,6 +1050,27 @@ fn section(title: String, width: u16) -> Line<'static> {
     }
     Line::from(spans)
 }
+fn role_color(user: bool) -> ratatui::style::Color {
+    use ratatui::style::Color;
+    let light = crate::appearance::theme() == crate::appearance::Theme::Light;
+    match (user, light) {
+        (true, true) => Color::Rgb(145, 84, 0),
+        (true, false) => Color::Rgb(237, 174, 85),
+        (false, true) => Color::Rgb(0, 82, 160),
+        (false, false) => Color::Rgb(125, 207, 255),
+    }
+}
+fn role_heading(user: bool) -> Line<'static> {
+    use ratatui::style::Color;
+    let light = crate::appearance::theme() == crate::appearance::Theme::Light;
+    Line::from(Span::styled(
+        format!(" {} ", t(if user { "user" } else { "overview.role_ai" })),
+        Style::new()
+            .fg(if light { Color::White } else { Color::Black })
+            .bg(role_color(user))
+            .bold(),
+    ))
+}
 fn conversation(
     app: &mut Overview,
     path: &std::path::Path,
@@ -1093,28 +1165,9 @@ fn conversation(
         )));
     }
     for turn in selected {
-        use ratatui::style::Color;
         let light = crate::appearance::theme() == crate::appearance::Theme::Light;
-        let role_color = match (turn.user, light) {
-            (true, true) => Color::Rgb(145, 84, 0),
-            (true, false) => Color::Rgb(237, 174, 85),
-            (false, true) => Color::Rgb(0, 82, 160),
-            (false, false) => Color::Rgb(125, 207, 255),
-        };
-        lines.push(Line::from(Span::styled(
-            format!(
-                " {} ",
-                t(if turn.user {
-                    "user"
-                } else {
-                    "overview.role_ai"
-                })
-            ),
-            Style::new()
-                .fg(if light { Color::White } else { Color::Black })
-                .bg(role_color)
-                .bold(),
-        )));
+        let role_color = role_color(turn.user);
+        lines.push(role_heading(turn.user));
         let limit = if app.dashboard.expanded { 8192 } else { 2048 };
         let text = if turn.user {
             turn.text.chars().take(limit).collect::<String>()

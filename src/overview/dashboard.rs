@@ -153,6 +153,7 @@ pub(super) struct Dashboard {
     pub expand_hits: Vec<(Rect, String)>,
     pub expanded_projects: BTreeSet<String>,
     pub history_query: String,
+    pub history_preview: Option<(String, Vec<Line<'static>>)>,
 }
 pub(super) struct TextSelection {
     pub buffer: ratatui::buffer::Buffer,

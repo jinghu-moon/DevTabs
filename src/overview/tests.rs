@@ -2383,3 +2383,139 @@ fn minimum_statistics_width_keeps_the_full_heatmap_after_dragging_to_the_limit()
         });
     }
 }
+
+#[test]
+fn history_dialog_sizes_the_catalogue_to_rows_and_renders_markdown() {
+    for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
+        crate::i18n::with_language(language, || {
+            for (width, height, count) in [(200, 70, 7), (120, 40, 1), (90, 30, 20)] {
+                let mut app = overview();
+                app.history = Some(history::History {
+                    sessions: (0..count).map(|i| history::Conversation {
+                        id: format!("dialog-{i}"), timestamp: String::new(),
+                        prompt: format!("Session {i}"), file: PathBuf::new(),
+                        turns: vec![history::Turn { user: true, text: "**Question**".into() },
+                            history::Turn { user: false, text: "## Answer\n\nA **bold** result.\n\n```rust\nfn main() {}\n```\n\n| File | State |\n|---|---|\n| src | Done |".into() }],
+                    }).collect(), ..Default::default()
+                });
+                app.dialog = Some(Dialog::History {
+                    path: "a".into(),
+                    agent: Agent::Codex,
+                    selected: 0,
+                    scroll: 0,
+                });
+                let buffer = draw(&mut app, width, height);
+                let (list, _) = app.dialog_list.unwrap();
+                assert!(
+                    list.height <= count.min(8) as u16,
+                    "unused catalogue rows must not reserve 35% of the popup"
+                );
+                assert!(app.dialog_preview.y <= list.bottom() + 2);
+                let preview = app.dialog_preview;
+                let text: String = (preview.y..preview.bottom())
+                    .map(|y| {
+                        (preview.x..preview.right())
+                            .map(|x| buffer[(x, y)].symbol())
+                            .collect::<String>()
+                    })
+                    .collect();
+                assert!(text.contains("Answer"));
+                assert!(text.contains("Question"));
+                assert!(!text.contains("**Question**"));
+                assert!(!text.contains("## Answer"));
+                assert!(!text.contains("```rust"));
+                assert!(buffer.content.iter().any(|cell| cell.symbol() == "b"
+                    && cell.modifier.contains(ratatui::style::Modifier::BOLD)));
+            }
+        });
+    }
+}
+
+#[test]
+fn history_dialog_scroll_clamps_and_worker_refresh_invalidates_markdown() {
+    let workers = worker::isolated();
+    let mut app = overview();
+    let make_history = |body: String| history::History {
+        sessions: vec![history::Conversation {
+            id: "same-id".into(),
+            timestamp: String::new(),
+            prompt: "Session".into(),
+            file: "same-file.jsonl".into(),
+            turns: vec![history::Turn {
+                user: false,
+                text: body,
+            }],
+        }],
+        ..Default::default()
+    };
+    app.history = Some(make_history(
+        (0..80).map(|i| format!("**Entry {i}**\n\n")).collect(),
+    ));
+    app.dialog = Some(Dialog::History {
+        path: "a".into(),
+        agent: Agent::Codex,
+        selected: 0,
+        scroll: 0,
+    });
+    draw(&mut app, 120, 35);
+    let cache = app.dashboard.history_preview.as_ref().unwrap().1.as_ptr();
+    app.key(
+        &workers.worker,
+        KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+    )
+    .unwrap();
+    draw(&mut app, 120, 35);
+    assert_eq!(
+        app.dashboard.history_preview.as_ref().unwrap().1.as_ptr(),
+        cache,
+        "scroll reuses parsed Markdown"
+    );
+    if let Some(Dialog::History { scroll, .. }) = &mut app.dialog {
+        *scroll = u16::MAX;
+    }
+    let buffer = draw(&mut app, 120, 35);
+    let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
+    assert!(
+        text.contains("Entry 79"),
+        "scrolling past the end must retain the final message"
+    );
+    assert!(matches!(app.dialog, Some(Dialog::History { scroll, .. }) if scroll < u16::MAX));
+    workers
+        .replies
+        .send(Reply::History(
+            config::key(std::path::Path::new("a")),
+            app.dashboard.history_ticket,
+            make_history("## Refreshed\n\n**New body**".into()),
+        ))
+        .unwrap();
+    app.poll(&workers.worker).unwrap();
+    assert!(app.dashboard.history_preview.is_none());
+    let buffer = draw(&mut app, 90, 30);
+    let text: String = buffer.content.iter().map(|c| c.symbol()).collect();
+    assert!(text.contains("Refreshed"));
+    assert!(!text.contains("## Refreshed"));
+    assert!(matches!(
+        app.dialog,
+        Some(Dialog::History { scroll: 0, .. })
+    ));
+    let preview = app.dialog_preview;
+    for _ in 0..20 {
+        app.mouse(
+            &workers.worker,
+            mouse_at(MouseEventKind::ScrollDown, preview.x, preview.y),
+        )
+        .unwrap();
+        draw(&mut app, 90, 30);
+    }
+    assert!(matches!(
+        app.dialog,
+        Some(Dialog::History { scroll: 0, .. })
+    ));
+    app.key(
+        &workers.worker,
+        KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    draw(&mut app, 90, 30);
+    assert_eq!(app.dialog_list.unwrap().0.height, 1);
+}

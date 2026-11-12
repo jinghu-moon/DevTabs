@@ -664,6 +664,7 @@ impl Overview {
     }
     fn open_history(&mut self, w: &Workers, path: PathBuf) -> Result<()> {
         self.dashboard.history_query.clear();
+        self.dashboard.history_preview = None;
         let agent = self.options_for(&path).agent;
         anyhow::ensure!(agent != Agent::Shell, "{}", t("history_shell"));
         self.history = self
@@ -881,6 +882,7 @@ impl Overview {
                                 && let Some(old) = h.sessions.iter_mut().find(|s| s.id == c.id)
                             {
                                 old.turns = c.turns;
+                                self.dashboard.history_preview = None;
                             }
                             self.dashboard.summary_cache = None;
                         }
@@ -897,6 +899,7 @@ impl Overview {
                         self.dashboard
                             .store_context(format!("{key}|{agent:?}"), result.clone());
                     }
+                    self.dashboard.history_preview = None;
                     self.history = Some(result);
                 }
                 Reply::Context(key, agent, ticket, result)
