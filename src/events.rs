@@ -285,6 +285,8 @@ mod windows {
             if key.kind == KeyEventKind::Release {
                 if self.opening.is_empty() {
                     self.queued.push_back(input);
+                } else {
+                    self.opening.push(input);
                 }
                 return;
             }
@@ -296,7 +298,7 @@ mod windows {
                 .flat_map(|e| {
                     std::iter::repeat_n(
                         match &e.event {
-                            Event::Key(k) => match k.code {
+                            Event::Key(k) if k.kind != KeyEventKind::Release => match k.code {
                                 KeyCode::Esc => Some('\x1b'),
                                 KeyCode::Char(c) => Some(c),
                                 _ => None,
@@ -486,6 +488,31 @@ mod windows {
                 source.queued.len(),
                 2,
                 "ordinary Esc must remain an application key"
+            );
+        }
+        #[test]
+        fn escape_paste_probe_keeps_release_and_real_delimiter_releases_are_not_text() {
+            let mut source = Events::new().unwrap();
+            source.key(raw(27, 27, 1));
+            let mut up = raw(27, 27, 1);
+            up.bKeyDown = 0;
+            source.key(up);
+            assert_eq!(source.opening.len(), 2);
+            source.queued.extend(source.opening.drain(..));
+            assert!(
+                matches!(source.queued.pop_front().unwrap().event,Event::Key(k) if k.kind==KeyEventKind::Press)
+            );
+            assert!(
+                matches!(source.queued.pop_front().unwrap().event,Event::Key(k) if k.kind==KeyEventKind::Release)
+            );
+            for unit in "\x1b[200~中文\x1b[201~".encode_utf16() {
+                let mut record = raw(unit, 0, 1);
+                source.key(record);
+                record.bKeyDown = 0;
+                source.key(record);
+            }
+            assert!(
+                matches!(source.queued.pop_front().unwrap().event,Event::Paste(text) if text=="中文")
             );
         }
         #[test]

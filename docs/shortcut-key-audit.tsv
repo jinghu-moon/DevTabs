@@ -55,7 +55,6 @@ control	src/overview.rs	KeyCode::PageUp => {
 control	src/overview.rs	KeyCode::PageUp if key.modifiers.contains(KeyModifiers::ALT) => {
 control	src/overview.rs	KeyCode::Up => {
 control	src/overview.rs	if up { KeyCode::Up } else { KeyCode::Down },
-control	src/overview.rs	return self.key(w, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 control	src/overview/dashboard.rs	&& !key.modifiers.contains(KeyModifiers::ALT)
 control	src/overview/dashboard.rs	&& !mouse.modifiers.contains(KeyModifiers::ALT)
 control	src/overview/dashboard.rs	&& key.modifiers == KeyModifiers::CONTROL
@@ -386,38 +385,11 @@ widget	src/app/review.rs	if key.code == KeyCode::Char('c') {
 widget	src/app/review.rs	if key.code == KeyCode::Char('k') {
 widget	src/app/review.rs	if key.code == KeyCode::Esc {
 widget	src/app/review.rs	self.review_key(KeyEvent::new(key, KeyModifiers::NONE));
-widget	src/overview.rs	.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
-widget	src/overview.rs	.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-widget	src/overview.rs	KeyCode::Char('1') => {
-widget	src/overview.rs	KeyCode::Char('2') => {
-widget	src/overview.rs	KeyCode::Char('3') => {
-widget	src/overview.rs	KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-widget	src/overview.rs	KeyCode::Char('c' | 'C') => {
-widget	src/overview.rs	KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-widget	src/overview.rs	KeyCode::Char('e')
-widget	src/overview.rs	KeyCode::Char('l' | 'L') => options.layout = next_layout(options.layout),
-widget	src/overview.rs	KeyCode::Char('m' | 'M') => {
-widget	src/overview.rs	KeyCode::Char('n' | 'N') => options.new_instance = !options.new_instance,
-widget	src/overview.rs	KeyCode::Char('n' | 'N') => {
-widget	src/overview.rs	KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::ALT) => {
-widget	src/overview.rs	KeyCode::Char('r' | 'R') if options.agent != Agent::Shell => {
-widget	src/overview.rs	KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-widget	src/overview.rs	KeyCode::Char('t' | 'T') => *new_tab = !*new_tab,
-widget	src/overview.rs	KeyCode::Char('w' | 'W') => options.new_window = !options.new_window,
-widget	src/overview.rs	KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
 widget	src/overview.rs	KeyCode::Char(c)
-widget	src/overview.rs	KeyCode::Delete
-widget	src/overview.rs	KeyCode::Delete => {
-widget	src/overview.rs	KeyCode::Delete if !self.marked.is_empty() => {
-widget	src/overview.rs	KeyCode::Down
 widget	src/overview.rs	KeyCode::Down => *selected += 1,
 widget	src/overview.rs	KeyCode::Down => *selected = (*selected + 1).min(2),
 widget	src/overview.rs	KeyCode::Down => self.batch_scroll = self.batch_scroll.saturating_add(1),
 widget	src/overview.rs	KeyCode::Enter => set_draft_value(options, field, value)?,
-widget	src/overview.rs	KeyCode::Enter if key.modifiers == KeyModifiers::NONE => {
-widget	src/overview.rs	KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-widget	src/overview.rs	KeyCode::Enter | KeyCode::Char('p' | 'P' | 'n' | 'N')
-widget	src/overview.rs	KeyCode::F(2) => {
 widget	src/overview.rs	KeyCode::PageDown => *scroll = scroll.saturating_add(6),
 widget	src/overview.rs	KeyCode::PageUp => *scroll = scroll.saturating_sub(6),
 widget	src/overview.rs	KeyCode::PageUp => self.batch_scroll = self.batch_scroll.saturating_sub(10),
@@ -427,44 +399,12 @@ widget	src/overview.rs	KeyCode::Up => *selected = selected.saturating_sub(1),
 widget	src/overview.rs	KeyCode::Up => self.batch_scroll = self.batch_scroll.saturating_sub(1),
 widget	src/overview.rs	KeyEvent::new(
 widget	src/overview.rs	KeyModifiers::NONE,
-widget	src/overview.rs	guard: KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-widget	src/overview.rs	guard: KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-widget	src/overview.rs	guard: KeyCode::Char('e') if key.modifiers.contains(KeyModifiers::CONTROL) && !options.extra_sessions.is_empty() =>
-widget	src/overview.rs	guard: KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::ALT) => {
-widget	src/overview.rs	guard: KeyCode::Char('r' | 'R') if options.agent != Agent::Shell => {
-widget	src/overview.rs	guard: KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-widget	src/overview.rs	guard: KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
 widget	src/overview.rs	guard: KeyCode::Char(c) if !ctrl => {
-widget	src/overview.rs	guard: KeyCode::Char(c) if !key .modifiers .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
-widget	src/overview.rs	guard: KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && query.len() < 256 =>
-widget	src/overview.rs	guard: KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && value.len() < 32768 =>
-widget	src/overview.rs	guard: KeyCode::Delete if !self.marked.is_empty() => {
-widget	src/overview.rs	guard: KeyCode::Delete if key.modifiers.contains(KeyModifiers::CONTROL) && field >= 2 =>
-widget	src/overview.rs	guard: KeyCode::Down if key.modifiers.contains(KeyModifiers::ALT) && *selected + 1 < self.marked.len() =>
-widget	src/overview.rs	guard: KeyCode::Enter if key.modifiers == KeyModifiers::NONE => {
-widget	src/overview.rs	guard: KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-widget	src/overview.rs	guard: KeyCode::Enter | KeyCode::Char('p' | 'P' | 'n' | 'N') if key.code == KeyCode::Enter || key.modifiers.contains(KeyModifiers::ALT) =>
 widget	src/overview.rs	guard: KeyCode::Esc if !self.query.is_empty() => {
 widget	src/overview.rs	guard: KeyCode::Esc if self.dashboard.overlay.is_some() => {
 widget	src/overview.rs	guard: KeyCode::PageDown if key.modifiers.contains(KeyModifiers::ALT) => {
 widget	src/overview.rs	guard: KeyCode::PageUp if key.modifiers.contains(KeyModifiers::ALT) => {
-widget	src/overview.rs	guard: KeyCode::Up if key.modifiers.contains(KeyModifiers::ALT) && *selected > 0 =>
-widget	src/overview.rs	if !key.modifiers.contains(KeyModifiers::CONTROL)
-widget	src/overview.rs	if key.code == KeyCode::Backspace {
-widget	src/overview.rs	if key.code == KeyCode::Down {
-widget	src/overview.rs	if key.code == KeyCode::Enter
-widget	src/overview.rs	if key.code == KeyCode::Enter {
-widget	src/overview.rs	if key.code == KeyCode::Esc {
-widget	src/overview.rs	if key.modifiers.contains(KeyModifiers::ALT)
-widget	src/overview.rs	if key.modifiers.contains(KeyModifiers::ALT) && *selected > 0 =>
-widget	src/overview.rs	if key.modifiers.contains(KeyModifiers::CONTROL)
-widget	src/overview.rs	if key.modifiers.contains(KeyModifiers::CONTROL) && field >= 2 =>
-widget	src/overview.rs	if matches!(key.code, KeyCode::Char('r' | 'R')) {
 widget	src/overview.rs	let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-widget	src/overview.rs	options.fresh = matches!(key.code, KeyCode::Char('n' | 'N'));
-widget	src/overview.rs	|| key.modifiers.contains(KeyModifiers::ALT) =>
-widget	src/overview.rs	} else if key.code == KeyCode::Up {
-widget	src/overview.rs	} else if let KeyCode::Char(c) = key.code
 widget	src/settings/shortcut_ui.rs	(KeyCode::Char(' '), Mods::NONE) => Some(Action::Prefer(self.binding)),
 widget	src/settings/shortcut_ui.rs	(KeyCode::Char('/'), Mods::NONE) => {
 widget	src/settings/shortcut_ui.rs	(KeyCode::Char('a'), Mods::NONE) => Some(Action::Menu),
@@ -654,3 +594,29 @@ widget	src/settings/shortcut_ui.rs	&& !matches!(key.code, KeyCode::Modifier(_))
 widget	src/settings/shortcut_ui.rs	KeyCode::Delete => {
 widget	src/settings/shortcut_ui.rs	KeyCode::Down => *selected = selected.saturating_add(1),
 widget	src/settings/shortcut_ui.rs	} else if key.code == KeyCode::Enter && key.modifiers == Mods::CONTROL {
+widget	src/overview.rs	&& !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+widget	src/overview.rs	KeyCode::Delete if mods.contains(KeyModifiers::CONTROL) && field >= 2 => {
+widget	src/overview.rs	KeyCode::Null
+widget	src/overview.rs	Some(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+widget	src/overview.rs	guard: KeyCode::Char(c) if !mods.contains(KeyModifiers::CONTROL) && query.len() < 256 =>
+widget	src/overview.rs	guard: KeyCode::Char(c) if !mods.contains(KeyModifiers::CONTROL) && value.len() < 32768 =>
+widget	src/overview.rs	guard: KeyCode::Char(c) if !mods.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
+widget	src/overview.rs	guard: KeyCode::Delete if mods.contains(KeyModifiers::CONTROL) && field >= 2 => {
+widget	src/overview.rs	if !mods.contains(KeyModifiers::CONTROL) && query.len() < 256 =>
+widget	src/overview.rs	if !mods.contains(KeyModifiers::CONTROL) && value.len() < 32768 =>
+widget	src/overview.rs	if !mods.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
+widget	src/overview.rs	if code == KeyCode::Backspace {
+widget	src/overview.rs	if code == KeyCode::Down {
+widget	src/overview.rs	if code == KeyCode::Esc {
+widget	src/overview.rs	let code = key.map_or(KeyCode::Null, |k| k.code);
+widget	src/overview.rs	let mods = key.map_or(KeyModifiers::NONE, |k| k.modifiers);
+widget	src/overview.rs	| KeyCode::Backspace
+widget	src/overview.rs	| KeyCode::Char(_)
+widget	src/overview.rs	| KeyCode::Delete
+widget	src/overview.rs	| KeyCode::Down
+widget	src/overview.rs	| KeyCode::Left
+widget	src/overview.rs	| KeyCode::PageDown
+widget	src/overview.rs	| KeyCode::PageUp
+widget	src/overview.rs	| KeyCode::Right
+widget	src/overview.rs	} else if code == KeyCode::Up {
+widget	src/overview.rs	} else if let KeyCode::Char(c) = code

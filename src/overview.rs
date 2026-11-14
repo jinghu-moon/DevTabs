@@ -163,6 +163,7 @@ pub struct Overview {
     settings_ui: Option<crate::settings::ui::SettingsUi>,
     shortcuts: crate::shortcuts::Index,
     shortcut_router: crate::shortcuts::Router,
+    key_ledger: crate::shortcuts::ledger::Ledger,
     config: Config,
     dashboard: dashboard::Dashboard,
     filter_counts: BTreeMap<model::Filter, usize>,
@@ -234,6 +235,7 @@ impl Overview {
                     .unwrap_or_default(),
             ),
             shortcut_router: Default::default(),
+            key_ledger: Default::default(),
             return_target: None,
             return_applied: false,
             dashboard: dashboard::Dashboard::default(),
@@ -1824,17 +1826,78 @@ impl Overview {
         Ok(Outcome::Stay)
     }
     fn key(&mut self, w: &Workers, key: KeyEvent) -> Result<Outcome> {
-        let original = self.dialog.clone();
-        let before = self.edit_serial;
-        let result = self.key_inner(w, key);
-        if result.is_ok()
-            && self.edit_serial > before
-            && let Some(form @ (Dialog::Input(..) | Dialog::PresetPolicy { .. })) = original.clone()
-        {
-            self.pending_forms.insert(self.edit_serial, form);
+        self.key_inner(w, key)
+    }
+    fn input_context(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.dialog
+            .as_ref()
+            .map(Self::dialog_context)
+            .hash(&mut hash);
+        self.dashboard_context().hash(&mut hash);
+        self.settings_ui.is_some().hash(&mut hash);
+        self.dashboard.viewer.is_some().hash(&mut hash);
+        hash.finish()
+    }
+    fn native_key(
+        &mut self,
+        w: &Workers,
+        key: KeyEvent,
+        raw: Option<crate::shortcuts::ledger::RawKey>,
+    ) -> Result<Outcome> {
+        use crate::shortcuts::ledger::{Existing, Owner};
+        let context = self.input_context();
+        if let Some(raw) = &raw {
+            if matches!(
+                self.key_ledger.existing(raw, context),
+                Existing::Consume | Existing::Forward { .. }
+            ) {
+                if self.key_ledger.suppressed_repress {
+                    self.message = "松开后再按一次 / Release the key, then press again".into();
+                    self.key_ledger.suppressed_repress = false;
+                }
+                return Ok(Outcome::Stay);
+            }
+        } else if key.kind == KeyEventKind::Release {
+            return Ok(Outcome::Stay);
         }
-        if result.is_err() && self.dialog.is_none() {
-            self.dialog = original;
+        let scope = self
+            .dialog
+            .as_ref()
+            .map_or_else(|| self.dashboard_context(), Self::dialog_context);
+        let resolution = self
+            .shortcuts
+            .resolve(scope, &[crate::shortcuts::Chord::event(key)]);
+        let repeat = if let crate::shortcuts::Resolution::Execute(id) = resolution {
+            self.shortcuts
+                .commands
+                .iter()
+                .any(|c| c.id == id && c.repeat)
+        } else if resolution == crate::shortcuts::Resolution::AwaitSequence {
+            false
+        } else {
+            matches!(
+                key.code,
+                KeyCode::Up
+                    | KeyCode::Down
+                    | KeyCode::Left
+                    | KeyCode::Right
+                    | KeyCode::PageUp
+                    | KeyCode::PageDown
+                    | KeyCode::Backspace
+                    | KeyCode::Delete
+                    | KeyCode::Char(_)
+            )
+        };
+        let result = self.key(w, key);
+        if let Some(raw) = raw {
+            self.key_ledger
+                .own(raw, Owner::Ui { context, repeat }, false);
+        }
+        if context != self.input_context() {
+            self.key_ledger.context_changed();
+            self.shortcut_router.cancel();
         }
         result
     }
@@ -1853,513 +1916,8 @@ impl Overview {
         if let Some(outcome) = self.dashboard_key(w, key)? {
             return Ok(outcome);
         }
-        if let Some(mut dialog) = self.dialog.take() {
-            if key.code == KeyCode::Esc {
-                if let Dialog::Options { editing, .. } = &mut dialog
-                    && editing.take().is_some()
-                {
-                    self.dialog = Some(dialog);
-                    return Ok(Outcome::Stay);
-                }
-                if let Dialog::Palette { original, .. } = dialog {
-                    crate::appearance::set(original)
-                }
-                if matches!(dialog, Dialog::History { .. }) {
-                    self.dashboard.history_ticket = w.history_ticket();
-                    self.dashboard.history_pending = false;
-                }
-                return Ok(Outcome::Stay);
-            }
-            let mut keep = true;
-            if let Dialog::Options {
-                options, editing, ..
-            } = &mut dialog
-                && let Some((field, mut value)) = editing.take()
-            {
-                match key.code {
-                    KeyCode::Enter => set_draft_value(options, field, value)?,
-                    KeyCode::Tab => {
-                        set_draft_value(options, field, value)?;
-                        let next = (field + 1) % (2 + options.extra_sessions.len() * 3);
-                        *editing = Some((next, draft_value(options, next)));
-                    }
-                    KeyCode::Delete
-                        if key.modifiers.contains(KeyModifiers::CONTROL) && field >= 2 =>
-                    {
-                        options.extra_sessions.remove((field - 2) / 3);
-                    }
-                    _ => {
-                        if key.code == KeyCode::Backspace {
-                            value.pop();
-                        } else if let KeyCode::Char(c) = key.code
-                            && !key
-                                .modifiers
-                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                        {
-                            append_bounded(&mut value, &c.to_string(), 32768);
-                        }
-                        *editing = Some((field, value));
-                    }
-                }
-                self.dialog = Some(dialog);
-                return Ok(Outcome::Stay);
-            }
-            match &mut dialog {
-                Dialog::Attention { selected } => {
-                    let pending = self.attention();
-                    match key.code {
-                        KeyCode::Down => {
-                            *selected = (*selected + 1).min(pending.len().saturating_sub(1))
-                        }
-                        KeyCode::Up => *selected = selected.saturating_sub(1),
-                        KeyCode::Enter => {
-                            if let Some((target, _)) = pending.get(*selected)
-                                && let Some(work) = self
-                                    .workspaces
-                                    .values()
-                                    .flatten()
-                                    .find(|w| w.id == target.workspace)
-                            {
-                                let mut options = work.options.clone();
-                                options.workspace = Some(work.id.clone());
-                                options.navigation = Some(Box::new(crate::tasks::Navigation {
-                                    project: work.project.clone(),
-                                    workspace: work.id.clone(),
-                                    task: target.task.clone(),
-                                    session: target.session.clone(),
-                                }));
-                                return Ok(Outcome::Current(Box::new(options)));
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                Dialog::Help => {
-                    keep = false;
-                }
-                Dialog::Presets { selected } => {
-                    let names = self.config.presets.keys().cloned().collect::<Vec<_>>();
-                    *selected = (*selected).min(names.len().saturating_sub(1));
-                    match key.code {
-                        KeyCode::Up => *selected = selected.saturating_sub(1),
-                        KeyCode::Down => {
-                            *selected = (*selected + 1).min(names.len().saturating_sub(1))
-                        }
-                        KeyCode::Enter => {
-                            if let Some(name) = names.get(*selected) {
-                                self.command(w, Command::Preset(name.clone()))?;
-                                keep = false;
-                            }
-                        }
-                        KeyCode::Delete => {
-                            if let Some(name) = names.get(*selected) {
-                                self.edit(w, Edit::DeletePreset(name.clone()))?;
-                            }
-                        }
-                        KeyCode::F(2) => {
-                            if let Some(name) = names.get(*selected) {
-                                self.dialog = Some(Dialog::Input(
-                                    Input::RenamePreset(name.clone()),
-                                    name.clone(),
-                                ));
-                                keep = false;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                Dialog::PresetPolicy {
-                    name,
-                    items,
-                    selected,
-                } => match key.code {
-                    KeyCode::Up => *selected = selected.saturating_sub(1),
-                    KeyCode::Down => *selected = (*selected + 1).min(2),
-                    KeyCode::Enter => {
-                        for o in items.iter_mut().filter(|o| o.resume_id.is_some()) {
-                            o.resume_id = None;
-                            o.continue_latest = *selected == 0;
-                            o.fresh = *selected == 1;
-                            o.resume = *selected == 2;
-                        }
-                        self.edit(
-                            w,
-                            Edit::Preset(
-                                name.clone(),
-                                items.iter().map(LaunchSpec::from_options).collect(),
-                            ),
-                        )?;
-                        keep = false;
-                    }
-                    _ => {}
-                },
-                Dialog::Input(kind, value) => match key.code {
-                    KeyCode::Enter => {
-                        if matches!(kind, Input::Preset)
-                            && self.queue_options().iter().any(|o| o.resume_id.is_some())
-                        {
-                            self.dialog = Some(Dialog::PresetPolicy {
-                                name: value.clone(),
-                                items: self.queue_options(),
-                                selected: 0,
-                            });
-                            return Ok(Outcome::Stay);
-                        }
-                        let edit = match kind {
-                            Input::NewProject(root) => {
-                                Edit::NewProject(root.clone(), value.clone())
-                            }
-                            Input::RenamePreset(old) => {
-                                Edit::RenamePreset(old.clone(), value.clone())
-                            }
-                            Input::Root => Edit::Root(value.clone().into()),
-                            Input::Add => Edit::Add(value.clone().into()),
-                            Input::Exclude => Edit::Exclude(value.clone().into()),
-                            Input::Note(path, base) => {
-                                Edit::Note(path.clone(), base.clone(), value.clone())
-                            }
-                            Input::Preset => Edit::Preset(value.clone(), self.specs()),
-                        };
-                        self.edit(w, edit)?;
-                        keep = false
-                    }
-                    KeyCode::Backspace => {
-                        value.pop();
-                    }
-                    KeyCode::Char(c)
-                        if !key.modifiers.contains(KeyModifiers::CONTROL)
-                            && value.len() < 32768 =>
-                    {
-                        value.push(c)
-                    }
-                    _ => {}
-                },
-                Dialog::Options {
-                    options,
-                    new_tab,
-                    editing,
-                } => match key.code {
-                    KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        *editing = Some((0, draft_value(options, 0)))
-                    }
-                    KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        *editing = Some((1, draft_value(options, 1)))
-                    }
-                    KeyCode::Char('e')
-                        if key.modifiers.contains(KeyModifiers::CONTROL)
-                            && !options.extra_sessions.is_empty() =>
-                    {
-                        *editing = Some((2, draft_value(options, 2)))
-                    }
-                    KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        anyhow::ensure!(options.extra_sessions.len() < 16, "{}", t("input_long"));
-                        options.composition = crate::launch::Composition::Custom;
-                        options.extra_sessions.push(crate::config::SessionConfig {
-                            name: format!("Session {}", options.extra_sessions.len() + 1),
-                            command: None,
-                            directory: None,
-                        });
-                        let field = 2 + (options.extra_sessions.len() - 1) * 3;
-                        *editing = Some((field, draft_value(options, field)));
-                    }
-                    KeyCode::Char('1') => {
-                        if options.agent != Agent::Codex {
-                            options.resume_id = None;
-                        }
-                        options.agent = Agent::Codex;
-                    }
-                    KeyCode::Char('2') => {
-                        if options.agent != Agent::Claude {
-                            options.resume_id = None;
-                        }
-                        options.agent = Agent::Claude;
-                    }
-                    KeyCode::Char('3') => {
-                        options.agent = Agent::Shell;
-                        options.continue_latest = false;
-                        options.fresh = true;
-                        options.resume = false;
-                        options.resume_id = None
-                    }
-                    KeyCode::Char('r' | 'R') if options.agent != Agent::Shell => {
-                        options.resume = !options.resume;
-                        options.resume_id = None;
-                        options.fresh = false;
-                        options.continue_latest = false;
-                    }
-                    KeyCode::Char('n' | 'N') => options.new_instance = !options.new_instance,
-                    KeyCode::Char('t' | 'T') => *new_tab = !*new_tab,
-                    KeyCode::Char('w' | 'W') => options.new_window = !options.new_window,
-                    KeyCode::Char('c' | 'C') => {
-                        options.continue_latest = !options.continue_latest;
-                        options.fresh = !options.continue_latest;
-                        options.resume = false;
-                        options.resume_id = None;
-                    }
-                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        if let Some(i) = self.editing_queue.take().filter(|i| {
-                            self.marked.0.get(*i).is_some_and(|e| {
-                                config::key(&e.path) == config::key(&options.project)
-                            })
-                        }) {
-                            self.marked.0[i].frozen = Some(options.clone());
-                        } else {
-                            self.staged
-                                .insert(config::key(&options.project), options.clone());
-                            if !self.marked.contains(&options.project) {
-                                self.marked.push(options.project.clone());
-                            }
-                        }
-                        self.message = t("parity.options_staged").into_owned();
-                        keep = false;
-                    }
-                    KeyCode::Char('m' | 'M') => {
-                        options.composition = options.effective_composition().next()
-                    }
-                    KeyCode::Char('l' | 'L') => options.layout = next_layout(options.layout),
-                    KeyCode::Enter => {
-                        if *new_tab {
-                            self.start(w, vec![options.clone()])?
-                        } else {
-                            anyhow::ensure!(
-                                !self.batch.busy() && self.pending_edits == 0,
-                                "{}",
-                                t("busy")
-                            );
-                            return Ok(Outcome::Current(Box::new(options.clone())));
-                        }
-                        keep = false
-                    }
-                    _ => {}
-                },
-                Dialog::Palette {
-                    query,
-                    selected,
-                    original,
-                } => {
-                    match key.code {
-                        KeyCode::Up => *selected = selected.saturating_sub(1),
-                        KeyCode::Down => *selected += 1,
-                        KeyCode::Backspace => {
-                            query.pop();
-                            *selected = 0
-                        }
-                        KeyCode::Char(c)
-                            if !key.modifiers.contains(KeyModifiers::CONTROL)
-                                && query.len() < 256 =>
-                        {
-                            query.push(c);
-                            *selected = 0
-                        }
-                        _ => {}
-                    }
-                    let entries = self.palette_entries(query);
-                    *selected = (*selected).min(entries.len().saturating_sub(1));
-                    if let Some(e) = entries.get(*selected) {
-                        if let Command::Theme(theme) = e.command {
-                            crate::appearance::set(theme)
-                        } else {
-                            crate::appearance::set(*original)
-                        }
-                        if key.code == KeyCode::Enter {
-                            if e.enabled {
-                                let command = e.command.clone();
-                                crate::appearance::set(*original);
-                                return self.command(w, command);
-                            }
-                            self.message = t("unavailable").into()
-                        }
-                    }
-                }
-                Dialog::History {
-                    path,
-                    agent,
-                    selected,
-                    scroll,
-                } => {
-                    let n = self.history.as_ref().map_or(0, |h| {
-                        h.sessions
-                            .iter()
-                            .filter(|c| history::matches(c, &self.dashboard.history_query))
-                            .count()
-                    });
-                    match key.code {
-                        KeyCode::Up => {
-                            *selected = selected.saturating_sub(1);
-                            *scroll = 0
-                        }
-                        KeyCode::Down => {
-                            *selected = (*selected + 1).min(n.saturating_sub(1));
-                            *scroll = 0
-                        }
-                        KeyCode::PageUp => *scroll = scroll.saturating_sub(6),
-                        KeyCode::PageDown => *scroll = scroll.saturating_add(6),
-                        KeyCode::Enter | KeyCode::Char('p' | 'P' | 'n' | 'N')
-                            if key.code == KeyCode::Enter
-                                || key.modifiers.contains(KeyModifiers::ALT) =>
-                        {
-                            if key.code == KeyCode::Enter {
-                                let id = self
-                                    .history
-                                    .as_ref()
-                                    .and_then(|h| {
-                                        h.sessions
-                                            .iter()
-                                            .filter(|c| {
-                                                history::matches(c, &self.dashboard.history_query)
-                                            })
-                                            .nth(*selected)
-                                    })
-                                    .map(|c| c.id.clone())
-                                    .ok_or_else(|| anyhow::anyhow!("{}", t("history_empty")))?;
-                                self.stage_resume(path, *agent, id);
-                            } else {
-                                let mut options = self.options_for(path);
-                                options.agent = *agent;
-                                options.new_instance = true;
-                                options.workspace = None;
-                                options.recovery_id = None;
-                                options.resume_id = None;
-                                options.continue_latest = false;
-                                options.fresh = matches!(key.code, KeyCode::Char('n' | 'N'));
-                                options.resume = !options.fresh;
-                                self.selected = self.rows.iter().position(|r| matches!(r, Row::Project(p) if config::key(p) == config::key(path))).unwrap_or(self.selected);
-                                self.staged.insert(config::key(path), options);
-                            }
-                            self.message = t("parity.options_staged").into_owned();
-                            keep = false;
-                            w.history_ticket();
-                            self.detail_pending = false;
-                        }
-                        KeyCode::Backspace => {
-                            self.dashboard.history_query.pop();
-                            *selected = 0;
-                            *scroll = 0;
-                        }
-                        KeyCode::Char(c)
-                            if !key
-                                .modifiers
-                                .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
-                        {
-                            append_bounded(&mut self.dashboard.history_query, &c.to_string(), 256);
-                            *selected = 0;
-                            *scroll = 0;
-                        }
-                        KeyCode::Home => {
-                            *selected = 0;
-                            *scroll = 0;
-                        }
-                        KeyCode::End => {
-                            *selected = n.saturating_sub(1);
-                            *scroll = 0;
-                        }
-                        _ => {}
-                    }
-                }
-                Dialog::Diagnostics => {
-                    if key.code == KeyCode::Down {
-                        self.detail_scroll = self.detail_scroll.saturating_add(1);
-                    } else if key.code == KeyCode::Up {
-                        self.detail_scroll = self.detail_scroll.saturating_sub(1);
-                    }
-                }
-                Dialog::Instances { path, selected } => {
-                    let work = self
-                        .workspaces
-                        .get(&config::key(path))
-                        .cloned()
-                        .unwrap_or_default();
-                    match key.code {
-                        KeyCode::Up => *selected = selected.saturating_sub(1),
-                        KeyCode::Down => {
-                            *selected = (*selected + 1).min(work.len().saturating_sub(1))
-                        }
-                        KeyCode::Enter => {
-                            if let Some(target) = work.get(*selected) {
-                                let mut o = self.options_for(path);
-                                o.workspace = Some(target.id.clone());
-                                self.start(w, vec![o])?;
-                                keep = false;
-                            }
-                        }
-                        KeyCode::Char('n' | 'N') => {
-                            let mut o = self.options_for(path);
-                            o.new_instance = true;
-                            self.start(w, vec![o])?;
-                            keep = false;
-                        }
-                        _ => {}
-                    }
-                }
-                Dialog::Queue { selected } => {
-                    *selected = (*selected).min(self.marked.len().saturating_sub(1));
-                    match key.code {
-                        KeyCode::Enter if key.modifiers == KeyModifiers::NONE => {
-                            if let Some(options) = self.queue_options().get(*selected).cloned() {
-                                self.editing_queue = Some(*selected);
-                                self.dialog = Some(Dialog::Options {
-                                    options,
-                                    new_tab: true,
-                                    editing: None,
-                                });
-                                keep = false;
-                            }
-                        }
-                        KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            self.start(w, self.queue_options())?;
-                            keep = false;
-                        }
-                        KeyCode::Up
-                            if key.modifiers.contains(KeyModifiers::ALT) && *selected > 0 =>
-                        {
-                            self.dashboard.undo = Some(self.marked.clone());
-                            self.marked.0.swap(*selected, *selected - 1);
-                            *selected -= 1;
-                        }
-                        KeyCode::Down
-                            if key.modifiers.contains(KeyModifiers::ALT)
-                                && *selected + 1 < self.marked.len() =>
-                        {
-                            self.dashboard.undo = Some(self.marked.clone());
-                            self.marked.0.swap(*selected, *selected + 1);
-                            *selected += 1;
-                        }
-                        KeyCode::Up => *selected = selected.saturating_sub(1),
-                        KeyCode::Down => {
-                            *selected = (*selected + 1).min(self.marked.len().saturating_sub(1))
-                        }
-                        KeyCode::Delete if !self.marked.is_empty() => {
-                            self.dashboard.undo = Some(self.marked.clone());
-                            self.marked.0.remove(*selected);
-                        }
-                        KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            if let Some(previous) = self.dashboard.undo.take() {
-                                self.marked = previous;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                Dialog::Batch => {
-                    match key.code {
-                        KeyCode::Up => self.batch_scroll = self.batch_scroll.saturating_sub(1),
-                        KeyCode::Down => self.batch_scroll = self.batch_scroll.saturating_add(1),
-                        KeyCode::PageUp => self.batch_scroll = self.batch_scroll.saturating_sub(10),
-                        KeyCode::PageDown => {
-                            self.batch_scroll = self.batch_scroll.saturating_add(10)
-                        }
-                        _ => {}
-                    }
-                    if matches!(key.code, KeyCode::Char('r' | 'R')) {
-                        self.retry(w)?;
-                        keep = false
-                    }
-                }
-            }
-            if keep {
-                self.dialog = Some(dialog)
-            }
-            return Ok(Outcome::Stay);
+        if self.dialog.is_some() {
+            return self.dialog_input(w, Some(key), None);
         }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let command = match key.code {
@@ -2425,6 +1983,581 @@ impl Overview {
         } else {
             Ok(Outcome::Stay)
         }
+    }
+    fn dialog_context(dialog: &Dialog) -> &'static str {
+        match dialog {
+            Dialog::Options { editing: None, .. } => "dialog.options",
+            Dialog::Presets { .. } => "dialog.presets",
+            Dialog::Queue { .. } => "dialog.queue",
+            Dialog::History { .. } => "dialog.history",
+            Dialog::Instances { .. } => "dialog.instances",
+            Dialog::Attention { .. } => "dialog.attention",
+            Dialog::Palette { .. } => "dialog.palette",
+            Dialog::Batch => "dialog.batch",
+            Dialog::Help => "dialog.help",
+            _ => "dialog.form",
+        }
+    }
+    fn dialog_input(
+        &mut self,
+        w: &Workers,
+        key: Option<KeyEvent>,
+        direct: Option<&str>,
+    ) -> Result<Outcome> {
+        let original = self.dialog.clone();
+        let before = self.edit_serial;
+        let result = self.dialog_inner(w, key, direct);
+        if result.is_ok()
+            && self.edit_serial > before
+            && let Some(form @ (Dialog::Input(..) | Dialog::PresetPolicy { .. })) = original.clone()
+        {
+            self.pending_forms.insert(self.edit_serial, form);
+        }
+        if result.is_err() && self.dialog.is_none() {
+            self.dialog = original;
+        }
+        result
+    }
+    fn dialog_inner(
+        &mut self,
+        w: &Workers,
+        key: Option<KeyEvent>,
+        direct: Option<&str>,
+    ) -> Result<Outcome> {
+        let code = key.map_or(KeyCode::Null, |k| k.code);
+        let mods = key.map_or(KeyModifiers::NONE, |k| k.modifiers);
+        if let Some(mut dialog) = self.dialog.take() {
+            if code == KeyCode::Esc {
+                if let Dialog::Options { editing, .. } = &mut dialog
+                    && editing.take().is_some()
+                {
+                    self.dialog = Some(dialog);
+                    return Ok(Outcome::Stay);
+                }
+                if let Dialog::Palette { original, .. } = dialog {
+                    crate::appearance::set(original)
+                }
+                if matches!(dialog, Dialog::History { .. }) {
+                    self.dashboard.history_ticket = w.history_ticket();
+                    self.dashboard.history_pending = false;
+                }
+                return Ok(Outcome::Stay);
+            }
+            let context = Self::dialog_context(&dialog);
+            let editing = matches!(
+                dialog,
+                Dialog::Input(..)
+                    | Dialog::Options {
+                        editing: Some(_),
+                        ..
+                    }
+                    | Dialog::PresetPolicy { .. }
+            );
+            let command = direct.or_else(|| {
+                if editing {
+                    None
+                } else {
+                    key.and_then(|k| {
+                        match self
+                            .shortcuts
+                            .resolve(context, &[crate::shortcuts::Chord::event(k)])
+                        {
+                            crate::shortcuts::Resolution::Execute(id) => Some(id),
+                            _ => None,
+                        }
+                    })
+                }
+            });
+            let code = if command.is_some() {
+                KeyCode::Null
+            } else {
+                code
+            };
+            let mut keep = true;
+            if let Dialog::Options {
+                options, editing, ..
+            } = &mut dialog
+                && let Some((field, mut value)) = editing.take()
+            {
+                match code {
+                    KeyCode::Enter => set_draft_value(options, field, value)?,
+                    KeyCode::Tab => {
+                        set_draft_value(options, field, value)?;
+                        let next = (field + 1) % (2 + options.extra_sessions.len() * 3);
+                        *editing = Some((next, draft_value(options, next)));
+                    }
+                    KeyCode::Delete if mods.contains(KeyModifiers::CONTROL) && field >= 2 => {
+                        options.extra_sessions.remove((field - 2) / 3);
+                    }
+                    _ => {
+                        if code == KeyCode::Backspace {
+                            value.pop();
+                        } else if let KeyCode::Char(c) = code
+                            && !mods.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                        {
+                            append_bounded(&mut value, &c.to_string(), 32768);
+                        }
+                        *editing = Some((field, value));
+                    }
+                }
+                self.dialog = Some(dialog);
+                return Ok(Outcome::Stay);
+            }
+            match &mut dialog {
+                Dialog::Attention { selected } => {
+                    let pending = self.attention();
+                    match code {
+                        KeyCode::Down => {
+                            *selected = (*selected + 1).min(pending.len().saturating_sub(1))
+                        }
+                        KeyCode::Up => *selected = selected.saturating_sub(1),
+                        _ if command == Some("attention.navigate") => {
+                            if let Some((target, _)) = pending.get(*selected)
+                                && let Some(work) = self
+                                    .workspaces
+                                    .values()
+                                    .flatten()
+                                    .find(|w| w.id == target.workspace)
+                            {
+                                let mut options = work.options.clone();
+                                options.workspace = Some(work.id.clone());
+                                options.navigation = Some(Box::new(crate::tasks::Navigation {
+                                    project: work.project.clone(),
+                                    workspace: work.id.clone(),
+                                    task: target.task.clone(),
+                                    session: target.session.clone(),
+                                }));
+                                return Ok(Outcome::Current(Box::new(options)));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Dialog::Help => {
+                    keep = false;
+                }
+                Dialog::Presets { selected } => {
+                    let names = self.config.presets.keys().cloned().collect::<Vec<_>>();
+                    *selected = (*selected).min(names.len().saturating_sub(1));
+                    match code {
+                        KeyCode::Up => *selected = selected.saturating_sub(1),
+                        KeyCode::Down => {
+                            *selected = (*selected + 1).min(names.len().saturating_sub(1))
+                        }
+                        _ if command == Some("presets.apply") => {
+                            if let Some(name) = names.get(*selected) {
+                                self.command(w, Command::Preset(name.clone()))?;
+                                keep = false;
+                            }
+                        }
+                        _ if command == Some("presets.delete") => {
+                            if let Some(name) = names.get(*selected) {
+                                self.edit(w, Edit::DeletePreset(name.clone()))?;
+                            }
+                        }
+                        _ if command == Some("presets.rename") => {
+                            if let Some(name) = names.get(*selected) {
+                                self.dialog = Some(Dialog::Input(
+                                    Input::RenamePreset(name.clone()),
+                                    name.clone(),
+                                ));
+                                keep = false;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Dialog::PresetPolicy {
+                    name,
+                    items,
+                    selected,
+                } => match code {
+                    KeyCode::Up => *selected = selected.saturating_sub(1),
+                    KeyCode::Down => *selected = (*selected + 1).min(2),
+                    KeyCode::Enter => {
+                        for o in items.iter_mut().filter(|o| o.resume_id.is_some()) {
+                            o.resume_id = None;
+                            o.continue_latest = *selected == 0;
+                            o.fresh = *selected == 1;
+                            o.resume = *selected == 2;
+                        }
+                        self.edit(
+                            w,
+                            Edit::Preset(
+                                name.clone(),
+                                items.iter().map(LaunchSpec::from_options).collect(),
+                            ),
+                        )?;
+                        keep = false;
+                    }
+                    _ => {}
+                },
+                Dialog::Input(kind, value) => match code {
+                    KeyCode::Enter => {
+                        if matches!(kind, Input::Preset)
+                            && self.queue_options().iter().any(|o| o.resume_id.is_some())
+                        {
+                            self.dialog = Some(Dialog::PresetPolicy {
+                                name: value.clone(),
+                                items: self.queue_options(),
+                                selected: 0,
+                            });
+                            return Ok(Outcome::Stay);
+                        }
+                        let edit = match kind {
+                            Input::NewProject(root) => {
+                                Edit::NewProject(root.clone(), value.clone())
+                            }
+                            Input::RenamePreset(old) => {
+                                Edit::RenamePreset(old.clone(), value.clone())
+                            }
+                            Input::Root => Edit::Root(value.clone().into()),
+                            Input::Add => Edit::Add(value.clone().into()),
+                            Input::Exclude => Edit::Exclude(value.clone().into()),
+                            Input::Note(path, base) => {
+                                Edit::Note(path.clone(), base.clone(), value.clone())
+                            }
+                            Input::Preset => Edit::Preset(value.clone(), self.specs()),
+                        };
+                        self.edit(w, edit)?;
+                        keep = false
+                    }
+                    KeyCode::Backspace => {
+                        value.pop();
+                    }
+                    KeyCode::Char(c)
+                        if !mods.contains(KeyModifiers::CONTROL) && value.len() < 32768 =>
+                    {
+                        value.push(c)
+                    }
+                    _ => {}
+                },
+                Dialog::Options {
+                    options,
+                    new_tab,
+                    editing,
+                } => match code {
+                    _ if command == Some("options.debug") => {
+                        *editing = Some((0, draft_value(options, 0)))
+                    }
+                    _ if command == Some("options.arguments") => {
+                        *editing = Some((1, draft_value(options, 1)))
+                    }
+                    _ if command == Some("options.sessions.edit")
+                        && !options.extra_sessions.is_empty() =>
+                    {
+                        *editing = Some((2, draft_value(options, 2)))
+                    }
+                    _ if command == Some("options.sessions.add") => {
+                        anyhow::ensure!(options.extra_sessions.len() < 16, "{}", t("input_long"));
+                        options.composition = crate::launch::Composition::Custom;
+                        options.extra_sessions.push(crate::config::SessionConfig {
+                            name: format!("Session {}", options.extra_sessions.len() + 1),
+                            command: None,
+                            directory: None,
+                        });
+                        let field = 2 + (options.extra_sessions.len() - 1) * 3;
+                        *editing = Some((field, draft_value(options, field)));
+                    }
+                    _ if command == Some("options.codex") => {
+                        if options.agent != Agent::Codex {
+                            options.resume_id = None;
+                        }
+                        options.agent = Agent::Codex;
+                    }
+                    _ if command == Some("options.claude") => {
+                        if options.agent != Agent::Claude {
+                            options.resume_id = None;
+                        }
+                        options.agent = Agent::Claude;
+                    }
+                    _ if command == Some("options.shell") => {
+                        options.agent = Agent::Shell;
+                        options.continue_latest = false;
+                        options.fresh = true;
+                        options.resume = false;
+                        options.resume_id = None
+                    }
+                    _ if command == Some("options.resume") && options.agent != Agent::Shell => {
+                        options.resume = !options.resume;
+                        options.resume_id = None;
+                        options.fresh = false;
+                        options.continue_latest = false;
+                    }
+                    _ if command == Some("options.instance") => {
+                        options.new_instance = !options.new_instance
+                    }
+                    _ if command == Some("options.tab") => *new_tab = !*new_tab,
+                    _ if command == Some("options.window") => {
+                        options.new_window = !options.new_window
+                    }
+                    _ if command == Some("options.continue") => {
+                        options.continue_latest = !options.continue_latest;
+                        options.fresh = !options.continue_latest;
+                        options.resume = false;
+                        options.resume_id = None;
+                    }
+                    _ if command == Some("options.stage") => {
+                        if let Some(i) = self.editing_queue.take().filter(|i| {
+                            self.marked.0.get(*i).is_some_and(|e| {
+                                config::key(&e.path) == config::key(&options.project)
+                            })
+                        }) {
+                            self.marked.0[i].frozen = Some(options.clone());
+                        } else {
+                            self.staged
+                                .insert(config::key(&options.project), options.clone());
+                            if !self.marked.contains(&options.project) {
+                                self.marked.push(options.project.clone());
+                            }
+                        }
+                        self.message = t("parity.options_staged").into_owned();
+                        keep = false;
+                    }
+                    _ if command == Some("options.composition") => {
+                        options.composition = options.effective_composition().next()
+                    }
+                    _ if command == Some("options.layout") => {
+                        options.layout = next_layout(options.layout)
+                    }
+                    _ if command == Some("options.launch") => {
+                        if *new_tab {
+                            self.start(w, vec![options.clone()])?
+                        } else {
+                            anyhow::ensure!(
+                                !self.batch.busy() && self.pending_edits == 0,
+                                "{}",
+                                t("busy")
+                            );
+                            return Ok(Outcome::Current(Box::new(options.clone())));
+                        }
+                        keep = false
+                    }
+                    _ => {}
+                },
+                Dialog::Palette {
+                    query,
+                    selected,
+                    original,
+                } => {
+                    match code {
+                        KeyCode::Up => *selected = selected.saturating_sub(1),
+                        KeyCode::Down => *selected += 1,
+                        KeyCode::Backspace => {
+                            query.pop();
+                            *selected = 0
+                        }
+                        KeyCode::Char(c)
+                            if !mods.contains(KeyModifiers::CONTROL) && query.len() < 256 =>
+                        {
+                            query.push(c);
+                            *selected = 0
+                        }
+                        _ => {}
+                    }
+                    let entries = self.palette_entries(query);
+                    *selected = (*selected).min(entries.len().saturating_sub(1));
+                    if let Some(e) = entries.get(*selected) {
+                        if let Command::Theme(theme) = e.command {
+                            crate::appearance::set(theme)
+                        } else {
+                            crate::appearance::set(*original)
+                        }
+                        if command == Some("palette.execute") {
+                            if e.enabled {
+                                let command = e.command.clone();
+                                crate::appearance::set(*original);
+                                return self.command(w, command);
+                            }
+                            self.message = t("unavailable").into()
+                        }
+                    }
+                }
+                Dialog::History {
+                    path,
+                    agent,
+                    selected,
+                    scroll,
+                } => {
+                    let n = self.history.as_ref().map_or(0, |h| {
+                        h.sessions
+                            .iter()
+                            .filter(|c| history::matches(c, &self.dashboard.history_query))
+                            .count()
+                    });
+                    match code {
+                        KeyCode::Up => {
+                            *selected = selected.saturating_sub(1);
+                            *scroll = 0
+                        }
+                        KeyCode::Down => {
+                            *selected = (*selected + 1).min(n.saturating_sub(1));
+                            *scroll = 0
+                        }
+                        KeyCode::PageUp => *scroll = scroll.saturating_sub(6),
+                        KeyCode::PageDown => *scroll = scroll.saturating_add(6),
+                        _ if matches!(
+                            command,
+                            Some("history.stage" | "history.resume" | "history.fresh")
+                        ) =>
+                        {
+                            if command == Some("history.stage") {
+                                let id = self
+                                    .history
+                                    .as_ref()
+                                    .and_then(|h| {
+                                        h.sessions
+                                            .iter()
+                                            .filter(|c| {
+                                                history::matches(c, &self.dashboard.history_query)
+                                            })
+                                            .nth(*selected)
+                                    })
+                                    .map(|c| c.id.clone())
+                                    .ok_or_else(|| anyhow::anyhow!("{}", t("history_empty")))?;
+                                self.stage_resume(path, *agent, id);
+                            } else {
+                                let mut options = self.options_for(path);
+                                options.agent = *agent;
+                                options.new_instance = true;
+                                options.workspace = None;
+                                options.recovery_id = None;
+                                options.resume_id = None;
+                                options.continue_latest = false;
+                                options.fresh = command == Some("history.fresh");
+                                options.resume = !options.fresh;
+                                self.selected = self.rows.iter().position(|r| matches!(r, Row::Project(p) if config::key(p) == config::key(path))).unwrap_or(self.selected);
+                                self.staged.insert(config::key(path), options);
+                            }
+                            self.message = t("parity.options_staged").into_owned();
+                            keep = false;
+                            w.history_ticket();
+                            self.detail_pending = false;
+                        }
+                        KeyCode::Backspace => {
+                            self.dashboard.history_query.pop();
+                            *selected = 0;
+                            *scroll = 0;
+                        }
+                        KeyCode::Char(c)
+                            if !mods.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) =>
+                        {
+                            append_bounded(&mut self.dashboard.history_query, &c.to_string(), 256);
+                            *selected = 0;
+                            *scroll = 0;
+                        }
+                        KeyCode::Home => {
+                            *selected = 0;
+                            *scroll = 0;
+                        }
+                        KeyCode::End => {
+                            *selected = n.saturating_sub(1);
+                            *scroll = 0;
+                        }
+                        _ => {}
+                    }
+                }
+                Dialog::Diagnostics => {
+                    if code == KeyCode::Down {
+                        self.detail_scroll = self.detail_scroll.saturating_add(1);
+                    } else if code == KeyCode::Up {
+                        self.detail_scroll = self.detail_scroll.saturating_sub(1);
+                    }
+                }
+                Dialog::Instances { path, selected } => {
+                    let work = self
+                        .workspaces
+                        .get(&config::key(path))
+                        .cloned()
+                        .unwrap_or_default();
+                    match code {
+                        KeyCode::Up => *selected = selected.saturating_sub(1),
+                        KeyCode::Down => {
+                            *selected = (*selected + 1).min(work.len().saturating_sub(1))
+                        }
+                        _ if command == Some("instances.join") => {
+                            if let Some(target) = work.get(*selected) {
+                                let mut o = self.options_for(path);
+                                o.workspace = Some(target.id.clone());
+                                self.start(w, vec![o])?;
+                                keep = false;
+                            }
+                        }
+                        _ if command == Some("instances.new") => {
+                            let mut o = self.options_for(path);
+                            o.new_instance = true;
+                            self.start(w, vec![o])?;
+                            keep = false;
+                        }
+                        _ => {}
+                    }
+                }
+                Dialog::Queue { selected } => {
+                    *selected = (*selected).min(self.marked.len().saturating_sub(1));
+                    match code {
+                        _ if command == Some("queue.edit") => {
+                            if let Some(options) = self.queue_options().get(*selected).cloned() {
+                                self.editing_queue = Some(*selected);
+                                self.dialog = Some(Dialog::Options {
+                                    options,
+                                    new_tab: true,
+                                    editing: None,
+                                });
+                                keep = false;
+                            }
+                        }
+                        _ if command == Some("queue.launch") => {
+                            self.start(w, self.queue_options())?;
+                            keep = false;
+                        }
+                        _ if command == Some("queue.previous") && *selected > 0 => {
+                            self.dashboard.undo = Some(self.marked.clone());
+                            self.marked.0.swap(*selected, *selected - 1);
+                            *selected -= 1;
+                        }
+                        _ if command == Some("queue.next") && *selected + 1 < self.marked.len() => {
+                            self.dashboard.undo = Some(self.marked.clone());
+                            self.marked.0.swap(*selected, *selected + 1);
+                            *selected += 1;
+                        }
+                        KeyCode::Up => *selected = selected.saturating_sub(1),
+                        KeyCode::Down => {
+                            *selected = (*selected + 1).min(self.marked.len().saturating_sub(1))
+                        }
+                        _ if command == Some("queue.delete") && !self.marked.is_empty() => {
+                            self.dashboard.undo = Some(self.marked.clone());
+                            self.marked.0.remove(*selected);
+                        }
+                        _ if command == Some("queue.undo") => {
+                            if let Some(previous) = self.dashboard.undo.take() {
+                                self.marked = previous;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Dialog::Batch => {
+                    match code {
+                        KeyCode::Up => self.batch_scroll = self.batch_scroll.saturating_sub(1),
+                        KeyCode::Down => self.batch_scroll = self.batch_scroll.saturating_add(1),
+                        KeyCode::PageUp => self.batch_scroll = self.batch_scroll.saturating_sub(10),
+                        KeyCode::PageDown => {
+                            self.batch_scroll = self.batch_scroll.saturating_add(10)
+                        }
+                        _ => {}
+                    }
+                    if command == Some("batch.retry") {
+                        self.retry(w)?;
+                        keep = false
+                    }
+                }
+            }
+            if keep {
+                self.dialog = Some(dialog)
+            }
+            return Ok(Outcome::Stay);
+        }
+        Ok(Outcome::Stay)
     }
     fn execute_shortcut(&mut self, w: &Workers, id: &str) -> Result<Outcome> {
         if let Some(outcome) = self.dashboard_command(w, id)? {
@@ -2564,7 +2697,20 @@ impl Overview {
                             | Some(Dialog::Instances { .. })
                             | Some(Dialog::PresetPolicy { .. })
                     ) {
-                        return self.key(w, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                        let id = match self.dialog.as_ref().unwrap() {
+                            Dialog::Palette { .. } => "palette.execute",
+                            Dialog::Presets { .. } => "presets.apply",
+                            Dialog::Instances { .. } => "instances.join",
+                            _ => "form.confirm",
+                        };
+                        if id == "form.confirm" {
+                            return self.dialog_input(
+                                w,
+                                Some(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+                                None,
+                            );
+                        }
+                        return self.dialog_input(w, None, Some(id));
                     }
                 } else if up || down {
                     return self.key(
@@ -2808,12 +2954,20 @@ pub fn run_from(
                 app.dirty = true;
             }
             let outcome = match input.event {
-                Event::Key(key) if key.kind != KeyEventKind::Release => app.key(&w, key),
+                Event::Key(key) => app.native_key(
+                    &w,
+                    key,
+                    input
+                        .win32
+                        .as_deref()
+                        .and_then(crate::shortcuts::ledger::RawKey::parse),
+                ),
                 Event::Paste(text) => {
                     app.paste(&text);
                     Ok(Outcome::Stay)
                 }
                 Event::FocusGained => {
+                    app.key_ledger.focus();
                     if let Some(ui) = &mut app.settings_ui {
                         ui.reload();
                     } else if let Ok(config) = Config::load() {
@@ -2825,13 +2979,16 @@ pub fn run_from(
                     Ok(Outcome::Stay)
                 }
                 Event::Resize(..) | Event::FocusLost => {
+                    if input.event == Event::FocusLost {
+                        app.key_ledger.blur(|_, _| true);
+                        app.shortcut_router.cancel();
+                    }
                     app.dashboard.cancel(&mut app.config.overview);
                     app.last_click = None;
                     app.dirty = true;
                     Ok(Outcome::Stay)
                 }
                 Event::Mouse(mouse) => app.mouse(&w, mouse),
-                _ => Ok(Outcome::Stay),
             };
             match outcome {
                 Ok(Outcome::Quit) => return Ok(None),

@@ -7,6 +7,7 @@ mod compile;
 #[cfg(test)]
 mod contract_tests;
 pub mod ledger;
+mod modals;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Chord {
@@ -400,6 +401,16 @@ pub const CONTEXTS: &[&str] = &[
     "dialog.info",
     "dialog.diff",
     "dialog.overview",
+    "dialog.options",
+    "dialog.presets",
+    "dialog.queue",
+    "dialog.instances",
+    "dialog.history",
+    "dialog.attention",
+    "dialog.palette",
+    "dialog.batch",
+    "dialog.form",
+    "dialog.help",
     "gesture.move",
     "gesture.resize",
     "terminal.selection",
@@ -929,6 +940,7 @@ fn catalog(prefix: Chord) -> Vec<Command> {
         preferred: 0,
         repeat: false,
     });
+    modals::extend(&mut out, prefix);
     out
 }
 

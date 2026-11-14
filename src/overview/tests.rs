@@ -1,6 +1,87 @@
 use super::*;
 use crossterm::event::{MouseEvent, MouseEventKind};
 
+#[test]
+fn modal_business_bindings_are_rebindable_and_never_reach_background() {
+    let t = worker::isolated();
+    let mut app = overview();
+    app.dialog = Some(Dialog::Options {
+        options: Options::parse_for_view(),
+        new_tab: false,
+        editing: None,
+    });
+    let initial = match &app.dialog {
+        Some(Dialog::Options { options, .. }) => options.new_instance,
+        _ => panic!(),
+    };
+    app.shortcuts = crate::shortcuts::Index::build(&crate::settings::model::Shortcuts {
+        prefix: None,
+        bindings: vec![crate::settings::model::Binding {
+            command: "options.instance".into(),
+            context: "dialog.options".into(),
+            add: vec![crate::settings::model::Sequence::Chord("F12".into())],
+            remove: vec![
+                crate::settings::model::Sequence::Chord("N".into()),
+                crate::settings::model::Sequence::Chord("Shift+N".into()),
+            ],
+            disabled: false,
+            preferred: None,
+            notes: Default::default(),
+        }],
+    })
+    .unwrap();
+    app.key(
+        &t.worker,
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert!(
+        matches!(&app.dialog,Some(Dialog::Options{options,..}) if options.new_instance==initial)
+    );
+    app.key(&t.worker, KeyEvent::new(KeyCode::F(12), KeyModifiers::NONE))
+        .unwrap();
+    assert!(
+        matches!(&app.dialog,Some(Dialog::Options{options,..}) if options.new_instance!=initial)
+    );
+    app.key(
+        &t.worker,
+        KeyEvent::new(KeyCode::F(3), KeyModifiers::CONTROL),
+    )
+    .unwrap();
+    assert!(
+        matches!(&app.dialog, Some(Dialog::Options { .. })),
+        "background note command must stay isolated"
+    );
+    assert!(t.edits.try_recv().is_err());
+    assert!(t.launches.try_recv().is_err());
+}
+#[test]
+fn overview_native_once_command_waits_for_release_across_dialog_changes() {
+    let t = worker::isolated();
+    let mut app = overview();
+    let key = KeyEvent::new(KeyCode::F(3), KeyModifiers::CONTROL);
+    let raw = crate::shortcuts::ledger::RawKey::parse(b"\x1b[114;61;0;1;8;1_").unwrap();
+    app.native_key(&t.worker, key, Some(raw.clone())).unwrap();
+    assert!(matches!(
+        app.dialog,
+        Some(Dialog::Input(Input::Note(..), _))
+    ));
+    app.dialog = None;
+    app.native_key(&t.worker, key, Some(raw.clone())).unwrap();
+    assert!(app.dialog.is_none());
+    app.native_key(
+        &t.worker,
+        KeyEvent {
+            kind: KeyEventKind::Release,
+            ..key
+        },
+        Some(crate::shortcuts::ledger::RawKey::parse(&raw.release(0)).unwrap()),
+    )
+    .unwrap();
+    app.native_key(&t.worker, key, Some(raw)).unwrap();
+    assert!(app.dialog.is_some());
+}
+
 fn unified_form(source: &str) -> crate::settings::ui::SettingsUi {
     let root = std::env::temp_dir().join(format!("DevTabs-settings-form-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&root).unwrap();
