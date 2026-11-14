@@ -64,6 +64,7 @@ pub struct App {
     last_target: Instant,
     shortcuts: crate::shortcuts::Index,
     shortcut_router: crate::shortcuts::Router,
+    pub(crate) command_actions: crate::shortcuts::actions::Actions,
     key_ledger: crate::shortcuts::ledger::Ledger,
     forwarded: Option<crate::shortcuts::ledger::Owner>,
     sequence_target: Option<(
@@ -150,6 +151,7 @@ impl App {
             force_exit: false,
             shortcuts: crate::shortcuts::Index::current(),
             shortcut_router: Default::default(),
+            command_actions: Default::default(),
             key_ledger: Default::default(),
             forwarded: None,
             sequence_target: None,
@@ -273,8 +275,11 @@ impl App {
             match app.options.layout {
                 Layout::Float if auto_debug && first => {
                     if let Err(error) = app.show_default_debug() {
-                        app.message =
-                            format!("Debug window: {error:#}; Ctrl+G L switches to split");
+                        app.message = format!(
+                            "Debug window: {error:#}; {} switches layout",
+                            app.shortcuts
+                                .trigger("workspace.layout.next", "terminal.input")
+                        );
                     }
                 }
                 Layout::Tabs if app.sessions.len() > 1 && app.agents().len() < 2 => {
@@ -466,6 +471,13 @@ impl App {
         rects
     }
     fn balance_keys(&mut self) {
+        self.command_actions.close();
+        if let Some(sidebar) = &mut self.sidebar {
+            sidebar.cancel_shortcuts();
+        }
+        for sidebar in self.parallel.sidebars.values_mut() {
+            sidebar.cancel_shortcuts();
+        }
         let mut ledger = std::mem::take(&mut self.key_ledger);
         ledger.blur(|target, bytes| self.send_owned(target, bytes));
         self.key_ledger = ledger;
@@ -760,7 +772,7 @@ impl App {
         let selection = self
             .selection
             .as_ref()
-            .context("Ctrl+G S enters selection mode; drag text before copying")?;
+            .context("Enter selection mode and drag text before copying")?;
         let range = selection.range.context("Drag text to select it first")?;
         let text = range.text(&selection.screen);
         let mut clipboard = arboard::Clipboard::new().context("Open Windows clipboard")?;
@@ -776,9 +788,49 @@ impl App {
             .as_ref()
             .map_or("terminal.input", |s| s.shortcut_context())
     }
+    pub(crate) fn command_context(&self) -> Option<&'static str> {
+        if self.settings_ui.is_some() || self.mode == Mode::Confirm {
+            return None;
+        }
+        let s = &self.parallel.review;
+        if s.open && !s.search && !s.editing_scope {
+            return Some(if s.resources {
+                "dialog.resources"
+            } else if s.inbox {
+                "dialog.notifications"
+            } else {
+                "dialog.review"
+            });
+        }
+        self.terminal_menu.map(|_| "menu.terminals")
+    }
+    pub(crate) fn draw_command_actions(
+        &self,
+        frame: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+    ) {
+        self.command_actions
+            .draw(frame, &self.shortcuts, self.command_context(), area);
+    }
+    fn resolve_local(&mut self, context: &str, key: KeyEvent) -> crate::shortcuts::Resolution {
+        use crate::shortcuts::{Resolution, ledger::Owner};
+        let result = self.shortcut_router.route(&self.shortcuts, context, key);
+        match result {
+            Resolution::AwaitSequence => self.forwarded = Some(Owner::SequencePending),
+            Resolution::Execute(_) | Resolution::Handled => {
+                self.forwarded = Some(Owner::Ui {
+                    context: self.input_context(),
+                    repeat: false,
+                })
+            }
+            _ => {}
+        }
+        result
+    }
     fn input_context(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.command_actions.open().hash(&mut hash);
         self.shortcut_context().hash(&mut hash);
         self.sidebar
             .as_ref()
@@ -1039,10 +1091,13 @@ impl App {
                 if let Err(error) = self.sessions[self.focus].action(true, false) {
                     self.message = format!("{error:#}");
                 } else {
-                    self.message = crate::i18n::t(
+                    self.message = crate::i18n::format(
                         "ui.interrupt_requested_ctrl_g_shift_f_can_force_after_3_seconds",
-                    )
-                    .into();
+                        &[(
+                            "force",
+                            self.shortcuts.trigger("workspace.force", "terminal.input"),
+                        )],
+                    );
                 }
             }
             "workspace.force" => {
@@ -1161,6 +1216,15 @@ impl App {
             }
             return;
         }
+        let context = self.command_context();
+        match self.command_actions.key(&self.shortcuts, context, key) {
+            crate::shortcuts::actions::ActionResult::Execute(id) => {
+                self.execute_command(id);
+                return;
+            }
+            crate::shortcuts::actions::ActionResult::Handled => return,
+            _ => {}
+        }
         if self.parallel.review.open {
             self.review_key(key);
             return;
@@ -1201,7 +1265,13 @@ impl App {
                             self.send(index, vec![3]);
                         }
                     }
-                    self.message=crate::i18n::t("ui.interrupt_requested_for_visible_sessions_finish_programs_and_exit_or_ctrl_g_q_f_closes_every_session_after_3s").into();
+                    self.message = crate::i18n::format(
+                        "ui.interrupt_requested_for_visible_sessions_finish_programs_and_exit_or_ctrl_g_q_f_closes_every_session_after_3s",
+                        &[(
+                            "quit",
+                            self.shortcuts.trigger("workspace.quit", "terminal.input"),
+                        )],
+                    );
                 }
                 KeyCode::Char('f' | 'F')
                     if self
@@ -1464,6 +1534,22 @@ impl App {
             }
             return;
         }
+        let context = self.command_context();
+        match self
+            .command_actions
+            .mouse(&self.shortcuts, context, self.size, event)
+        {
+            crate::shortcuts::actions::ActionResult::Execute(id) => {
+                self.execute_command(id);
+                return;
+            }
+            crate::shortcuts::actions::ActionResult::Handled => {
+                self.shortcut_router.cancel();
+                self.sequence_target = None;
+                return;
+            }
+            _ => {}
+        }
         if self.file_dragging() && self.files_mouse(event) {
             return;
         }
@@ -1629,9 +1715,11 @@ impl App {
         let was_index = self.focus;
         let event = input.event;
         match event {
+            Event::Paste(_) if self.command_actions.open() => {}
             Event::Paste(text) if self.settings_ui.is_some() => {
                 self.settings_ui.as_mut().unwrap().paste(&text);
             }
+            Event::Paste(text) if self.parallel.review.open => self.review_paste(&text),
             Event::Paste(text) if self.parallel.dialog.is_some() => self.task_paste(&text),
             Event::Key(key) => self.key(key, input.win32, input.repeat),
             Event::Mouse(mouse) if self.mode != Mode::Confirm => self.mouse(mouse),
@@ -1695,11 +1783,7 @@ impl App {
                     }
                 }
                 if event == Event::FocusLost {
-                    let mut ledger = std::mem::take(&mut self.key_ledger);
-                    ledger.blur(|target, bytes| self.send_owned(target, bytes));
-                    self.key_ledger = ledger;
-                    self.shortcut_router.cancel();
-                    self.sequence_target = None;
+                    self.balance_keys();
                     self.mode = Mode::Normal;
                     if self.cancel_file_drag() {
                         self.attach_visible()?;

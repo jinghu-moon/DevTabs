@@ -767,7 +767,14 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                     crate::preview::safe_text(error)
                 )
             } else {
-                crate::i18n::t(label).into_owned()
+                crate::i18n::format(
+                    label,
+                    &[(
+                        "command",
+                        app.shortcuts
+                            .preferred("workspace.files.toggle", "terminal.input"),
+                    )],
+                )
             }))
             .style(Style::new().fg(palette.muted)),
             Rect::new(area.x + 1, area.bottom() - 2, half.saturating_sub(2), 1),

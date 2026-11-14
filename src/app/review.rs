@@ -275,7 +275,44 @@ impl App {
         false
     }
     pub(super) fn review_key(&mut self, key: KeyEvent) {
+        let s = &self.parallel.review;
+        if !s.search && !s.editing_scope {
+            let context = if s.resources {
+                "dialog.resources"
+            } else if s.inbox {
+                "dialog.notifications"
+            } else {
+                "dialog.review"
+            };
+            match self.resolve_local(context, key) {
+                crate::shortcuts::Resolution::Execute(id) => {
+                    self.review_input(None, Some(id));
+                    return;
+                }
+                crate::shortcuts::Resolution::AwaitSequence
+                | crate::shortcuts::Resolution::Handled => return,
+                _ => {}
+            }
+        } else {
+            self.shortcut_router.cancel();
+        }
         self.review_input(Some(key), None);
+    }
+    pub(super) fn review_paste(&mut self, text: &str) {
+        let s = &mut self.parallel.review;
+        let value = if s.search {
+            &mut s.query
+        } else if s.editing_scope {
+            &mut s.scope
+        } else {
+            return;
+        };
+        for c in text.chars().filter(|c| !c.is_control()) {
+            if value.len() + c.len_utf8() > 1024 {
+                break;
+            }
+            value.push(c);
+        }
     }
     pub(super) fn review_command(&mut self, id: &str) {
         self.review_input(None, Some(id));
@@ -800,6 +837,16 @@ struct ReviewLayout {
     input: Rect,
     footer: Rect,
 }
+fn review_hint(app: &App) -> String {
+    format!(
+        "{} · ↑↓ PgUp/PgDn · Esc",
+        app.shortcuts.hint(if app.parallel.review.inbox {
+            "dialog.notifications"
+        } else {
+            "dialog.review"
+        })
+    )
+}
 fn layout(app: &App, area: Rect) -> ReviewLayout {
     let s = &app.parallel.review;
     let width = area.width.saturating_sub(4).min(120);
@@ -808,11 +855,7 @@ fn layout(app: &App, area: Rect) -> ReviewLayout {
         .wrap(Wrap { trim: true })
         .line_count(text_width)
         .min(6) as u16;
-    let keys = crate::i18n::t(if s.inbox {
-        "review.inbox_keys"
-    } else {
-        "review.keys"
-    });
+    let keys = review_hint(app);
     let footer_height = Paragraph::new(keys)
         .wrap(Wrap { trim: true })
         .line_count(text_width)
@@ -915,13 +958,9 @@ pub(crate) fn draw(frame: &mut Frame, app: &App) {
         g.header,
     );
     frame.render_widget(
-        Paragraph::new(crate::i18n::t(if s.inbox {
-            "review.inbox_keys"
-        } else {
-            "review.keys"
-        }))
-        .style(Style::new().fg(palette.muted))
-        .wrap(Wrap { trim: true }),
+        Paragraph::new(review_hint(app))
+            .style(Style::new().fg(palette.muted))
+            .wrap(Wrap { trim: true }),
         g.footer,
     );
     if s.search || s.editing_scope {
@@ -1081,7 +1120,7 @@ fn draw_resources(frame: &mut Frame, app: &App) {
     let inner = block.inner(r);
     frame.render_widget(block, r);
     let mut lines = vec![
-        Line::from(crate::i18n::t("lifecycle.keys").into_owned()),
+        Line::from(app.shortcuts.hint("dialog.resources")),
         Line::from(format!(
             "{}: {}",
             crate::i18n::t("lifecycle.source"),
@@ -1104,7 +1143,14 @@ fn draw_resources(frame: &mut Frame, app: &App) {
     }
     if s.archive_pending {
         lines.push(Line::styled(
-            crate::i18n::t("lifecycle.archive_confirm").into_owned(),
+            crate::i18n::format(
+                "lifecycle.archive_confirm",
+                &[(
+                    "confirm",
+                    app.shortcuts
+                        .trigger("resources.confirm", "dialog.resources"),
+                )],
+            ),
             Style::default().fg(Color::Yellow),
         ));
     }
@@ -1137,7 +1183,21 @@ fn draw_resources(frame: &mut Frame, app: &App) {
             ));
         }
         lines.push(Line::styled(
-            crate::i18n::t("lifecycle.confirm").into_owned(),
+            crate::i18n::format(
+                "lifecycle.confirm",
+                &[
+                    (
+                        "confirm",
+                        app.shortcuts
+                            .trigger("resources.confirm", "dialog.resources"),
+                    ),
+                    (
+                        "copy",
+                        app.shortcuts
+                            .trigger("resources.copy_command", "dialog.resources"),
+                    ),
+                ],
+            ),
             Style::default().fg(Color::Yellow),
         ));
     } else {

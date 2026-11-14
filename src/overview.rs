@@ -163,6 +163,7 @@ pub struct Overview {
     settings_ui: Option<crate::settings::ui::SettingsUi>,
     shortcuts: crate::shortcuts::Index,
     shortcut_router: crate::shortcuts::Router,
+    pub(crate) command_actions: crate::shortcuts::actions::Actions,
     key_ledger: crate::shortcuts::ledger::Ledger,
     config: Config,
     dashboard: dashboard::Dashboard,
@@ -235,6 +236,7 @@ impl Overview {
                     .unwrap_or_default(),
             ),
             shortcut_router: Default::default(),
+            command_actions: Default::default(),
             key_ledger: Default::default(),
             return_target: None,
             return_applied: false,
@@ -1363,7 +1365,12 @@ impl Overview {
             out.push(Entry {
                 label: format!("{}: {agent:?}", t("agent")),
                 keywords: format!("agent 工具 {agent:?}"),
-                hint: "←/→".into(),
+                hint: ["overview.agent.previous", "overview.agent.next"]
+                    .iter()
+                    .map(|id| self.shortcuts.preferred(id, "overview.projects"))
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>()
+                    .join(" / "),
                 command: Command::DraftAgent(agent),
                 enabled: available,
             });
@@ -1417,7 +1424,9 @@ impl Overview {
             out.push(Entry {
                 label: format!("{}: {}", t("projects"), path.display()),
                 keywords: path.to_string_lossy().into_owned(),
-                hint: "Enter".into(),
+                hint: self
+                    .shortcuts
+                    .preferred("palette.execute", "dialog.palette"),
                 command: Command::Project(path.clone()),
                 enabled: true,
             })
@@ -1426,7 +1435,9 @@ impl Overview {
             out.push(Entry {
                 label: format!("{}: {name}", t("preset")),
                 keywords: format!("preset 预设 {name}"),
-                hint: "Enter".into(),
+                hint: self
+                    .shortcuts
+                    .preferred("palette.execute", "dialog.palette"),
                 command: Command::Preset(name.clone()),
                 enabled: !self.batch.busy(),
             })
@@ -1831,6 +1842,7 @@ impl Overview {
     fn input_context(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.command_actions.open().hash(&mut hash);
         self.dialog
             .as_ref()
             .map(Self::dialog_context)
@@ -1869,7 +1881,9 @@ impl Overview {
         let resolution = self
             .shortcuts
             .resolve(scope, &[crate::shortcuts::Chord::event(key)]);
-        let repeat = if let crate::shortcuts::Resolution::Execute(id) = resolution {
+        let repeat = if self.command_actions.open() || self.shortcut_router.waiting() {
+            false
+        } else if let crate::shortcuts::Resolution::Execute(id) = resolution {
             self.shortcuts
                 .commands
                 .iter()
@@ -1912,6 +1926,14 @@ impl Overview {
                 _ => {}
             }
             return Ok(Outcome::Stay);
+        }
+        let context = self.dialog.as_ref().map(Self::dialog_context);
+        match self.command_actions.key(&self.shortcuts, context, key) {
+            crate::shortcuts::actions::ActionResult::Execute(id) => {
+                return self.dialog_input(w, None, Some(id));
+            }
+            crate::shortcuts::actions::ActionResult::Handled => return Ok(Outcome::Stay),
+            _ => {}
         }
         if let Some(outcome) = self.dashboard_key(w, key)? {
             return Ok(outcome);
@@ -2027,6 +2049,11 @@ impl Overview {
         let code = key.map_or(KeyCode::Null, |k| k.code);
         let mods = key.map_or(KeyModifiers::NONE, |k| k.modifiers);
         if let Some(mut dialog) = self.dialog.take() {
+            if code == KeyCode::Esc && self.shortcut_router.waiting() {
+                self.shortcut_router.cancel();
+                self.dialog = Some(dialog);
+                return Ok(Outcome::Stay);
+            }
             if code == KeyCode::Esc {
                 if let Dialog::Options { editing, .. } = &mut dialog
                     && editing.take().is_some()
@@ -2053,21 +2080,34 @@ impl Overview {
                     }
                     | Dialog::PresetPolicy { .. }
             );
-            let command = direct.or_else(|| {
-                if editing {
-                    None
-                } else {
-                    key.and_then(|k| {
-                        match self
-                            .shortcuts
-                            .resolve(context, &[crate::shortcuts::Chord::event(k)])
-                        {
-                            crate::shortcuts::Resolution::Execute(id) => Some(id),
-                            _ => None,
-                        }
-                    })
+            let command = if let Some(id) = direct {
+                if editing
+                    || !self
+                        .shortcuts
+                        .commands
+                        .iter()
+                        .any(|c| c.id == id && c.context == context)
+                {
+                    self.dialog = Some(dialog);
+                    return Ok(Outcome::Stay);
                 }
-            });
+                Some(id)
+            } else if editing {
+                self.shortcut_router.cancel();
+                None
+            } else if let Some(k) = key {
+                match self.shortcut_router.route(&self.shortcuts, context, k) {
+                    crate::shortcuts::Resolution::Execute(id) => Some(id),
+                    crate::shortcuts::Resolution::AwaitSequence
+                    | crate::shortcuts::Resolution::Handled => {
+                        self.dialog = Some(dialog);
+                        return Ok(Outcome::Stay);
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            };
             let code = if command.is_some() {
                 KeyCode::Null
             } else {
@@ -2628,6 +2668,20 @@ impl Overview {
             }
             return Ok(Outcome::Stay);
         }
+        let context = self.dialog.as_ref().map(Self::dialog_context);
+        match self
+            .command_actions
+            .mouse(&self.shortcuts, context, self.dashboard.size, mouse)
+        {
+            crate::shortcuts::actions::ActionResult::Execute(id) => {
+                return self.dialog_input(w, None, Some(id));
+            }
+            crate::shortcuts::actions::ActionResult::Handled => {
+                self.shortcut_router.cancel();
+                return Ok(Outcome::Stay);
+            }
+            _ => {}
+        }
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && let Some(text) = self.code_copy_at((mouse.column, mouse.row).into())
         {
@@ -2727,6 +2781,9 @@ impl Overview {
         Ok(Outcome::Stay)
     }
     fn paste(&mut self, text: &str) {
+        if self.command_actions.open() {
+            return;
+        }
         if let Some(ui) = &mut self.settings_ui {
             ui.paste(text);
             return;
@@ -2982,6 +3039,10 @@ pub fn run_from(
                     if input.event == Event::FocusLost {
                         app.key_ledger.blur(|_, _| true);
                         app.shortcut_router.cancel();
+                        app.command_actions.close();
+                        if let Some(viewer) = &mut app.dashboard.viewer {
+                            viewer.cancel_shortcuts();
+                        }
                     }
                     app.dashboard.cancel(&mut app.config.overview);
                     app.last_click = None;

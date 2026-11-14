@@ -899,8 +899,10 @@ impl Sidebar {
                     " Changes · Loading · Esc Close ".into(),
                     |v| {
                         format!(
-                            " Changes · +{} -{} · N/n Hunk · C Copy · Esc Close ",
-                            v.data.added, v.data.removed
+                            " Changes · +{} -{} · {} · Esc ",
+                            v.data.added,
+                            v.data.removed,
+                            self.shortcuts.hint("dialog.diff")
                         )
                     },
                 );
@@ -930,9 +932,12 @@ impl Sidebar {
         {
             let o = d.view.search_options;
             let text = format!(
-                "Alt+C Case [{}]  Alt+W Word [{}]  Alt+R Regex [{}]  {}{}",
+                "{} Case [{}]  {} Word [{}]  {} Regex [{}]  {}{}",
+                self.shortcuts.preferred("search.case", "dialog.search"),
                 if o.case_sensitive { "x" } else { " " },
+                self.shortcuts.preferred("search.word", "dialog.search"),
                 if o.whole_word { "x" } else { " " },
+                self.shortcuts.preferred("search.regex", "dialog.search"),
                 if o.regex { "x" } else { " " },
                 d.view.search_error,
                 if d.view.search_targets.len() == preview::tools::MAX_MATCHES {

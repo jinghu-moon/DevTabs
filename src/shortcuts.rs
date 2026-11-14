@@ -3,6 +3,7 @@ use anyhow::{Result, bail, ensure};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as Mods};
 use std::{collections::BTreeSet, fmt};
 
+pub mod actions;
 mod compile;
 #[cfg(test)]
 mod contract_tests;
@@ -485,6 +486,61 @@ pub fn command_contexts(id: &str, declared: &'static str) -> Vec<&'static str> {
     contexts
 }
 impl Index {
+    pub fn trigger(&self, id: &str, context: &str) -> String {
+        let key = self.preferred(id, context);
+        if key.is_empty() {
+            if crate::i18n::language() == crate::i18n::Language::ZhCn {
+                "未绑定（使用操作菜单）"
+            } else {
+                "Unbound (use Actions)"
+            }
+            .into()
+        } else {
+            key
+        }
+    }
+    pub fn hint(&self, context: &str) -> String {
+        let values = self
+            .commands
+            .iter()
+            .filter(|c| c.context == context)
+            .filter_map(|c| {
+                let key = self.preferred(c.id, context);
+                (!key.is_empty()).then(|| {
+                    format!(
+                        "{} {}",
+                        key,
+                        command_label(c.id).rsplit(" / ").next().unwrap_or(c.id)
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut hint = values
+            .iter()
+            .take(6)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" · ");
+        if values.len() > 6 {
+            hint.push_str(" · …");
+        }
+        hint
+    }
+    pub fn hint_commands(&self, context: &str, ids: &[&str]) -> String {
+        ids.iter()
+            .filter_map(|id| {
+                let key = self.preferred(id, context);
+                (!key.is_empty()).then(|| {
+                    format!(
+                        "{} {}",
+                        key,
+                        command_label(id).rsplit(" / ").next().unwrap_or(id)
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+            .join(" · ")
+    }
     pub fn build(settings: &crate::settings::model::Shortcuts) -> Result<Self> {
         compile::build(settings)
     }
@@ -954,8 +1010,72 @@ pub fn command_label(id: &str) -> String {
     if crate::i18n::language() != crate::i18n::Language::ZhCn {
         return id.replace('.', " / ").replace('_', " ");
     }
+    match id {
+        "terminals.activate" => return "激活终端".into(),
+        "tree.activate" => return "打开所选文件".into(),
+        "outline.activate" => return "大纲 / 定位".into(),
+        "quick_open.activate" => return "快速打开 / 打开文件".into(),
+        _ => {}
+    }
     id.split('.')
         .map(|word| match word {
+            "ack" => "标为已读",
+            "apply" => "应用",
+            "archive" => "归档",
+            "arguments" => "启动参数",
+            "batch" => "批量任务",
+            "begin" => "开始轮次",
+            "case" => "区分大小写",
+            "check" => "运行检查",
+            "check_status" => "检查报告",
+            "claude" => "Claude",
+            "cleanup" => "清理计划",
+            "codex" => "Codex",
+            "composition" => "会话组合",
+            "confirm" => "确认",
+            "continue" => "继续最近会话",
+            "copy_command" => "复制执行命令",
+            "copy_diagnostic" => "复制诊断",
+            "diagnostics" => "诊断",
+            "dialog" => "弹层",
+            "dock" => "停靠",
+            "end" => "结束轮次",
+            "execute" => "执行",
+            "float" => "浮动",
+            "form" => "表单",
+            "gesture" => "手势",
+            "global" => "全局通知",
+            "instance" => "另开实例",
+            "instances" => "实例",
+            "join" => "激活实例",
+            "jump" => "定位",
+            "list" => "刷新列表",
+            "manage" => "管理",
+            "merge" => "合并计划",
+            "mute" => "静音",
+            "navigate" => "查看",
+            "notifications" => "通知",
+            "once" => "下一次结束提醒",
+            "query" => "查询状态",
+            "record" => "录制",
+            "regex" => "正则表达式",
+            "require_check" => "要求检查",
+            "resize" => "调整大小",
+            "resume" => "原生历史",
+            "retry" => "重试",
+            "scope" => "范围",
+            "sessions" => "会话",
+            "shell" => "Shell",
+            "snooze_clear" => "取消稍后提醒",
+            "snooze_long" => "三十分钟后提醒",
+            "snooze_short" => "五分钟后提醒",
+            "stage" => "暂存",
+            "tab" => "标签方式",
+            "terminals" => "终端列表",
+            "test" => "测试",
+            "unmute" => "取消静音",
+            "window" => "窗口方式",
+            "word" => "全字匹配",
             "app" => "应用",
             "overview" => "总览",
             "activate" => "打开项目",

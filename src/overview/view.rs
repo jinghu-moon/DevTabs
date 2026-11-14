@@ -102,7 +102,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             Dialog::Instances { path, selected } => {
                 let rect = popup(frame, 100, 18);
                 let key = config::key(path);
-                let mut lines = vec![Line::from(t("overview.instances_hint"))];
+                let mut lines = vec![Line::from(app.shortcuts.hint("dialog.instances"))];
                 let page = rect.height.saturating_sub(3).max(1) as usize;
                 let first = selected.saturating_sub(page - 1);
                 if let Some(work) = app.workspaces.get(&key) {
@@ -200,7 +200,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                 frame.render_widget(block(format!(" {} ", t("overview.queue"))), rect);
                 frame.render_widget(
                     Paragraph::new(super::dashboard::fit(
-                        &t("overview.queue_hint"),
+                        &app.shortcuts.hint("dialog.queue"),
                         rect.width.saturating_sub(4) as usize,
                     )),
                     Rect::new(rect.x + 2, rect.y + 1, rect.width.saturating_sub(4), 1),
@@ -364,7 +364,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                 let inner = rect.inner(Margin::new(2, 2));
                 frame.render_widget(block(t("parity.presets")), rect);
                 frame.render_widget(
-                    Paragraph::new(t("parity.preset_hint")),
+                    Paragraph::new(app.shortcuts.hint("dialog.presets")),
                     Rect::new(inner.x, inner.y, inner.width, 1),
                 );
                 let names = app.config.presets.keys().collect::<Vec<_>>();
@@ -425,12 +425,17 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     frame,
                     t("options"),
                     vec![
-                        Line::from(t("options_hint")),
+                        Line::from(app.shortcuts.hint("dialog.options")),
                         Line::from(""),
                         info_line(t("agent"), format!("{:?}", options.agent)),
                         info_line(t("layout"), format!("{:?}", options.layout)),
                         info_line(
-                            format!("M · {}", t("overview.composition")),
+                            format!(
+                                "{} · {}",
+                                app.shortcuts
+                                    .preferred("options.composition", "dialog.options"),
+                                t("overview.composition")
+                            ),
                             options.effective_composition().label(),
                         ),
                         info_line(
@@ -451,13 +456,22 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                             t(if options.new_instance { "yes" } else { "no" }),
                         ),
                         Line::from(t(if *new_tab { "new_tab" } else { "current_tab" })),
-                        info_line("Ctrl+D", options.debug_command.as_deref().unwrap_or("—")),
                         info_line(
-                            format!("Ctrl+A · {}", t("parity.arguments")),
+                            app.shortcuts.preferred("options.debug", "dialog.options"),
+                            options.debug_command.as_deref().unwrap_or("—"),
+                        ),
+                        info_line(
+                            format!(
+                                "{} · {}",
+                                app.shortcuts
+                                    .preferred("options.arguments", "dialog.options"),
+                                t("parity.arguments")
+                            ),
                             serde_json::to_string(&options.agent_args).unwrap_or_default(),
                         ),
                         info_line(
-                            "Ctrl+E",
+                            app.shortcuts
+                                .preferred("options.sessions.edit", "dialog.options"),
                             options
                                 .extra_sessions
                                 .iter()
@@ -503,7 +517,11 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             } => {
                 let rect = popup(frame, 100, 22);
                 frame.render_widget(
-                    block(format!(" {} · {} ", t("palette"), t("palette_hint"))),
+                    block(format!(
+                        " {} · {} ",
+                        t("palette"),
+                        app.shortcuts.hint("dialog.palette")
+                    )),
                     rect,
                 );
                 let pieces = UiLayout::vertical([Constraint::Length(2), Constraint::Min(1)])
@@ -562,7 +580,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     Constraint::Length(
                         Paragraph::new(format!(
                             "{}\n/ {}",
-                            t("history_hint"),
+                            app.shortcuts.hint("dialog.history"),
                             if app.dashboard.history_query.is_empty() {
                                 t("overview.session_search").into_owned()
                             } else {
@@ -581,7 +599,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                 frame.render_widget(
                     Paragraph::new(format!(
                         "{}\n/ {}",
-                        t("history_hint"),
+                        app.shortcuts.hint("dialog.history"),
                         if app.dashboard.history_query.is_empty() {
                             t("overview.session_search").into_owned()
                         } else {
@@ -781,7 +799,10 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             Dialog::Batch => {
                 let rect = popup(frame, 104, 22);
                 app.dialog_preview = rect;
-                let mut lines = vec![Line::from(t("batch_hint")), Line::from("")];
+                let mut lines = vec![
+                    Line::from(app.shortcuts.hint("dialog.batch")),
+                    Line::from(""),
+                ];
                 for (i, item) in app.batch.items.iter().enumerate() {
                     let label = match &item.state {
                         LaunchState::Queued => t("queued"),
@@ -807,6 +828,12 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             }
         }
     }
+    app.command_actions.draw(
+        frame,
+        &app.shortcuts,
+        app.dialog.as_ref().map(Overview::dialog_context),
+        area,
+    );
 }
 pub(super) fn opening(options: &Options) -> String {
     format!(

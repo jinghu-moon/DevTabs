@@ -1365,7 +1365,7 @@ impl Manager {
         } else {
             match &self.mode {
             Mode::Record(keys)=>format!("Recording / 录制: {}\nEsc/Enter are recorded too. Use mouse Done/Cancel. Esc/Enter 也作为按键录制，使用鼠标完成/取消。",keys.iter().map(ToString::to_string).collect::<Vec<_>>().join(" → ")),
-            Mode::Test{received}=>format!("Key test / 按键测试 [{}]. Commands are never executed.\n{}",CONTEXTS[self.context],received.iter().rev().take(2).cloned().chain(self.raw_events.back().cloned().or_else(|| Some("Physical fields unavailable until a native event arrives / 尚未收到原生物理事件；不能推断外部占用".into()))).collect::<Vec<_>>().join("\n")),
+            Mode::Test{received}=>format!("Key test / 按键测试 [{}]. Commands are never executed; external global hotkeys can still run / 不执行业务命令；外部全局热键仍可能触发。\n{}",CONTEXTS[self.context],received.iter().rev().take(2).cloned().chain(self.raw_events.back().cloned().or_else(|| Some("Physical fields unavailable until a native event arrives / 尚未收到原生物理事件；不能推断外部占用".into()))).collect::<Vec<_>>().join("\n")),
             Mode::Text(_)=>"Text: Ctrl+F3 or Ctrl+G -> N".into(),Mode::Prefix(_)=>"Prefix / 前缀 chord".into(),Mode::Note(_)=>"Deletion note / 删除备注".into(),Mode::Import(_)=>"Import file path / 导入文件路径（只修改草稿）".into(),Mode::Export(_)=>"Export committed bindings; existing destination is replaced / 导出已提交绑定；覆盖目标".into(),_=>self.error.as_ref().unwrap_or(&self.message).clone(),
         }
         };

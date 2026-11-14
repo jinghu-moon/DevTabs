@@ -564,3 +564,10 @@ widget	src/overview.rs	} else if let KeyCode::Char(c) = code
 widget	src/app/review.rs	KeyCode::Null
 control	src/app/review.rs	if code == KeyCode::Esc {
 widget	src/app/review.rs	key.map_or(KeyCode::Null, |k| k.code)
+widget	src/overview.rs	if code == KeyCode::Esc && self.shortcut_router.waiting() {
+widget	src/shortcuts/actions.rs	KeyCode::Down => {
+widget	src/shortcuts/actions.rs	KeyCode::End => self.selected = commands.len().saturating_sub(1),
+widget	src/shortcuts/actions.rs	KeyCode::Enter => {
+widget	src/shortcuts/actions.rs	KeyCode::Esc => self.close(),
+widget	src/shortcuts/actions.rs	KeyCode::Home => self.selected = 0,
+widget	src/shortcuts/actions.rs	KeyCode::Up => self.selected = self.selected.saturating_sub(1),

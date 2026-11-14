@@ -478,7 +478,10 @@ impl Sidebar {
         frame.render_widget(
             Block::bordered()
                 .title(crate::i18n::t("outline_title"))
-                .title_bottom(" ↑↓ Enter · Esc ")
+                .title_bottom(format!(
+                    " ↑↓ · {} · Esc ",
+                    self.shortcuts.hint("dialog.outline")
+                ))
                 .style(base)
                 .border_style(Style::new().fg(Color::Cyan)),
             r,

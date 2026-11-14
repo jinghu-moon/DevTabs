@@ -200,7 +200,7 @@ pub(crate) fn overlay(frame: &mut Frame, app: &App) {
     crate::ui::clear_popup(frame, r);
     frame.render_widget(
         Block::bordered()
-            .title(crate::i18n::t("chrome.commands"))
+            .title(format!("DevTabs · {}", app.shortcuts.prefix))
             .style(crate::appearance::style())
             .border_style(Style::new().fg(p.accent)),
         r,
@@ -319,7 +319,7 @@ pub(crate) fn footer_controls(frame: &mut Frame, app: &mut App) -> u16 {
 
 pub(crate) fn footer(frame: &mut Frame, app: &App, right: u16) {
     let area = frame.area();
-    let (name, hint) = match app.sidebar.as_ref().map(|s| s.focus) {
+    let (name, _) = match app.sidebar.as_ref().map(|s| s.focus) {
         Some(crate::sidebar::Focus::Tree) => {
             (crate::i18n::t("chrome.command.tree"), "chrome.hint.tree")
         }
@@ -358,16 +358,42 @@ pub(crate) fn footer(frame: &mut Frame, app: &App, right: u16) {
         .or((!app.message.is_empty()).then_some(app.message.as_str()));
     let text = text.map_or_else(
         || {
-            format!(
-                "[{name}] {}",
-                crate::i18n::t(if app.mode == Mode::Prefix {
-                    "chrome.cancel"
-                } else if app.selection.is_some() {
-                    "select_hint"
-                } else {
-                    hint
-                })
-            )
+            let context = app.shortcut_context();
+            let hint = if app.mode == Mode::Prefix {
+                crate::i18n::t("chrome.cancel").into_owned()
+            } else if app.selection.is_some() {
+                format!(
+                    "{} · PgUp/PgDn · Esc",
+                    app.shortcuts.hint_commands(
+                        "terminal.selection",
+                        &["terminal.selection.copy", "terminal.selection.toggle"]
+                    )
+                )
+            } else {
+                let ids: &[&str] = match context {
+                    "tree" => &["tree.activate", "tree.menu"],
+                    "editor" => &["editor.save", "editor.search", "editor.menu"],
+                    "preview.image" => &[
+                        "panel.image_fit",
+                        "panel.image_zoom_in",
+                        "panel.image_zoom_out",
+                        "preview.menu",
+                    ],
+                    "preview" => &["panel.search", "panel.mode", "preview.menu"],
+                    _ => &[],
+                };
+                let mut hint = app.shortcuts.hint_commands(context, ids);
+                if app.shortcuts.resolve(context, &[app.shortcuts.prefix])
+                    == crate::shortcuts::Resolution::AwaitSequence
+                {
+                    if !hint.is_empty() {
+                        hint.push_str(" · ");
+                    }
+                    hint.push_str(&format!("{} …", app.shortcuts.prefix));
+                }
+                hint
+            };
+            format!("[{name}] {}", hint)
         },
         str::to_owned,
     );

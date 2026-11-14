@@ -102,6 +102,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     crate::app::parallel::overlay(frame, app);
     crate::app::review::draw(frame, app);
     confirm(frame, app);
+    app.draw_command_actions(frame, area);
 }
 
 fn confirm(frame: &mut Frame, app: &App) {

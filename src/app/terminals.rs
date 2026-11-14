@@ -204,16 +204,15 @@ impl App {
         Ok(())
     }
     pub(super) fn terminal_key(&mut self, key: KeyEvent) {
-        if let crate::shortcuts::Resolution::Execute(id) = self
-            .shortcuts
-            .resolve("menu.terminals", &[crate::shortcuts::Chord::event(key)])
-        {
-            self.forwarded = Some(crate::shortcuts::ledger::Owner::Ui {
-                context: self.input_context(),
-                repeat: false,
-            });
-            self.terminal_command(id);
-            return;
+        match self.resolve_local("menu.terminals", key) {
+            crate::shortcuts::Resolution::Execute(id) => {
+                self.terminal_command(id);
+                return;
+            }
+            crate::shortcuts::Resolution::AwaitSequence | crate::shortcuts::Resolution::Handled => {
+                return;
+            }
+            _ => {}
         }
         let Some(mut selected) = self.terminal_menu else {
             return;
@@ -387,7 +386,14 @@ pub(crate) fn draw(frame: &mut Frame, app: &mut App) {
                 )],
             )
         } else {
-            crate::i18n::t("terminal.empty").into_owned()
+            crate::i18n::format(
+                "terminal.empty",
+                &[(
+                    "command",
+                    app.shortcuts
+                        .trigger("workspace.terminal.menu", "terminal.input"),
+                )],
+            )
         };
         frame.render_widget(Paragraph::new(label), r);
     }
@@ -538,7 +544,7 @@ pub(crate) fn overlay(frame: &mut Frame, app: &mut App) {
     }
     frame.render_widget(
         Paragraph::new(vec![
-            Line::from(crate::i18n::t("terminal.keys")),
+            Line::from(app.shortcuts.hint("menu.terminals")),
             Line::from(crate::i18n::t("terminal.identity")),
         ]),
         Rect::new(inner.x, inner.bottom().saturating_sub(2), inner.width, 2),
@@ -899,6 +905,7 @@ pub(super) mod tests {
             last_target: Instant::now(),
             shortcuts: crate::shortcuts::Index::load(&Default::default()),
             shortcut_router: Default::default(),
+            command_actions: Default::default(),
             key_ledger: Default::default(),
             forwarded: None,
             sequence_target: None,
@@ -1324,6 +1331,117 @@ pub(super) mod tests {
                 }
             });
         }
+    }
+    #[test]
+    fn workspace_footer_and_resource_confirmation_never_show_deleted_default_keys() {
+        crate::i18n::with_language(crate::i18n::Language::EnUs, || {
+            let mut app = app();
+            app.sessions.truncate(1);
+            app.sessions[0].info.placement = Placement::Docked;
+            app.shortcuts = crate::shortcuts::Index::build(
+                &toml::from_str(
+                    r#"
+                prefix = "Ctrl+K"
+                [[bindings]]
+                command = "tree.menu"
+                context = "tree"
+                add = ["F12"]
+                remove = ["F2"]
+                preferred = "F12"
+                [[bindings]]
+                command = "resources.confirm"
+                context = "dialog.resources"
+                add = ["F12"]
+                remove = ["Enter"]
+                preferred = "F12"
+            "#,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            app.sidebar = Some(crate::sidebar::Sidebar::new(std::env::temp_dir()));
+            let sidebar = app.sidebar.as_mut().unwrap();
+            sidebar.focus = crate::sidebar::Focus::Tree;
+            sidebar.shortcuts = app.shortcuts.clone();
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(200, 40)).unwrap();
+            app.size = Rect::new(0, 0, 200, 40);
+            app.update_sidebar_layout();
+            terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+            let footer = (0..200)
+                .map(|x| terminal.backend().buffer()[(x, 39)].symbol())
+                .collect::<String>();
+            assert!(footer.contains("F12"), "{footer}");
+            assert!(
+                !footer.contains("F2") && !footer.contains("Ctrl+G"),
+                "{footer}"
+            );
+            app.parallel.review.open = true;
+            app.parallel.review.resources = true;
+            app.parallel.review.archive_pending = true;
+            terminal.draw(|f| crate::ui::draw(f, &mut app)).unwrap();
+            let text = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect::<String>();
+            assert!(text.contains("F12 confirms"));
+            assert!(!text.contains("Enter confirms"));
+            assert!(!text.contains("%{"));
+        });
+    }
+    #[test]
+    fn review_sequences_and_paste_are_owned_by_the_modal_not_the_terminal() {
+        let mut app = app();
+        app.parallel.review.open = true;
+        app.parallel.review.resources = true;
+        app.shortcuts = crate::shortcuts::Index::build(
+            &toml::from_str(
+                r#"
+            [[bindings]]
+            command = "resources.require_check"
+            context = "dialog.resources"
+            add = [["Ctrl+G", "J"]]
+            remove = ["P"]
+        "#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        app.key(
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            None,
+            1,
+        );
+        app.key(
+            KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+            None,
+            1,
+        );
+        assert!(app.parallel.review.require_check);
+        app.event(crate::events::Input {
+            event: Event::Paste("ignored shell text".into()),
+            win32: None,
+            repeat: 1,
+        })
+        .unwrap();
+        assert!(app.parallel.review.query.is_empty());
+        assert!(app.forwarded.as_ref().is_none_or(|owner| !matches!(
+            owner,
+            crate::shortcuts::ledger::Owner::Terminal { .. }
+        )));
+        app.parallel.review.resources = false;
+        app.parallel.review.search = true;
+        app.event(crate::events::Input {
+            event: Event::Paste("中文\nfind".into()),
+            win32: None,
+            repeat: 1,
+        })
+        .unwrap();
+        assert_eq!(app.parallel.review.query, "中文find");
+        assert!(app.parallel.review.pending.is_none());
     }
     #[test]
     fn workspace_modal_rebinding_keeps_guards_and_physical_once_ownership() {

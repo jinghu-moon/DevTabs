@@ -499,6 +499,7 @@ impl Document {
 
 pub struct Sidebar {
     pub shortcuts: crate::shortcuts::Index,
+    command_actions: crate::shortcuts::actions::Actions,
     shortcut_router: crate::shortcuts::Router,
     pub(crate) shortcut_owned: bool,
     /// Shared preview can be embedded in a context that must never edit files.
@@ -724,6 +725,7 @@ impl Sidebar {
         files.light = crate::appearance::theme() == crate::appearance::Theme::Light;
         Self {
             shortcuts: crate::shortcuts::Index::current(),
+            command_actions: Default::default(),
             shortcut_router: Default::default(),
             shortcut_owned: false,
             explorer: explorer::Explorer::new(root.clone()),
@@ -2017,6 +2019,9 @@ impl Sidebar {
         }
     }
     pub fn paste(&mut self, text: &str) -> Result<()> {
+        if self.command_actions.open() {
+            return Ok(());
+        }
         if self.explorer_paste(text) {
             return Ok(());
         }
@@ -2069,6 +2074,7 @@ impl Sidebar {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         self.shortcut_context().hash(&mut hash);
+        self.command_actions.open().hash(&mut hash);
         (self.focus as u8).hash(&mut hash);
         self.document.as_ref().map(|d| &d.path).hash(&mut hash);
         self.prompt
@@ -2088,6 +2094,10 @@ impl Sidebar {
         )
             .hash(&mut hash);
         hash.finish()
+    }
+    pub(crate) fn cancel_shortcuts(&mut self) {
+        self.command_actions.close();
+        self.shortcut_router.cancel();
     }
     pub fn execute_command(&mut self, id: &str) -> Result<Action> {
         if id == "tree.activate" {
@@ -2221,6 +2231,21 @@ impl Sidebar {
             d.defaults_pending = false;
         }
         self.shortcut_owned = false;
+        let action_context = self.local_shortcut_context();
+        match self
+            .command_actions
+            .key(&self.shortcuts, action_context, key)
+        {
+            crate::shortcuts::actions::ActionResult::Execute(id) => {
+                self.shortcut_owned = true;
+                return self.execute_command(id);
+            }
+            crate::shortcuts::actions::ActionResult::Handled => {
+                self.shortcut_owned = true;
+                return Ok(Action::None);
+            }
+            _ => {}
+        }
         let context = self.shortcut_context();
         if !self.modal() || self.local_shortcut_context().is_some() {
             match self.shortcut_router.route(&self.shortcuts, context, key) {
@@ -2492,6 +2517,20 @@ impl Sidebar {
         event: MouseEvent,
         agent: Option<Rect>,
     ) -> Result<(bool, Action)> {
+        let action_context = self.local_shortcut_context();
+        match self
+            .command_actions
+            .mouse(&self.shortcuts, action_context, self.tools.area, event)
+        {
+            crate::shortcuts::actions::ActionResult::Execute(id) => {
+                return Ok((true, self.execute_command(id)?));
+            }
+            crate::shortcuts::actions::ActionResult::Handled => {
+                self.shortcut_router.cancel();
+                return Ok((true, Action::None));
+            }
+            _ => {}
+        }
         if event.kind == MouseEventKind::Moved {
             self.hover = Some((event.column, event.row));
         }
@@ -3237,6 +3276,12 @@ impl Sidebar {
         self.draw_outline(frame);
         self.draw_controls(frame);
         self.draw_explorer(frame);
+        self.command_actions.draw(
+            frame,
+            &self.shortcuts,
+            self.local_shortcut_context(),
+            self.tools.area,
+        );
     }
     pub(crate) fn preview_controls(&self) -> bool {
         matches!(self.focus, Focus::Preview | Focus::Editor)

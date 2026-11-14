@@ -2,6 +2,70 @@ use super::*;
 use crossterm::event::{MouseEvent, MouseEventKind};
 
 #[test]
+fn modal_sequences_cancel_safely_and_unbound_commands_have_a_mouse_exit() {
+    let t = worker::isolated();
+    let mut app = overview();
+    app.dialog = Some(Dialog::Options {
+        options: Options::parse_for_view(),
+        new_tab: false,
+        editing: None,
+    });
+    app.shortcuts = crate::shortcuts::Index::build(
+        &toml::from_str(
+            r#"
+        [[bindings]]
+        command = "options.instance"
+        context = "dialog.options"
+        add = [["Ctrl+G", "J"]]
+        remove = ["N", "Shift+N"]
+        [[bindings]]
+        command = "options.debug"
+        context = "dialog.options"
+        disabled = true
+    "#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let initial = matches!(&app.dialog,Some(Dialog::Options{options,..}) if options.new_instance);
+    let prefix = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
+    app.key(&t.worker, prefix).unwrap();
+    app.key(&t.worker, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+        .unwrap();
+    assert!(matches!(&app.dialog, Some(Dialog::Options { .. })));
+    app.key(&t.worker, prefix).unwrap();
+    app.key(
+        &t.worker,
+        KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE),
+    )
+    .unwrap();
+    assert!(
+        matches!(&app.dialog,Some(Dialog::Options{options,..}) if options.new_instance!=initial)
+    );
+    draw(&mut app, 80, 24);
+    app.mouse(
+        &t.worker,
+        mouse_at(MouseEventKind::Down(MouseButton::Left), 79, 0),
+    )
+    .unwrap();
+    assert!(app.command_actions.open());
+    app.paste("must not become input");
+    app.key(&t.worker, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    assert!(
+        matches!(
+            &app.dialog,
+            Some(Dialog::Options {
+                editing: Some((0, _)),
+                ..
+            })
+        ),
+        "mouse menu executes the unbound command ID"
+    );
+    assert!(t.launches.try_recv().is_err());
+}
+
+#[test]
 fn modal_business_bindings_are_rebindable_and_never_reach_background() {
     let t = worker::isolated();
     let mut app = overview();

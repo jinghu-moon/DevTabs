@@ -972,6 +972,55 @@ fn native_claude_keyboard_insert_preserves_existing_prompt_without_enter() {
 }
 
 #[test]
+fn shortcut_review_modal_owns_real_paste_and_returns_to_the_original_shell() {
+    let work = Workspace::new("shortcut-review");
+    let args = vec![
+        "--layout".into(),
+        "split".into(),
+        "--agent".into(),
+        "shell".into(),
+        "--no-profile".into(),
+        "--project".into(),
+        work.0.display().to_string(),
+    ];
+    let outer = spawn(&work, 0, Path::new(env!("CARGO_BIN_EXE_devtabs")), &args);
+    let screen = || outer.state().terminal.screen().contents();
+    until("review fixture shells", Duration::from_secs(20), || {
+        screen().matches("PS ").count() >= 2
+    });
+    press(&outer, KeyCode::Char('g'), KeyModifiers::CONTROL);
+    press(&outer, KeyCode::Char('g'), KeyModifiers::NONE);
+    until("read-only review opened", Duration::from_secs(10), || {
+        screen().contains("Round file changes")
+    });
+    let forbidden = work.file("must-not-run.txt");
+    paste_console(
+        &outer,
+        &format!(
+            "[IO.File]::WriteAllText({}, 'leaked')\r\n",
+            quote(&forbidden)
+        ),
+    );
+    press(&outer, KeyCode::Esc, KeyModifiers::NONE);
+    until("review closed", Duration::from_secs(10), || {
+        !screen().contains("Round file changes")
+    });
+    let result = work.file("after-review.txt");
+    command(
+        &outer,
+        &format!("[IO.File]::WriteAllText({}, 'alive')", quote(&result)),
+    );
+    assert_eq!(wait_file(&result), "alive");
+    assert!(
+        !forbidden.exists(),
+        "modal paste must not reach the shell before or after closing"
+    );
+    outer.send(b"\x07x".to_vec()).unwrap();
+    until("review frontend detached", Duration::from_secs(10), || {
+        !outer.running()
+    });
+}
+#[test]
 fn unified_settings_in_real_terminal_save_defaults_and_return_without_input_leaks() {
     let work = Workspace::new("settings-ui");
     let args = vec![

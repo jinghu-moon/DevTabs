@@ -572,7 +572,11 @@ impl Sidebar {
             let (title, text) = match panel {
                 Panel::Info => (
                     crate::i18n::t("ui.file_information"),
-                    self.file_information(),
+                    format!(
+                        "{}\n{} · Esc",
+                        self.file_information(),
+                        self.shortcuts.hint("dialog.info")
+                    ),
                 ),
                 Panel::Note(e) => (
                     crate::i18n::t("ui.bookmark_note"),
@@ -597,8 +601,9 @@ impl Sidebar {
                         crate::i18n::t("ui.loading_saving").into()
                     } else {
                         format!(
-                            "{} bookmarks · Enter Jump · E Note · Del Delete\n",
-                            self.controls.entries.len()
+                            "{} bookmarks · {} · Esc\n",
+                            self.controls.entries.len(),
+                            self.shortcuts.hint("dialog.bookmarks")
                         )
                     };
                     for (i, e) in self
