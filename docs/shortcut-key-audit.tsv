@@ -83,8 +83,6 @@ control	src/overview/dashboard.rs	let ctrl = key.modifiers.contains(KeyModifiers
 control	src/overview/dashboard.rs	let selection_copy = key.code == KeyCode::Char('c')
 control	src/overview/dashboard.rs	|| mouse.modifiers.contains(KeyModifiers::CONTROL)
 control	src/overview/dashboard.rs	} else if mouse.modifiers.contains(KeyModifiers::SHIFT) {
-control	src/sidebar.rs	&& key.code == KeyCode::Left
-control	src/sidebar.rs	&& key.modifiers.contains(KeyModifiers::ALT)
 control	src/sidebar.rs	.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 control	src/sidebar.rs	KeyCode::Backspace => {
 control	src/sidebar.rs	KeyCode::Char('d' | 'D') => {
@@ -95,7 +93,6 @@ control	src/sidebar.rs	KeyCode::Down => d.offset_mut().0 = d.offset().0.saturati
 control	src/sidebar.rs	KeyCode::Down => menu.selected = (menu.selected + 1).min(menu.items.len() - 1),
 control	src/sidebar.rs	KeyCode::Down => {
 control	src/sidebar.rs	KeyCode::End => {
-control	src/sidebar.rs	KeyCode::Enter => self.activate_tree(true)?,
 control	src/sidebar.rs	KeyCode::Enter => {
 control	src/sidebar.rs	KeyCode::Esc => self.menu = None,
 control	src/sidebar.rs	KeyCode::Esc => {
@@ -121,7 +118,6 @@ control	src/sidebar.rs	q.index = if key.code == KeyCode::Up {
 control	src/sidebar/controls.rs	.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 control	src/sidebar/controls.rs	guard: KeyCode::Char(c) if !key .modifiers .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) && !c.is_control() && entry.note.chars().count() < 256 =>
 control	src/sidebar/explorer.rs	&& !key.modifiers.contains(KeyModifiers::SHIFT)
-control	src/sidebar/explorer.rs	&& key.modifiers == KeyModifiers::NONE
 control	src/sidebar/explorer.rs	.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 control	src/sidebar/explorer.rs	.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
 control	src/sidebar/explorer.rs	KeyCode::Backspace => {
@@ -131,10 +127,8 @@ control	src/sidebar/explorer.rs	KeyCode::Down => p.selected = (p.selected + 1).m
 control	src/sidebar/explorer.rs	KeyCode::Down => {
 control	src/sidebar/explorer.rs	KeyCode::End => {
 control	src/sidebar/explorer.rs	KeyCode::Enter => {
-control	src/sidebar/explorer.rs	KeyCode::Enter if !p.pending => {
 control	src/sidebar/explorer.rs	KeyCode::Esc => self.explorer.form = None,
 control	src/sidebar/explorer.rs	KeyCode::Esc => {
-control	src/sidebar/explorer.rs	KeyCode::F(5) => {
 control	src/sidebar/explorer.rs	KeyCode::Home => {
 control	src/sidebar/explorer.rs	KeyCode::PageDown => {
 control	src/sidebar/explorer.rs	KeyCode::PageUp => p.selected = p.selected.saturating_sub(10),
@@ -145,10 +139,8 @@ control	src/sidebar/explorer.rs	KeyCode::Up => {
 control	src/sidebar/explorer.rs	guard: KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
 control	src/sidebar/explorer.rs	guard: KeyCode::Char(c) if !key .modifiers .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) && p.value.chars().count() < 256 =>
 control	src/sidebar/explorer.rs	guard: KeyCode::Char(c) if !key .modifiers .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-control	src/sidebar/explorer.rs	guard: KeyCode::Enter if !p.pending => {
 control	src/sidebar/explorer.rs	if !key.modifiers.contains(KeyModifiers::SHIFT) {
 control	src/sidebar/explorer.rs	if !modifiers.contains(KeyModifiers::CONTROL) {
-control	src/sidebar/explorer.rs	if key.code == KeyCode::Enter
 control	src/sidebar/explorer.rs	if key.code == KeyCode::Esc && !matches!(self.gesture, Gesture::Idle) {
 control	src/sidebar/explorer.rs	if key.code == KeyCode::Esc && !self.files.selected_paths.is_empty() {
 control	src/sidebar/explorer.rs	if key.code == KeyCode::Esc {
@@ -162,7 +154,6 @@ control	src/sidebar/explorer.rs	| KeyCode::PageDown
 control	src/sidebar/explorer.rs	| KeyCode::PageUp
 control	src/sidebar/explorer.rs	|| event.modifiers.contains(KeyModifiers::ALT))))
 control	src/sidebar/explorer.rs	} else if modifiers.contains(KeyModifiers::CONTROL) {
-control	src/sidebar/features.rs	&& key.modifiers.contains(KeyModifiers::ALT)
 control	src/sidebar/features.rs	guard: KeyCode::Char(c) if (c.is_ascii_digit() || c == '%') && n.value.len() < 16 => {
 control	src/sidebar/image.rs	.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
 control	src/sidebar/image.rs	KeyCode::Down => i.pan(0.0, f64::from(cell.height) * 3.0),
@@ -491,23 +482,14 @@ widget	src/settings/ui/support.rs	(KeyCode::PageDown, _) => self.restore_scroll 
 widget	src/settings/ui/support.rs	(KeyCode::PageUp, _) => self.restore_scroll = self.restore_scroll.saturating_sub(8),
 widget	src/settings/ui/support.rs	(KeyCode::Up, _) => self.restore_selected = self.restore_selected.saturating_sub(1),
 widget	src/sidebar/controls.rs	KeyCode::Backspace => {
-widget	src/sidebar/controls.rs	KeyCode::Char('e' | 'E') => {
-widget	src/sidebar/controls.rs	KeyCode::Char('r' | 'R') => self.bookmark_request(Operation::List)?,
 widget	src/sidebar/controls.rs	KeyCode::Char(c)
-widget	src/sidebar/controls.rs	KeyCode::Delete => {
 widget	src/sidebar/controls.rs	KeyCode::Down => {
 widget	src/sidebar/controls.rs	KeyCode::End => {
 widget	src/sidebar/controls.rs	KeyCode::Enter => {
 widget	src/sidebar/controls.rs	KeyCode::Home => self.controls.selected = 0,
 widget	src/sidebar/controls.rs	KeyCode::Up => {
 widget	src/sidebar/controls.rs	if key.code == KeyCode::Esc {
-widget	src/sidebar/controls.rs	if matches!(key.code, KeyCode::Char('c' | 'C')) {
 widget	src/sidebar/features.rs	KeyCode::Backspace => {
-widget	src/sidebar/features.rs	KeyCode::Char('N') | KeyCode::Char('[') => {
-widget	src/sidebar/features.rs	KeyCode::Char('c' | 'C') => {
-widget	src/sidebar/features.rs	KeyCode::Char('n') | KeyCode::Char(']') => {
-widget	src/sidebar/features.rs	KeyCode::Char('r' | 'R') => {
-widget	src/sidebar/features.rs	KeyCode::Char('w' | 'W') => {
 widget	src/sidebar/features.rs	KeyCode::Char(c) if (c.is_ascii_digit() || c == '%') && n.value.len() < 16 => {
 widget	src/sidebar/features.rs	KeyCode::Down => v.top = v.top.saturating_add(1),
 widget	src/sidebar/features.rs	KeyCode::End => v.top = v.data.lines.len().saturating_sub(1),
@@ -523,7 +505,6 @@ widget	src/sidebar/features.rs	if key.code == KeyCode::Esc {
 widget	src/sidebar/reading.rs	KeyCode::Backspace => {
 widget	src/sidebar/reading.rs	KeyCode::Char(c)
 widget	src/sidebar/reading.rs	KeyCode::Down => outline.selected = (outline.selected + 1).min(len.saturating_sub(1)),
-widget	src/sidebar/reading.rs	KeyCode::Enter => self.accept_outline(),
 widget	src/sidebar/reading.rs	KeyCode::Esc => self.reader.outline = None,
 widget	src/sidebar/reading.rs	KeyCode::Up => outline.selected = outline.selected.saturating_sub(1),
 control	src/app.rs	KeyCode::Up

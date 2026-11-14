@@ -447,7 +447,6 @@ impl Sidebar {
                 outline.selected = 0;
                 outline.scroll = 0;
             }
-            KeyCode::Enter => self.accept_outline(),
             _ => {}
         }
         true
@@ -567,7 +566,7 @@ impl Sidebar {
         }
         Some(OutlineLayout { popup, list, first })
     }
-    fn accept_outline(&mut self) {
+    pub(super) fn accept_outline(&mut self) {
         let byte = self.reader.outline.as_ref().and_then(|o| {
             self.document
                 .as_ref()
@@ -628,7 +627,7 @@ impl Sidebar {
             MouseEventKind::Up(MouseButton::Left) => {
                 let pressed = outline.pressed.take();
                 if item.is_some() && pressed == item {
-                    self.accept_outline();
+                    let _ = self.execute_command("outline.activate");
                 }
             }
             MouseEventKind::Moved => {

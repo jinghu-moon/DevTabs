@@ -499,6 +499,8 @@ impl Document {
 
 pub struct Sidebar {
     pub shortcuts: crate::shortcuts::Index,
+    shortcut_router: crate::shortcuts::Router,
+    pub(crate) shortcut_owned: bool,
     /// Shared preview can be embedded in a context that must never edit files.
     pub read_only: bool,
     explorer: explorer::Explorer,
@@ -722,6 +724,8 @@ impl Sidebar {
         files.light = crate::appearance::theme() == crate::appearance::Theme::Light;
         Self {
             shortcuts: crate::shortcuts::Index::current(),
+            shortcut_router: Default::default(),
+            shortcut_owned: false,
             explorer: explorer::Explorer::new(root.clone()),
             preview_defaults: Default::default(),
             future_image_protocol: None,
@@ -1735,7 +1739,7 @@ impl Sidebar {
     fn command_binding(&self, command: Command) -> String {
         let context = self.shortcut_context();
         if matches!(command, Command::PreviewSelected) && context == "tree" {
-            return "Enter".into(); // Native tree activation, audited as control navigation.
+            return self.shortcuts.preferred("tree.activate", "tree");
         }
         let id = match (context, command) {
             ("editor", Command::Save) => "editor.save",
@@ -2048,6 +2052,9 @@ impl Sidebar {
         self.document.as_ref().map(|d| d.view.wrap)
     }
     pub fn shortcut_context(&self) -> &'static str {
+        if let Some(context) = self.local_shortcut_context() {
+            return context;
+        }
         match self.focus {
             Focus::Tree => "tree",
             Focus::Editor => "editor",
@@ -2058,7 +2065,72 @@ impl Sidebar {
             _ => "terminal.input",
         }
     }
+    pub(crate) fn input_context(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.shortcut_context().hash(&mut hash);
+        (self.focus as u8).hash(&mut hash);
+        self.document.as_ref().map(|d| &d.path).hash(&mut hash);
+        self.prompt
+            .as_ref()
+            .map(std::mem::discriminant)
+            .hash(&mut hash);
+        self.controls
+            .panel
+            .as_ref()
+            .map(std::mem::discriminant)
+            .hash(&mut hash);
+        (
+            self.menu.is_some(),
+            self.query.is_some(),
+            self.tools.navigation.is_some(),
+            self.reader.outline.is_some(),
+        )
+            .hash(&mut hash);
+        hash.finish()
+    }
     pub fn execute_command(&mut self, id: &str) -> Result<Action> {
+        if id == "tree.activate" {
+            if self.focus == Focus::Tree && !self.modal() {
+                if self.files.selected_paths.len() > 1 {
+                    let target = self
+                        .files
+                        .selected_path()
+                        .unwrap_or_else(|| self.files.root.clone());
+                    return self.execute_at("panel.preview_selected", target);
+                }
+                self.activate_tree(true)?;
+            }
+            return Ok(Action::None);
+        }
+        if [
+            "diff.",
+            "search.",
+            "info.",
+            "bookmarks.",
+            "outline.",
+            "quick_open.",
+        ]
+        .iter()
+        .any(|p| id.starts_with(p))
+        {
+            let context = self.local_shortcut_context();
+            if !self
+                .shortcuts
+                .commands
+                .iter()
+                .any(|c| c.id == id && Some(c.context) == context)
+            {
+                return Ok(Action::None);
+            }
+            self.control_shortcut(id)?;
+            self.feature_shortcut(id)?;
+            self.picker_shortcut(id)?;
+            if id == "outline.activate" {
+                self.accept_outline();
+            }
+            return Ok(Action::None);
+        }
         match id {
             "tree.search" => {
                 self.start_query(true);
@@ -2123,24 +2195,48 @@ impl Sidebar {
         }
         Ok(Action::None)
     }
+    fn local_shortcut_context(&self) -> Option<&'static str> {
+        if self.prompt.is_some() || self.menu.is_some() || self.tools.navigation.is_some() {
+            return None;
+        }
+        match &self.controls.panel {
+            Some(controls::Panel::Info) => return Some("dialog.info"),
+            Some(controls::Panel::Bookmarks) => return Some("dialog.bookmarks"),
+            Some(controls::Panel::Note(_)) => return None,
+            None => {}
+        }
+        if self.tools.diff.is_some() || self.tools.diff_pending.is_some() {
+            return Some("dialog.diff");
+        }
+        if self.reader.outline.is_some() {
+            return Some("dialog.outline");
+        }
+        if self.query.as_ref().is_some_and(|q| !q.tree) {
+            return Some("dialog.search");
+        }
+        self.picker_context()
+    }
     pub fn key(&mut self, key: KeyEvent) -> Result<Action> {
         if let Some(d) = &mut self.document {
             d.defaults_pending = false;
         }
-        if !self.modal()
-            && !self
-                .document
-                .as_ref()
-                .and_then(|d| d.editor())
-                .is_some_and(|e| e.search_input.is_some())
-        {
-            let context = self.shortcut_context();
-            if let crate::shortcuts::Resolution::Execute(id) = self
-                .shortcuts
-                .resolve(context, &[crate::shortcuts::Chord::event(key)])
-            {
-                return self.execute_command(id);
+        self.shortcut_owned = false;
+        let context = self.shortcut_context();
+        if !self.modal() || self.local_shortcut_context().is_some() {
+            match self.shortcut_router.route(&self.shortcuts, context, key) {
+                crate::shortcuts::Resolution::Execute(id) => {
+                    self.shortcut_owned = true;
+                    return self.execute_command(id);
+                }
+                crate::shortcuts::Resolution::AwaitSequence
+                | crate::shortcuts::Resolution::Handled => {
+                    self.shortcut_owned = true;
+                    return Ok(Action::None);
+                }
+                _ => {}
             }
+        } else {
+            self.shortcut_router.cancel();
         }
         if let Some(action) = self.explorer_key(key)? {
             return Ok(action);
@@ -2155,14 +2251,6 @@ impl Sidebar {
             return Ok(Action::None);
         }
         if self.outline_key(key) {
-            return Ok(Action::None);
-        }
-        if !self.modal()
-            && self.focus == Focus::Preview
-            && key.code == KeyCode::Left
-            && key.modifiers.contains(KeyModifiers::ALT)
-        {
-            self.reading_back()?;
             return Ok(Action::None);
         }
         // Selecting an already selected node can request ensure-visible even
@@ -2341,7 +2429,6 @@ impl Sidebar {
                         self.files.toggle(&p, &self.io)?;
                     }
                 }
-                KeyCode::Enter => self.activate_tree(true)?,
                 KeyCode::Esc => {
                     self.focus_agent();
                     return Ok(Action::Agent);

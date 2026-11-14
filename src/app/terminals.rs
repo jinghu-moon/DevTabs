@@ -740,7 +740,19 @@ pub(super) mod tests {
         assert_eq!(std::fs::read_to_string(a.join("same.md")).unwrap(), "# A\n");
         assert_eq!(std::fs::read_to_string(b.join("same.md")).unwrap(), "# B\n");
         drop(app);
-        std::fs::remove_dir_all(root).unwrap();
+        // Worker shutdown is asynchronous; Windows may briefly retain a watch/file handle.
+        let deadline = Instant::now() + Duration::from_secs(3);
+        loop {
+            match std::fs::remove_dir_all(&root) {
+                Ok(()) => break,
+                Err(e)
+                    if matches!(e.raw_os_error(), Some(32 | 145)) && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(e) => panic!("remove isolated task fixture: {e}"),
+            }
+        }
     }
     #[test]
     fn parallel_geometry_keeps_minima_and_saved_ratio_across_narrow_windows() {

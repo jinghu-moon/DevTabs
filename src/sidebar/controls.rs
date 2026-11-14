@@ -280,6 +280,40 @@ impl Sidebar {
             self.controls.panel.is_some()
         }
     }
+    pub(super) fn control_shortcut(&mut self, id: &str) -> Result<()> {
+        if self.controls.pending.is_some() {
+            return Ok(());
+        }
+        if matches!(self.controls.panel, Some(Panel::Info)) && id == "info.copy" {
+            files::copy(self.file_information())?;
+            self.say(crate::i18n::t("preview.information_copied"), true);
+        }
+        if matches!(self.controls.panel, Some(Panel::Bookmarks)) {
+            let selected = self.controls.entries.get(self.controls.selected).cloned();
+            match id {
+                "bookmarks.jump" => {
+                    if let Some(entry) = selected {
+                        self.jump_bookmark(entry)?;
+                        self.controls.panel = None;
+                    }
+                }
+                "bookmarks.delete" => {
+                    if let Some(entry) = selected {
+                        self.bookmark_request(Operation::Delete(entry))?;
+                    }
+                }
+                "bookmarks.note" => {
+                    if let Some(entry) = selected {
+                        self.controls.note_base = Some(entry.clone());
+                        self.controls.panel = Some(Panel::Note(entry));
+                    }
+                }
+                "bookmarks.refresh" => self.bookmark_request(Operation::List)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
     pub(super) fn control_key(&mut self, key: KeyEvent) -> Result<bool> {
         if self.controls.panel.is_some() {
             if key.code == KeyCode::Esc {
@@ -290,12 +324,7 @@ impl Sidebar {
                 return Ok(true);
             }
             match &mut self.controls.panel {
-                Some(Panel::Info) => {
-                    if matches!(key.code, KeyCode::Char('c' | 'C')) {
-                        files::copy(self.file_information())?;
-                        self.say(crate::i18n::t("preview.information_copied"), true);
-                    }
-                }
+                Some(Panel::Info) => {}
                 Some(Panel::Note(entry)) => match key.code {
                     KeyCode::Enter => {
                         let entry = entry.clone();
@@ -331,28 +360,6 @@ impl Sidebar {
                     KeyCode::End => {
                         self.controls.selected = self.controls.entries.len().saturating_sub(1)
                     }
-                    KeyCode::Enter => {
-                        if let Some(entry) =
-                            self.controls.entries.get(self.controls.selected).cloned()
-                        {
-                            self.jump_bookmark(entry)?;
-                            self.controls.panel = None;
-                        }
-                    }
-                    KeyCode::Delete => {
-                        if let Some(entry) = self.controls.entries.get(self.controls.selected) {
-                            self.bookmark_request(Operation::Delete(entry.clone()))?;
-                        }
-                    }
-                    KeyCode::Char('e' | 'E') => {
-                        if let Some(entry) =
-                            self.controls.entries.get(self.controls.selected).cloned()
-                        {
-                            self.controls.note_base = Some(entry.clone());
-                            self.controls.panel = Some(Panel::Note(entry));
-                        }
-                    }
-                    KeyCode::Char('r' | 'R') => self.bookmark_request(Operation::List)?,
                     _ => {}
                 },
                 None => {}
@@ -386,10 +393,9 @@ impl Sidebar {
                             && event.row < popup.bottom().saturating_sub(2) =>
                     {
                         let index = first + (event.row - popup.y - 2) as usize;
-                        if let Some(entry) = self.controls.entries.get(index).cloned() {
+                        if self.controls.entries.get(index).is_some() {
                             self.controls.selected = index;
-                            self.jump_bookmark(entry)?;
-                            self.controls.panel = None;
+                            self.execute_command("bookmarks.jump")?;
                         }
                     }
                     _ => {}
@@ -686,6 +692,52 @@ fn format_utc(time: std::time::SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bookmark_note_rebinding_preserves_text_and_pending_operation_guards() {
+        let mut s = Sidebar::new(std::env::temp_dir());
+        s.shortcuts = crate::shortcuts::Index::build(
+            &toml::from_str(
+                r#"
+            [[bindings]]
+            command = "bookmarks.note"
+            context = "dialog.bookmarks"
+            add = ["F6"]
+            remove = ["E", "Shift+E"]
+        "#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        s.controls.entries.push(Entry {
+            id: uuid::Uuid::new_v4(),
+            project: std::env::temp_dir(),
+            path: "a.md".into(),
+            byte: 0,
+            line: 0,
+            anchor: String::new(),
+            markdown: false,
+            note: String::new(),
+        });
+        s.controls.panel = Some(Panel::Bookmarks);
+        s.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(s.controls.panel, Some(Panel::Bookmarks)));
+        s.controls.pending = Some(1);
+        s.key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(s.controls.panel, Some(Panel::Bookmarks)));
+        s.controls.pending = None;
+        s.key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE))
+            .unwrap();
+        s.key(KeyEvent::new(KeyCode::Char('中'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(&s.controls.panel, Some(Panel::Note(e)) if e.note == "中"));
+        s.execute_command("bookmarks.delete").unwrap();
+        assert!(
+            s.controls.pending.is_none(),
+            "note input cannot execute list commands"
+        );
+    }
     #[test]
     fn modified_time_formats_epoch_leap_day_and_year_boundary() {
         use std::time::{Duration, UNIX_EPOCH};

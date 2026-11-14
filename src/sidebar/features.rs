@@ -41,6 +41,62 @@ pub(super) struct DiffView {
     left: u16,
 }
 
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+    #[test]
+    fn diff_rebinding_sequences_and_modal_isolation_use_the_effective_index() {
+        let mut s = Sidebar::new(std::env::temp_dir());
+        s.shortcuts = crate::shortcuts::Index::build(
+            &toml::from_str(
+                r#"
+            [[bindings]]
+            command = "diff.next"
+            context = "dialog.diff"
+            add = ["F6", ["Ctrl+G", "J"]]
+            remove = ["N", "]"]
+        "#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        s.tools.diff = Some(DiffView {
+            data: preview::tools::Diff {
+                patch: String::new(),
+                hunks: vec![2, 5],
+                lines: vec![],
+                added: 0,
+                removed: 0,
+            },
+            top: 0,
+            left: 0,
+        });
+        for key in [
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            KeyEvent::new(KeyCode::F(6), KeyModifiers::ALT),
+        ] {
+            s.key(key).unwrap();
+            assert_eq!(s.tools.diff.as_ref().unwrap().top, 0);
+        }
+        s.key(KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.tools.diff.as_ref().unwrap().top, 2);
+        assert!(s.shortcut_owned);
+        s.key(KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL))
+            .unwrap();
+        assert!(s.shortcut_owned);
+        s.key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE))
+            .unwrap();
+        assert_eq!(s.tools.diff.as_ref().unwrap().top, 5);
+        s.key(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE))
+            .unwrap();
+        assert!(s.tools.diff.is_some());
+        s.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(s.tools.diff.is_none());
+    }
+}
+
 impl Document {
     pub(super) fn source_snapshot(&self) -> Option<Arc<str>> {
         self.rendered()
@@ -347,6 +403,40 @@ impl Sidebar {
         self.seek_reading(byte);
         Ok(())
     }
+    pub(super) fn feature_shortcut(&mut self, id: &str) -> Result<()> {
+        if let Some(v) = &mut self.tools.diff {
+            match id {
+                "diff.next" => {
+                    if let Some(&at) = v.data.hunks.iter().find(|&&at| at > v.top) {
+                        v.top = at;
+                    }
+                }
+                "diff.previous" => {
+                    if let Some(&at) = v.data.hunks.iter().rev().find(|&&at| at < v.top) {
+                        v.top = at;
+                    }
+                }
+                "diff.copy" => files::copy(v.data.patch.clone())?,
+                _ => {}
+            }
+        }
+        if self.query.as_ref().is_some_and(|q| !q.tree)
+            && let Some(d) = &mut self.document
+        {
+            match id {
+                "search.case" => {
+                    d.view.search_options.case_sensitive = !d.view.search_options.case_sensitive
+                }
+                "search.word" => {
+                    d.view.search_options.whole_word = !d.view.search_options.whole_word
+                }
+                "search.regex" => d.view.search_options.regex = !d.view.search_options.regex,
+                _ => return Ok(()),
+            }
+            self.update_query();
+        }
+        Ok(())
+    }
     pub(super) fn feature_key(&mut self, key: KeyEvent) -> Result<bool> {
         if let Some(n) = &mut self.tools.navigation {
             match key.code {
@@ -379,19 +469,6 @@ impl Sidebar {
                     .map_or(10, |r| r.height.saturating_sub(4) as usize)
                     .max(1);
                 match key.code {
-                    KeyCode::Char('n') | KeyCode::Char(']') => {
-                        if let Some(&at) = v.data.hunks.iter().find(|&&at| at > v.top) {
-                            v.top = at;
-                        }
-                    }
-                    KeyCode::Char('N') | KeyCode::Char('[') => {
-                        if let Some(&at) = v.data.hunks.iter().rev().find(|&&at| at < v.top) {
-                            v.top = at;
-                        }
-                    }
-                    KeyCode::Char('c' | 'C') => {
-                        files::copy(v.data.patch.clone())?;
-                    }
                     KeyCode::Down => v.top = v.top.saturating_add(1),
                     KeyCode::Up => v.top = v.top.saturating_sub(1),
                     KeyCode::PageDown => v.top = v.top.saturating_add(page),
@@ -404,25 +481,6 @@ impl Sidebar {
                 }
                 v.top = v.top.min(v.data.lines.len().saturating_sub(1));
             }
-            return Ok(true);
-        }
-        if self.query.as_ref().is_some_and(|q| !q.tree)
-            && key.modifiers.contains(KeyModifiers::ALT)
-            && let Some(d) = &mut self.document
-        {
-            match key.code {
-                KeyCode::Char('c' | 'C') => {
-                    d.view.search_options.case_sensitive = !d.view.search_options.case_sensitive
-                }
-                KeyCode::Char('w' | 'W') => {
-                    d.view.search_options.whole_word = !d.view.search_options.whole_word
-                }
-                KeyCode::Char('r' | 'R') => {
-                    d.view.search_options.regex = !d.view.search_options.regex
-                }
-                _ => return Ok(false),
-            }
-            self.update_query();
             return Ok(true);
         }
         Ok(false)

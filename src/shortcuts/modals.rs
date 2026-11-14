@@ -2,6 +2,29 @@
 use super::*;
 pub(super) fn extend(out: &mut Vec<Command>, prefix: Chord) {
     for (id, context, keys) in [
+        ("tree.activate", "tree", vec!["Enter"]),
+        ("diff.next", "dialog.diff", vec!["N", "]"]),
+        ("diff.previous", "dialog.diff", vec!["Shift+N", "["]),
+        ("diff.copy", "dialog.diff", vec!["C", "Shift+C"]),
+        ("search.case", "dialog.search", vec!["Alt+C", "Alt+Shift+C"]),
+        ("search.word", "dialog.search", vec!["Alt+W", "Alt+Shift+W"]),
+        (
+            "search.regex",
+            "dialog.search",
+            vec!["Alt+R", "Alt+Shift+R"],
+        ),
+        ("info.copy", "dialog.info", vec!["C", "Shift+C"]),
+        ("bookmarks.jump", "dialog.bookmarks", vec!["Enter"]),
+        ("bookmarks.delete", "dialog.bookmarks", vec!["Delete"]),
+        ("bookmarks.note", "dialog.bookmarks", vec!["E", "Shift+E"]),
+        (
+            "bookmarks.refresh",
+            "dialog.bookmarks",
+            vec!["R", "Shift+R"],
+        ),
+        ("outline.activate", "dialog.outline", vec!["Enter"]),
+        ("quick_open.refresh", "dialog.quick_open", vec!["F5"]),
+        ("quick_open.activate", "dialog.quick_open", vec!["Enter"]),
         ("options.debug", "dialog.options", vec!["Ctrl+D"]),
         ("options.arguments", "dialog.options", vec!["Ctrl+A"]),
         ("options.sessions.edit", "dialog.options", vec!["Ctrl+E"]),

@@ -780,6 +780,10 @@ impl App {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         self.shortcut_context().hash(&mut hash);
+        self.sidebar
+            .as_ref()
+            .map(|s| s.input_context())
+            .hash(&mut hash);
         self.sessions
             .get(self.focus)
             .map(|s| (&s.info.id, s.input_lease()))
@@ -1285,7 +1289,15 @@ impl App {
             && (sidebar.focus != crate::sidebar::Focus::Terminal || sidebar.modal())
         {
             if pressed {
-                match sidebar.key(key) {
+                let result = sidebar.key(key);
+                let owned = sidebar.shortcut_owned;
+                if owned {
+                    self.forwarded = Some(crate::shortcuts::ledger::Owner::Ui {
+                        context: self.input_context(),
+                        repeat: false,
+                    });
+                }
+                match result {
                     Ok(action) => self.sidebar_action(action),
                     Err(e) => {
                         if let Some(s) = &mut self.sidebar {

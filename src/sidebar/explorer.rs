@@ -638,6 +638,35 @@ impl Sidebar {
             self.explorer.busy || self.explorer.form.is_some()
         }
     }
+    pub(super) fn picker_context(&self) -> Option<&'static str> {
+        self.explorer
+            .picker
+            .is_some()
+            .then_some("dialog.quick_open")
+    }
+    pub(super) fn picker_shortcut(&mut self, id: &str) -> Result<()> {
+        if self.read_only || self.explorer.busy {
+            return Ok(());
+        }
+        let Some(p) = &mut self.explorer.picker else {
+            return Ok(());
+        };
+        match id {
+            "quick_open.refresh" => {
+                self.explorer.revision = self.explorer.revision.wrapping_add(1);
+                p.pending = true;
+                p.due = Some(Instant::now() - Duration::from_secs(1));
+            }
+            "quick_open.activate" if !p.pending => {
+                if let Some(path) = p.paths.get(p.selected).cloned() {
+                    self.explorer.picker = None;
+                    self.open(path, true)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
     pub(super) fn explorer_key(&mut self, key: KeyEvent) -> Result<Option<Action>> {
         if self.read_only {
             return Ok(None);
@@ -664,20 +693,9 @@ impl Sidebar {
                     p.pending = true;
                     p.due = Some(Instant::now());
                 }
-                KeyCode::F(5) => {
-                    self.explorer.revision = self.explorer.revision.wrapping_add(1);
-                    p.pending = true;
-                    p.due = Some(Instant::now() - Duration::from_secs(1));
-                }
                 KeyCode::Esc => {
                     self.explorer.worker.cancel();
                     self.explorer.picker = None;
-                }
-                KeyCode::Enter if !p.pending => {
-                    if let Some(path) = p.paths.get(p.selected).cloned() {
-                        self.explorer.picker = None;
-                        self.open(path, true)?;
-                    }
                 }
                 KeyCode::Up => p.selected = p.selected.saturating_sub(1),
                 KeyCode::Down => p.selected = (p.selected + 1).min(p.paths.len().saturating_sub(1)),
@@ -778,16 +796,6 @@ impl Sidebar {
         if self.focus != Focus::Tree {
             return Ok(None);
         }
-        if key.code == KeyCode::Enter
-            && key.modifiers == KeyModifiers::NONE
-            && self.files.selected_paths.len() > 1
-        {
-            let target = self
-                .files
-                .selected_path()
-                .unwrap_or_else(|| self.files.root.clone());
-            return self.explorer_command(Command::PreviewSelected, &target);
-        }
         if key.code == KeyCode::Esc && !self.files.selected_paths.is_empty() {
             self.files.selected_paths.clear();
             self.explorer.anchor = None;
@@ -872,9 +880,9 @@ impl Sidebar {
                         && !p.pending
                     {
                         let index = first + (event.row - rect.y - 2) as usize;
-                        if let Some(path) = p.paths.get(index).cloned() {
-                            self.explorer.picker = None;
-                            self.open(path, true)?;
+                        if p.paths.get(index).is_some() {
+                            p.selected = index;
+                            self.execute_command("quick_open.activate")?;
                         }
                     }
                 }
@@ -960,9 +968,9 @@ impl Sidebar {
                     || self.hover.is_some_and(|p| rect.contains(p.into()));
                 self.focus = Focus::Tree;
                 if event.column >= rect.right().saturating_sub(6) {
-                    self.menu();
+                    self.execute_command("tree.menu")?;
                 } else if expanded && event.column >= rect.right().saturating_sub(10) {
-                    self.quick_open();
+                    self.execute_command("panel.quick_open")?;
                 }
                 return Ok(Some(Action::None));
             }

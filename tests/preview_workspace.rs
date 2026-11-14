@@ -902,7 +902,14 @@ fn diff_hunks_navigate_and_patch_remains_exact() {
     let b = draw(&mut s);
     assert!(text(&b).contains("+second change"));
     assert!(!text(&b).contains("+first change"));
-    key(&mut s, KeyCode::Char('N'));
+    s.key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT))
+        .unwrap();
+    assert!(
+        !text(&draw(&mut s)).contains("+first change"),
+        "extra modifiers do not execute a business binding"
+    );
+    s.key(KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT))
+        .unwrap();
     assert!(text(&draw(&mut s)).contains("+first change"));
     key(&mut s, KeyCode::Esc);
     assert_eq!(fs::read_to_string(f.0.join("read.md")).unwrap(), modified);
