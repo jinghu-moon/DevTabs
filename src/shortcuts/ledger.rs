@@ -41,11 +41,22 @@ impl RawKey {
         })
     }
     pub fn release(&self, control: u32) -> Vec<u8> {
-        format!(
-            "\x1b[{};{};{};0;{};1_",
-            self.physical.vk, self.physical.scan, self.unicode, control
-        )
-        .into_bytes()
+        // A Unicode surrogate pair may retain two original records.
+        String::from_utf8_lossy(&self.bytes)
+            .split('_')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| Self::parse(format!("{s}_").as_bytes()))
+            .flat_map(|r| {
+                format!(
+                    "\x1b[{};{};{};0;{};1_",
+                    r.physical.vk,
+                    r.physical.scan,
+                    r.unicode,
+                    (control & !0x100) | if r.physical.enhanced { 0x100 } else { 0 }
+                )
+                .into_bytes()
+            })
+            .collect()
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -70,6 +81,8 @@ struct Press {
     owner: Owner,
     first: RawKey,
     delivered: bool,
+    last_control: u32,
+    epoch: u64,
 }
 #[derive(Default)]
 pub struct Ledger {
@@ -77,6 +90,8 @@ pub struct Ledger {
     pub orphan_ups: u64,
     pub failed_balances: u64,
     pub epoch: u64,
+    control: u32,
+    pub suppressed_repress: bool,
 }
 #[derive(Clone, Debug)]
 pub enum Existing {
@@ -88,6 +103,10 @@ pub enum Existing {
 impl Ledger {
     /// Called before modal routing, even for standalone modifier records.
     pub fn existing(&mut self, raw: &RawKey, context: u64) -> Existing {
+        self.control = raw.control;
+        for press in self.held.values_mut() {
+            press.last_control = raw.control;
+        }
         if raw.down {
             match self.held.get(&raw.physical) {
                 None => Existing::New,
@@ -100,6 +119,10 @@ impl Ledger {
                         context: owner,
                         repeat: true,
                     } if *owner == context => Existing::UiRepeat,
+                    Owner::SuppressUntilUp => {
+                        self.suppressed_repress = press.epoch != self.epoch;
+                        Existing::Consume
+                    }
                     _ => Existing::Consume,
                 },
             }
@@ -120,10 +143,17 @@ impl Ledger {
     }
     pub fn own(&mut self, raw: RawKey, owner: Owner, delivered: bool) {
         if raw.down {
+            self.control = raw.control;
+            for press in self.held.values_mut() {
+                press.last_control = raw.control;
+            }
+            let last_control = raw.control;
             self.held.entry(raw.physical).or_insert(Press {
                 owner,
                 first: raw,
                 delivered,
+                last_control,
+                epoch: self.epoch,
             });
         }
     }
@@ -139,6 +169,12 @@ impl Ledger {
         let mut keys = self.held.keys().copied().collect::<Vec<_>>();
         keys.sort_by_key(|key| matches!(key.vk,16..=18|160..=165));
         let mut controls = BTreeMap::<Target, u32>::new();
+        let mut held_modifiers = self
+            .held
+            .keys()
+            .copied()
+            .filter(|k| matches!(k.vk,16..=18|160..=165))
+            .collect::<Vec<_>>();
         for key in keys {
             let press = self.held.get_mut(&key).unwrap();
             if let Owner::Terminal {
@@ -147,13 +183,34 @@ impl Ledger {
             } = &press.owner
                 && press.delivered
             {
-                let control = controls
-                    .entry(target.clone())
-                    .or_insert(press.first.control);
+                let control = controls.entry(target.clone()).or_insert(press.last_control);
+                held_modifiers.retain(|k| *k != key);
                 *control &= !match key.vk {
-                    16 | 160 | 161 => 0x10,
-                    17 | 162 | 163 => 0xc,
-                    18 | 164 | 165 => 0x3,
+                    16 | 160 | 161
+                        if !held_modifiers
+                            .iter()
+                            .any(|k| matches!(k.vk, 16 | 160 | 161)) =>
+                    {
+                        0x10
+                    }
+                    17 => {
+                        if key.enhanced {
+                            0x4
+                        } else {
+                            0x8
+                        }
+                    }
+                    162 => 0x8,
+                    163 => 0x4,
+                    18 => {
+                        if key.enhanced {
+                            0x1
+                        } else {
+                            0x2
+                        }
+                    }
+                    164 => 0x2,
+                    165 => 0x1,
                     _ => 0,
                 };
                 if !send(target, press.first.release(*control)) {
@@ -284,5 +341,81 @@ mod tests {
             ledger.existing(&raw(114, false, 0), 2),
             Existing::Consume
         ));
+    }
+    #[test]
+    fn modifier_release_before_ui_release_never_reassigns_either_owner() {
+        let mut l = Ledger::default();
+        l.own(
+            raw(162, true, 8),
+            Owner::Terminal {
+                target: target(),
+                wire: WireMode::Win32,
+            },
+            true,
+        );
+        l.own(
+            raw(114, true, 8),
+            Owner::Ui {
+                context: 1,
+                repeat: false,
+            },
+            false,
+        );
+        l.context_changed();
+        assert!(
+            matches!(l.existing(&raw(162,false,0),2),Existing::Forward{target:t,..} if t==target())
+        );
+        assert!(matches!(
+            l.existing(&raw(114, false, 0), 2),
+            Existing::Consume
+        ));
+        assert!(l.held.is_empty());
+    }
+    #[test]
+    fn blur_uses_latest_control_state_and_releases_left_right_modifiers_individually() {
+        let mut l = Ledger::default();
+        for (vk, state) in [(162, 8), (163, 12), (65, 12)] {
+            let r = raw(vk, true, state);
+            l.existing(&r, 1);
+            l.own(
+                r,
+                Owner::Terminal {
+                    target: target(),
+                    wire: WireMode::Win32,
+                },
+                true,
+            );
+        }
+        let mut sent = vec![];
+        l.blur(|_, b| {
+            sent.push(RawKey::parse(&b).unwrap());
+            true
+        });
+        assert_eq!(
+            sent.iter()
+                .map(|r| (r.physical.vk, r.control))
+                .collect::<Vec<_>>(),
+            [(65, 12), (162, 4), (163, 0)]
+        );
+        assert!(sent.iter().all(|r| !r.down));
+        l.focus();
+        assert!(matches!(
+            l.existing(&raw(65, true, 0), 2),
+            Existing::Consume
+        ));
+        assert!(l.suppressed_repress);
+        assert!(matches!(
+            l.existing(&raw(65, false, 0), 2),
+            Existing::Consume
+        ));
+        assert!(matches!(l.existing(&raw(65, true, 0), 2), Existing::New));
+    }
+    #[test]
+    fn unicode_pair_balance_preserves_both_units_and_enhanced_identity() {
+        let r = RawKey::parse(b"\x1b[0;31;55357;1;264;1_\x1b[0;31;56832;1;264;1_").unwrap();
+        assert_eq!(
+            r.release(0),
+            b"\x1b[0;31;55357;0;256;1_\x1b[0;31;56832;0;256;1_"
+        );
     }
 }

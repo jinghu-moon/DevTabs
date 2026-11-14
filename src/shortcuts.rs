@@ -3,6 +3,9 @@ use anyhow::{Result, bail, ensure};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as Mods};
 use std::{collections::BTreeSet, fmt};
 
+mod compile;
+#[cfg(test)]
+mod contract_tests;
 pub mod ledger;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,10 +28,11 @@ impl Chord {
                 code = KeyCode::Char(c.to_ascii_lowercase());
             }
         }
-        Self {
-            code,
-            modifiers: event.modifiers,
+        let mut modifiers = event.modifiers;
+        if matches!(code, KeyCode::Char(c) if c.is_ascii_punctuation()) {
+            modifiers.remove(Mods::SHIFT);
         }
+        Self { code, modifiers }
     }
     pub fn parse(text: &str) -> Result<Self> {
         let mut modifiers = Mods::empty();
@@ -62,6 +66,8 @@ impl Chord {
                 KeyCode::Tab
             }
             "space" => KeyCode::Char(' '),
+            "plus" => KeyCode::Char('+'),
+            "period" => KeyCode::Char('.'),
             "backspace" => KeyCode::Backspace,
             "delete" => KeyCode::Delete,
             "insert" => KeyCode::Insert,
@@ -88,15 +94,27 @@ impl Chord {
                 KeyCode::Char(c.to_ascii_lowercase())
             }
         };
-        Ok(Self { code, modifiers })
+        ensure!(
+            !(code == KeyCode::Delete && modifiers.contains(Mods::CONTROL | Mods::ALT)),
+            "Ctrl+Alt+Delete is a system security chord and cannot be bound"
+        );
+        ensure!(
+            !matches!(code, KeyCode::Char(c) if !c.is_ascii()),
+            "IME and composed text cannot be shortcut keys"
+        );
+        Ok(Self::event(KeyEvent::new(code, modifiers)))
     }
     pub fn event_value(self) -> KeyEvent {
         KeyEvent::new(self.code, self.modifiers)
     }
     pub fn warning(self) -> Option<&'static str> {
         if self.modifiers.contains(Mods::SUPER)
-            || (self.modifiers == Mods::CONTROL && self.code == KeyCode::Char(' '))
-            || (self.modifiers == Mods::ALT && matches!(self.code, KeyCode::Tab | KeyCode::F(4)))
+            || (self.code == KeyCode::Char(' ')
+                && self.modifiers.intersects(Mods::CONTROL | Mods::SHIFT))
+            || (self.modifiers == Mods::CONTROL
+                && matches!(self.code, KeyCode::Char('.') | KeyCode::Esc | KeyCode::F(4)))
+            || (self.modifiers == Mods::ALT
+                && matches!(self.code, KeyCode::Tab | KeyCode::Esc | KeyCode::F(4)))
         {
             Some("System or input-method shortcut; DevTabs may never receive it")
         } else {
@@ -277,6 +295,7 @@ impl fmt::Display for Chord {
         }
         match self.code {
             KeyCode::Char(' ') => write!(f, "Space"),
+            KeyCode::Char('+') => write!(f, "Plus"),
             KeyCode::Char(c) => write!(f, "{}", c.to_ascii_uppercase()),
             KeyCode::F(n) => write!(f, "F{n}"),
             key => write!(f, "{key:?}"),
@@ -305,6 +324,10 @@ impl Sequence {
                     }
                 })
                 .collect::<Result<_>>()?,
+        );
+        ensure!(
+            result.0.len() == 1 || result.0[0] == prefix,
+            "A sequence must start with the managed prefix"
         );
         Ok(result)
     }
@@ -348,6 +371,42 @@ pub struct Index {
     pub prefix: Chord,
     pub diagnostics: Vec<String>,
 }
+/// Closed, ordered parent-before-child context set. Modals have no parent fallback.
+pub const CONTEXTS: &[&str] = &[
+    "app",
+    "overview",
+    "overview.projects",
+    "overview.tasks",
+    "overview.statistics",
+    "overview.detail",
+    "overview.queue",
+    "overview.search",
+    "workspace",
+    "panel",
+    "terminal.input",
+    "tree",
+    "editor",
+    "editor.search",
+    "preview",
+    "preview.text",
+    "preview.markdown",
+    "preview.image",
+    "preview.diff",
+    "menu.terminals",
+    "dialog.resources",
+    "dialog.notifications",
+    "dialog.review",
+    "dialog.bookmarks",
+    "dialog.info",
+    "dialog.diff",
+    "dialog.overview",
+    "gesture.move",
+    "gesture.resize",
+    "terminal.selection",
+    "shortcuts.manage",
+    "shortcuts.record",
+    "shortcuts.test",
+];
 fn reachable(declared: &str, actual: &str) -> bool {
     declared == actual
         || (declared == "app"
@@ -394,24 +453,7 @@ pub fn contexts_overlap(a: &str, b: &str) -> bool {
 }
 pub fn allowed_contexts(declared: &'static str) -> Vec<&'static str> {
     let mut out = vec![declared];
-    for context in [
-        "overview",
-        "overview.projects",
-        "overview.tasks",
-        "overview.statistics",
-        "overview.detail",
-        "overview.queue",
-        "workspace",
-        "terminal.input",
-        "panel",
-        "tree",
-        "editor",
-        "preview",
-        "preview.text",
-        "preview.markdown",
-        "preview.image",
-        "preview.diff",
-    ] {
+    for &context in CONTEXTS {
         if context != declared && reachable(declared, context) {
             out.push(context);
         }
@@ -420,157 +462,7 @@ pub fn allowed_contexts(declared: &'static str) -> Vec<&'static str> {
 }
 impl Index {
     pub fn build(settings: &crate::settings::model::Shortcuts) -> Result<Self> {
-        let prefix = Chord::parse(settings.prefix.as_deref().unwrap_or("Ctrl+G"))?;
-        let commands = catalog(prefix);
-        let mut bindings = commands
-            .iter()
-            .map(|c| Binding {
-                command: c.id.into(),
-                context: c.context.into(),
-                keys: c.defaults.clone(),
-                preferred: c.defaults.get(c.preferred).cloned(),
-                disabled: false,
-            })
-            .collect::<Vec<_>>();
-        let mut identities = BTreeSet::new();
-        for edit in &settings.bindings {
-            ensure!(
-                identities.insert((&edit.command, &edit.context)),
-                "Duplicate command/context override"
-            );
-            let command = commands
-                .iter()
-                .find(|c| c.id == edit.command)
-                .ok_or_else(|| anyhow::anyhow!("Unknown command {}", edit.command))?;
-            ensure!(
-                reachable(command.context, &edit.context),
-                "{} is unavailable in {}",
-                edit.command,
-                edit.context
-            );
-            let index = bindings
-                .iter()
-                .position(|b| b.command == edit.command && b.context == edit.context);
-            let i = match index {
-                Some(i) => i,
-                None => {
-                    bindings.push(Binding {
-                        command: edit.command.clone(),
-                        context: edit.context.clone(),
-                        keys: command.defaults.clone(),
-                        preferred: command.defaults.get(command.preferred).cloned(),
-                        disabled: false,
-                    });
-                    bindings.len() - 1
-                }
-            };
-            let binding = &mut bindings[i];
-            binding.disabled = edit.disabled;
-            for remove in &edit.remove {
-                let sequence = Sequence::parse(remove, prefix)?;
-                binding.keys.retain(|s| s != &sequence);
-            }
-            for add in &edit.add {
-                let sequence = Sequence::parse(add, prefix)?;
-                if !binding.keys.contains(&sequence) {
-                    binding.keys.push(sequence);
-                }
-            }
-            if let Some(preferred) = &edit.preferred {
-                binding.preferred = Some(Sequence::parse(preferred, prefix)?);
-            }
-            if let Some(p) = &binding.preferred {
-                if !binding.keys.contains(p) {
-                    binding.preferred = binding.keys.first().cloned();
-                }
-            }
-        }
-        let mut diagnostics = vec![];
-        // Explicit choices take precedence over a newly introduced default.
-        for i in 0..bindings.len() {
-            if bindings[i].disabled {
-                continue;
-            }
-            for j in i + 1..bindings.len() {
-                if bindings[j].disabled
-                    || bindings[i].command == bindings[j].command
-                    || !conflict(&bindings[i].context, &bindings[j].context)
-                {
-                    continue;
-                }
-                let shared = bindings[i]
-                    .keys
-                    .iter()
-                    .filter(|s| bindings[j].keys.contains(s))
-                    .cloned()
-                    .collect::<Vec<_>>();
-                if shared.is_empty() {
-                    continue;
-                }
-                for key in shared {
-                    let explicit = |b: &Binding| {
-                        settings.bindings.iter().any(|e| {
-                            e.command == b.command
-                                && e.context == b.context
-                                && e.add
-                                    .iter()
-                                    .any(|s| Sequence::parse(s, prefix).is_ok_and(|s| s == key))
-                        })
-                    };
-                    match (explicit(&bindings[i]), explicit(&bindings[j])) {
-                        (true, false) => {
-                            bindings[j].keys.retain(|s| s != &key);
-                            diagnostics.push(format!(
-                                "Default {} suppressed by {} on {}",
-                                bindings[j].command,
-                                bindings[i].command,
-                                key.display()
-                            ));
-                        }
-                        (false, true) => {
-                            bindings[i].keys.retain(|s| s != &key);
-                            diagnostics.push(format!(
-                                "Default {} suppressed by {} on {}",
-                                bindings[i].command,
-                                bindings[j].command,
-                                key.display()
-                            ));
-                        }
-                        _ => bail!(
-                            "Internal conflict: {} / {} on {}",
-                            bindings[i].command,
-                            bindings[j].command,
-                            key.display()
-                        ),
-                    }
-                }
-            }
-        }
-        for b in bindings.iter().filter(|b| !b.disabled) {
-            for sequence in &b.keys {
-                ensure!(
-                    !(sequence.0.len() == 1 && sequence.0[0] == prefix),
-                    "Prefix cannot also execute a command"
-                );
-                for other in bindings
-                    .iter()
-                    .filter(|o| !o.disabled && conflict(&b.context, &o.context))
-                {
-                    ensure!(
-                        !other.keys.iter().any(|s| s.0.len() == 1
-                            && sequence.0.len() == 2
-                            && s.0[0] == sequence.0[0]),
-                        "Sequence opener also executes a standalone command"
-                    );
-                }
-            }
-        }
-        Ok(Self {
-            commands,
-            bindings,
-            prefix,
-            diagnostics,
-        })
+        compile::build(settings)
     }
     pub fn current() -> Self {
         crate::settings::store::SettingsStore::current()
@@ -600,7 +492,7 @@ impl Index {
             })
             .map_or_else(String::new, Sequence::display)
     }
-    fn binding(&self, id: &str, context: &str) -> Option<&Binding> {
+    pub fn binding(&self, id: &str, context: &str) -> Option<&Binding> {
         self.bindings
             .iter()
             .filter(|b| b.command == id && reachable(&b.context, context))
@@ -618,6 +510,9 @@ impl Index {
             .filter(|b| !b.disabled)
     }
     pub fn resolve(&self, context: &str, keys: &[Chord]) -> Resolution {
+        if !CONTEXTS.contains(&context) {
+            return Resolution::TextInput;
+        }
         for c in &self.commands {
             if let Some(b) = self.binding(c.id, context) {
                 if b.keys.iter().any(|s| s.0 == keys) {
@@ -641,7 +536,7 @@ impl Index {
         }
     }
     pub fn terminal_owned(&self) -> Vec<String> {
-        let mut keys = vec![self.prefix.to_string()];
+        let mut keys = vec![];
         for c in &self.commands {
             if let Some(b) = self.binding(c.id, "terminal.input") {
                 for s in &b.keys {
@@ -672,6 +567,12 @@ impl Router {
         self.waiting = None;
     }
     pub fn route(&mut self, index: &Index, context: &str, key: KeyEvent) -> Resolution {
+        if key.kind == crossterm::event::KeyEventKind::Release {
+            return Resolution::Handled;
+        }
+        if key.kind == crossterm::event::KeyEventKind::Repeat {
+            return Resolution::Handled;
+        }
         if matches!(key.code, KeyCode::Modifier(_)) {
             return Resolution::Handled;
         }
@@ -971,12 +872,7 @@ fn catalog(prefix: Chord) -> Vec<Command> {
             context: "workspace",
             label: id,
             defaults: {
-                let mut values = vec![Sequence(vec![prefix, Chord::parse(key).unwrap()])];
-                if matches!(key, "+" | "!") {
-                    let mut c = Chord::parse(key).unwrap();
-                    c.modifiers |= Mods::SHIFT;
-                    values.push(Sequence(vec![prefix, c]));
-                }
+                let values = vec![Sequence(vec![prefix, Chord::parse(key).unwrap()])];
                 values
             },
             preferred: 0,

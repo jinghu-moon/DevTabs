@@ -169,7 +169,16 @@ mod windows {
             } else {
                 char::from_u32(u32::from(unit)).unwrap_or('\u{fffd}')
             };
-            let mods = modifiers(raw.dwControlKeyState);
+            let mut mods = modifiers(raw.dwControlKeyState);
+            // AltGr is represented as RightAlt+LeftCtrl by Windows. Its printable
+            // Unicode result is text; preserve the original record for the PTY.
+            if (!character.is_control()
+                && raw.dwControlKeyState & (RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED)
+                    == (RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED))
+                || raw.wVirtualKeyCode == 231
+            {
+                mods.remove(KeyModifiers::CONTROL | KeyModifiers::ALT);
+            }
             let code = match raw.wVirtualKeyCode {
                 8 => KeyCode::Backspace,
                 9 if mods.contains(KeyModifiers::SHIFT) => KeyCode::BackTab,
@@ -401,6 +410,40 @@ mod windows {
                 assert_eq!(raw.down, down == 1);
                 assert_eq!(raw.physical.vk, 17);
                 assert_eq!(raw.physical.scan, 31);
+            }
+        }
+        #[test]
+        fn unicode_shift_altgr_control_and_ime_records_normalize_without_changing_wire() {
+            use crate::shortcuts::Chord;
+            let mut source = Events::new().unwrap();
+            for (unit, vk, state, expected) in [
+                (65, 65, SHIFT_PRESSED, Some("Shift+A")),
+                (65, 65, CAPSLOCK_ON, Some("A")),
+                (1, 65, LEFT_CTRL_PRESSED, Some("Ctrl+A")),
+                (43, 187, SHIFT_PRESSED, Some("Plus")),
+                (64, 81, RIGHT_ALT_PRESSED | LEFT_CTRL_PRESSED, Some("@")),
+                (9, 9, SHIFT_PRESSED | NUMLOCK_ON, Some("Shift+Tab")),
+                ('中' as u16, 231, LEFT_CTRL_PRESSED | LEFT_ALT_PRESSED, None),
+            ] {
+                let mut record = raw(unit, vk, 1);
+                record.dwControlKeyState = state;
+                source.key(record);
+                let input = source.queued.pop_front().unwrap();
+                let Event::Key(key) = input.event else {
+                    panic!("expected key")
+                };
+                let native =
+                    crate::shortcuts::ledger::RawKey::parse(input.win32.as_ref().unwrap()).unwrap();
+                assert_eq!(
+                    (native.unicode, native.control, native.physical.vk),
+                    (unit, state, vk)
+                );
+                if let Some(expected) = expected {
+                    assert_eq!(Chord::event(key), Chord::parse(expected).unwrap());
+                } else {
+                    assert_eq!(key.code, KeyCode::Char('中'));
+                    assert!(key.modifiers.is_empty());
+                }
             }
         }
         #[test]

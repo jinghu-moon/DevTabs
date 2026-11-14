@@ -795,7 +795,18 @@ impl App {
                 ui.observe_raw(raw);
             }
             match self.key_ledger.existing(raw, context) {
-                Existing::Consume => return,
+                Existing::Consume => {
+                    if self.key_ledger.suppressed_repress {
+                        self.message = if crate::i18n::language() == crate::i18n::Language::ZhCn {
+                            "松开后再按一次"
+                        } else {
+                            "Release the key, then press again"
+                        }
+                        .into();
+                        self.key_ledger.suppressed_repress = false;
+                    }
+                    return;
+                }
                 Existing::Forward { target, wire } => {
                     let bytes = if wire == WireMode::Win32 {
                         raw.bytes.clone()
@@ -827,7 +838,18 @@ impl App {
         if let Some(raw) = raw {
             let owner = self.forwarded.take().unwrap_or(Owner::Ui {
                 context,
-                repeat: false,
+                repeat: matches!(
+                    key.code,
+                    KeyCode::Up
+                        | KeyCode::Down
+                        | KeyCode::Left
+                        | KeyCode::Right
+                        | KeyCode::PageUp
+                        | KeyCode::PageDown
+                        | KeyCode::Backspace
+                        | KeyCode::Delete
+                        | KeyCode::Char(_)
+                ),
             });
             let delivered = matches!(owner, Owner::Terminal { .. });
             self.key_ledger.own(raw, owner, delivered);
@@ -837,6 +859,14 @@ impl App {
         }
     }
     pub(crate) fn execute_command(&mut self, id: &str) {
+        self.forwarded = Some(crate::shortcuts::ledger::Owner::Ui {
+            context: self.input_context(),
+            repeat: self
+                .shortcuts
+                .commands
+                .iter()
+                .any(|c| c.id == id && c.repeat),
+        });
         self.shortcut_router.cancel();
         self.mode = Mode::Normal;
         let leaving = match id {

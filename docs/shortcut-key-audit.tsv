@@ -317,7 +317,6 @@ registry	src/shortcuts.rs	KeyCode::F(n)
 registry	src/shortcuts.rs	KeyCode::F(n) => write!(f, "F{n}"),
 registry	src/shortcuts.rs	KeyCode::Tab
 registry	src/shortcuts.rs	KeyEvent::new(self.code, self.modifiers)
-registry	src/shortcuts.rs	c.modifiers |= Mods::SHIFT;
 registry	src/shortcuts.rs	code = KeyCode::Char(c.to_ascii_lowercase());
 registry	src/shortcuts.rs	code: KeyCode::Tab,
 registry	src/shortcuts.rs	if code == KeyCode::BackTab {
@@ -327,8 +326,6 @@ registry	src/shortcuts.rs	if self.modifiers.contains(Mods::SUPER)
 registry	src/shortcuts.rs	let mut modifiers = Mods::empty();
 registry	src/shortcuts.rs	modifiers |= Mods::SHIFT;
 registry	src/shortcuts.rs	modifiers: event.modifiers | Mods::SHIFT,
-registry	src/shortcuts.rs	|| (self.modifiers == Mods::ALT && matches!(self.code, KeyCode::Tab | KeyCode::F(4)))
-registry	src/shortcuts.rs	|| (self.modifiers == Mods::CONTROL && self.code == KeyCode::Char(' '))
 widget	src/app.rs	guard: KeyCode::Char('f' | 'F') if self .quit_requested .is_some_and(|at| at.elapsed() >= Duration::from_secs(3)) =>
 widget	src/app/parallel.rs	.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 widget	src/app/parallel.rs	KeyCode::BackTab => {
@@ -631,3 +628,27 @@ widget	src/sidebar/reading.rs	KeyCode::Down => outline.selected = (outline.selec
 widget	src/sidebar/reading.rs	KeyCode::Enter => self.accept_outline(),
 widget	src/sidebar/reading.rs	KeyCode::Esc => self.reader.outline = None,
 widget	src/sidebar/reading.rs	KeyCode::Up => outline.selected = outline.selected.saturating_sub(1),
+control	src/app.rs	KeyCode::Up
+control	src/app.rs	| KeyCode::Backspace
+control	src/app.rs	| KeyCode::Char(_)
+control	src/app.rs	| KeyCode::Delete
+control	src/app.rs	| KeyCode::Down
+control	src/app.rs	| KeyCode::Left
+control	src/app.rs	| KeyCode::PageDown
+control	src/app.rs	| KeyCode::PageUp
+control	src/app.rs	| KeyCode::Right
+protocol	src/events.rs	mods.remove(KeyModifiers::CONTROL | KeyModifiers::ALT);
+registry	src/shortcuts.rs	!(code == KeyCode::Delete && modifiers.contains(Mods::CONTROL | Mods::ALT)),
+registry	src/shortcuts.rs	!matches!(code, KeyCode::Char(c) if !c.is_ascii()),
+registry	src/shortcuts.rs	"period" => KeyCode::Char('.'),
+registry	src/shortcuts.rs	"plus" => KeyCode::Char('+'),
+registry	src/shortcuts.rs	&& matches!(self.code, KeyCode::Char('.') | KeyCode::Esc | KeyCode::F(4)))
+registry	src/shortcuts.rs	&& matches!(self.code, KeyCode::Tab | KeyCode::Esc | KeyCode::F(4)))
+registry	src/shortcuts.rs	&& self.modifiers.intersects(Mods::CONTROL | Mods::SHIFT))
+registry	src/shortcuts.rs	KeyCode::Char('+') => write!(f, "Plus"),
+registry	src/shortcuts.rs	Ok(Self::event(KeyEvent::new(code, modifiers)))
+registry	src/shortcuts.rs	if matches!(code, KeyCode::Char(c) if c.is_ascii_punctuation()) {
+registry	src/shortcuts.rs	modifiers.remove(Mods::SHIFT);
+registry	src/shortcuts.rs	|| (self.code == KeyCode::Char(' ')
+registry	src/shortcuts.rs	|| (self.modifiers == Mods::ALT
+registry	src/shortcuts.rs	|| (self.modifiers == Mods::CONTROL
