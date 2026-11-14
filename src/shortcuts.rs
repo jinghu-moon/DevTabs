@@ -460,6 +460,13 @@ pub fn allowed_contexts(declared: &'static str) -> Vec<&'static str> {
     }
     out
 }
+pub fn command_contexts(id: &str, declared: &'static str) -> Vec<&'static str> {
+    let mut contexts = allowed_contexts(declared);
+    if id == "panel.quick_open" {
+        contexts.push("terminal.input");
+    }
+    contexts
+}
 impl Index {
     pub fn build(settings: &crate::settings::model::Shortcuts) -> Result<Self> {
         compile::build(settings)
@@ -633,6 +640,8 @@ pub fn workspace_menu_command(key: char) -> Option<&'static str> {
         'q' => Some("workspace.quit"),
         ',' => Some("settings.workspace.open"),
         '*' => Some("shortcuts.open"),
+        '~' => Some("terminal.send_prefix"),
+        '`' => Some("terminal.send_quick_open_key"),
         _ => None,
     }
 }
@@ -768,6 +777,7 @@ fn catalog(prefix: Chord) -> Vec<Command> {
         );
     }
     add("panel.quick_open", "panel", &["Ctrl+P"], false);
+    add("terminal.send_quick_open_key", "terminal.input", &[], false);
     add("panel.follow", "panel", &[], false);
     add("panel.compact", "panel", &[], false);
     add("panel.modified", "tree", &["G"], false);
@@ -1052,6 +1062,7 @@ pub fn command_label(id: &str) -> String {
             "quit" => "退出",
             "open" => "打开",
             "send_prefix" => "发送前缀原键",
+            "send_quick_open_key" => "发送 Ctrl+P 原键",
             "match" => "搜索匹配",
             "find" => "查找",
             "undo" => "撤销",
@@ -1067,4 +1078,52 @@ pub fn command_label(id: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" · ")
+}
+
+/// Explicit terminal-send commands form one balanced cycle, never a router replay.
+pub fn send_chord(chord: Chord, wire: ledger::WireMode) -> Vec<u8> {
+    let key = chord.event_value();
+    let win32 = wire == ledger::WireMode::Win32;
+    let mut bytes = crate::input::key(
+        key,
+        matches!(
+            wire,
+            ledger::WireMode::Vt {
+                application_cursor: true
+            }
+        ),
+        win32,
+    );
+    if win32 {
+        bytes.extend(crate::input::key(
+            KeyEvent {
+                kind: crossterm::event::KeyEventKind::Release,
+                ..key
+            },
+            false,
+            true,
+        ));
+    }
+    bytes
+}
+
+pub fn configuration_risks(p: &crate::settings::model::Shortcuts) -> Vec<String> {
+    let prefix = Chord::parse(p.prefix.as_deref().unwrap_or("Ctrl+G"))
+        .unwrap_or_else(|_| Chord::parse("Ctrl+G").unwrap());
+    let mut risks = vec![];
+    if prefix.warning().is_some() {
+        risks.push(format!("Prefix: {prefix}"));
+    }
+    for b in &p.bindings {
+        for s in &b.add {
+            if let Ok(s) = Sequence::parse(s, prefix) {
+                for c in s.0.iter().filter(|c| c.warning().is_some()) {
+                    risks.push(format!("{} [{}]: {}", b.command, b.context, c));
+                }
+            }
+        }
+    }
+    risks.sort();
+    risks.dedup();
+    risks
 }

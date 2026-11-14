@@ -11,6 +11,7 @@ pub enum Action {
     Diagnostics,
     ExportConfig,
     ExportShortcuts,
+    ExportEffectiveShortcuts,
     BackupContent,
     InspectContent,
     RestoreContent,
@@ -37,6 +38,7 @@ impl Action {
                 | Self::TestNotification
                 | Self::ExportConfig
                 | Self::ExportShortcuts
+                | Self::ExportEffectiveShortcuts
                 | Self::BackupContent
         )
     }
@@ -47,6 +49,10 @@ impl Action {
             Self::Diagnostics => ("刷新宿主/通知诊断", "Refresh host/notification diagnostics"),
             Self::ExportConfig => ("导出已提交配置", "Export committed configuration"),
             Self::ExportShortcuts => ("导出已提交快捷键", "Export committed shortcuts"),
+            Self::ExportEffectiveShortcuts => (
+                "导出完整有效快捷键目录（JSON）",
+                "Export effective shortcut catalog (JSON)",
+            ),
             Self::BackupContent => ("备份用户内容", "Back up user content"),
             Self::InspectContent => ("预览恢复差异", "Inspect restore differences"),
             Self::RestoreContent => ("恢复无冲突用户内容", "Restore content without conflicts"),
@@ -83,6 +89,7 @@ pub fn actions() -> Vec<Action> {
         Action::TestNotification,
         Action::ExportConfig,
         Action::ExportShortcuts,
+        Action::ExportEffectiveShortcuts,
         Action::BackupContent,
         Action::InspectContent,
         Action::RestoreContent,
@@ -150,6 +157,21 @@ pub fn execute_at(root: &Path, action: &Action, archive: &str) -> Result<String>
             crate::config::atomic_write(
                 &output(root, archive)?,
                 toml::to_string_pretty(&t)?.as_bytes(),
+            )?;
+        }
+        Action::ExportEffectiveShortcuts => {
+            let source = super::store::SettingsStore::new(root).read()?;
+            let p = &source.effective.shortcuts;
+            let index = crate::shortcuts::Index::build(p)?;
+            let rows=index.bindings.iter().map(|b| {
+                let c=index.commands.iter().find(|c|c.id==b.command).unwrap();
+                let edit=p.bindings.iter().find(|e|e.command==b.command && e.context==b.context);
+                serde_json::json!({"command":b.command,"context":b.context,"effective":if b.disabled {vec![]} else {b.keys.iter().map(|s|s.display()).collect::<Vec<_>>()},"preferred":index.preferred(&b.command,&b.context),"disabled":b.disabled,"defaults":c.defaults.iter().map(|s|s.display()).collect::<Vec<_>>(),"difference":edit})
+            }).collect::<Vec<_>>();
+            let report = serde_json::json!({"kind":"devtabs.effective-shortcut-catalog","description":"Read-only committed catalog, not importable user differences","prefix":index.prefix.to_string(),"terminal_owned":index.terminal_owned(),"diagnostics":index.diagnostics,"bindings":rows});
+            crate::config::atomic_write(
+                &output(root, archive)?,
+                &serde_json::to_vec_pretty(&report)?,
             )?;
         }
         Action::BackupContent => {

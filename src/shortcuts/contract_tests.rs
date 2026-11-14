@@ -167,3 +167,51 @@ fn release_or_repeat_does_not_complete_prefix_and_zero_bindings_means_zero_owner
         Resolution::ForwardTerminal
     );
 }
+#[test]
+fn terminal_quick_open_is_opt_in_has_an_explicit_exit_and_does_not_change_panel_defaults() {
+    let mut open = edit("panel.quick_open", "terminal.input");
+    open.add.push(S::Chord("Ctrl+P".into()));
+    let mut send = edit("terminal.send_quick_open_key", "terminal.input");
+    send.add
+        .push(S::Steps(vec!["Prefix".into(), "Ctrl+P".into()]));
+    let i = Index::build(&Shortcuts {
+        prefix: Some("Ctrl+K".into()),
+        bindings: vec![open, send],
+    })
+    .unwrap();
+    assert_eq!(
+        resolve(&i, "terminal.input", "Ctrl+P"),
+        Resolution::Execute("panel.quick_open")
+    );
+    assert_eq!(
+        resolve(&i, "tree", "Ctrl+P"),
+        Resolution::Execute("panel.quick_open")
+    );
+    assert_eq!(
+        i.resolve(
+            "terminal.input",
+            &[i.prefix, Chord::parse("Ctrl+P").unwrap()]
+        ),
+        Resolution::Execute("terminal.send_quick_open_key")
+    );
+    assert_eq!(i.terminal_owned(), ["Ctrl+P", "Ctrl+K"]);
+    assert_eq!(
+        send_chord(
+            Chord::parse("Ctrl+P").unwrap(),
+            ledger::WireMode::Vt {
+                application_cursor: false
+            }
+        ),
+        [16]
+    );
+    let bytes = send_chord(i.prefix, ledger::WireMode::Win32);
+    let records = String::from_utf8(bytes)
+        .unwrap()
+        .split_inclusive('_')
+        .map(|s| ledger::RawKey::parse(s.as_bytes()).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2);
+    assert!(records[0].down);
+    assert!(!records[1].down);
+    assert_eq!(records[0].physical, records[1].physical);
+}

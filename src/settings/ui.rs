@@ -78,6 +78,7 @@ enum Hit {
     Step(i64),
     Override,
     ConfirmReset,
+    ConfirmResetKeepNotes,
     ConfirmDelete,
     UseLatest,
     KeepMine,
@@ -1522,6 +1523,14 @@ impl SettingsUi {
             Some(Hit::ConfirmReset) => {
                 self.reset_page()?;
             }
+            Some(Hit::ConfirmResetKeepNotes) => {
+                super::shortcut_ui::Manager::reset_all(
+                    self.draft.as_mut().context("Repair configuration first")?,
+                    true,
+                )?;
+                self.reset_prompt = false;
+                self.preview();
+            }
             Some(Hit::Page(i)) => {
                 self.finish_edit()?;
                 self.category = i;
@@ -1654,6 +1663,7 @@ impl SettingsUi {
                 | Hit::Discard
                 | Hit::Reset
                 | Hit::ConfirmReset
+                | Hit::ConfirmResetKeepNotes
                 | Hit::Action(
                     Action::ClearStats
                         | Action::ResetMemory
@@ -2151,7 +2161,18 @@ impl SettingsUi {
         } else if self.delete_prompt.is_some() {
             buttons.push((tr("确认删除配置项", "Confirm removal"), Hit::ConfirmDelete));
         } else if self.reset_prompt {
-            buttons.push((tr("确认恢复本页", "Confirm reset"), Hit::ConfirmReset));
+            if self.category == 10 {
+                buttons.push((
+                    tr("恢复并保留备注", "Reset and keep notes"),
+                    Hit::ConfirmResetKeepNotes,
+                ));
+                buttons.push((
+                    tr("恢复并清除备注", "Reset and clear notes"),
+                    Hit::ConfirmReset,
+                ));
+            } else {
+                buttons.push((tr("确认恢复本页", "Confirm reset"), Hit::ConfirmReset));
+            }
         } else if let Some(action) = self.operation_confirm.clone() {
             buttons.push((tr("确认立即执行", "Confirm operation"), Hit::Action(action)));
         }
@@ -2218,7 +2239,7 @@ impl SettingsUi {
         let p = self.page();
         let d = self.draft.as_mut().context("Repair configuration first")?;
         if self.category == 10 {
-            draft::put(&mut d.tree, &draft::key(&[], "shortcuts"), None)?;
+            super::shortcut_ui::Manager::reset_all(d, false)?;
         } else if let Kind::Object(fields) = p.field.kind {
             d.remove_overrides(&p.path, &fields)?;
         }

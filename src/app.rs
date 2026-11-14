@@ -66,6 +66,10 @@ pub struct App {
     shortcut_router: crate::shortcuts::Router,
     key_ledger: crate::shortcuts::ledger::Ledger,
     forwarded: Option<crate::shortcuts::ledger::Owner>,
+    sequence_target: Option<(
+        crate::shortcuts::ledger::Target,
+        crate::shortcuts::ledger::WireMode,
+    )>,
     size: ratatui::layout::Rect,
     pub(crate) popup: Option<usize>,
     pub(crate) popup_window: popup::Window,
@@ -148,6 +152,7 @@ impl App {
             shortcut_router: Default::default(),
             key_ledger: Default::default(),
             forwarded: None,
+            sequence_target: None,
             size,
             popup: None,
             popup_window: popup::Window::load(),
@@ -859,6 +864,7 @@ impl App {
         }
     }
     pub(crate) fn execute_command(&mut self, id: &str) {
+        let sequence_target = self.sequence_target.take();
         self.forwarded = Some(crate::shortcuts::ledger::Owner::Ui {
             context: self.input_context(),
             repeat: self
@@ -1049,27 +1055,21 @@ impl App {
                 self.mode = Mode::Confirm;
                 self.quit_requested.get_or_insert_with(Instant::now);
             }
-            "terminal.send_prefix" => {
-                let chord = self.shortcuts.prefix;
-                let key = KeyEvent::new(chord.code, chord.modifiers);
-                self.forward_key(key, None, 1);
-                if self.sessions[self.focus]
-                    .state()
-                    .terminal
-                    .parser
-                    .callbacks()
-                    .win32_input
+            "terminal.send_prefix" | "terminal.send_quick_open_key" => {
+                let chord = if id == "terminal.send_prefix" {
+                    self.shortcuts.prefix
+                } else {
+                    crate::shortcuts::Chord::parse("Ctrl+P").unwrap()
+                };
+                if let Some((target, wire)) = sequence_target.or_else(|| self.current_input_owner())
                 {
-                    self.forward_key(
-                        KeyEvent {
-                            kind: KeyEventKind::Release,
-                            ..key
-                        },
-                        None,
-                        1,
-                    );
+                    if !self.send_owned(&target, crate::shortcuts::send_chord(chord, wire)) {
+                        self.message =
+                            "Original terminal connection is unavailable / 原终端连接不可用".into();
+                    }
+                } else {
+                    self.message = "No connected terminal target / 没有已连接的终端目标".into();
                 }
-                self.forwarded = None;
             }
             _ => {}
         }
@@ -1078,6 +1078,33 @@ impl App {
         if let Some(id) = crate::shortcuts::workspace_menu_command(key) {
             self.execute_command(id);
         }
+    }
+    fn current_input_owner(
+        &self,
+    ) -> Option<(
+        crate::shortcuts::ledger::Target,
+        crate::shortcuts::ledger::WireMode,
+    )> {
+        use crate::shortcuts::ledger::{Target, WireMode};
+        if !self.allowed(self.focus) || !self.sessions[self.focus].attached() {
+            return None;
+        }
+        let session = &self.sessions[self.focus];
+        let generation = session.input_lease()?;
+        let state = session.state();
+        Some((
+            Target {
+                session: session.info.id.clone(),
+                generation,
+            },
+            if state.terminal.parser.callbacks().win32_input {
+                WireMode::Win32
+            } else {
+                WireMode::Vt {
+                    application_cursor: state.terminal.screen().application_cursor(),
+                }
+            },
+        ))
     }
     fn route_key(&mut self, key: KeyEvent, native: Option<Vec<u8>>, repeat: usize) {
         if let Some(ui) = &mut self.settings_ui {
@@ -1176,10 +1203,13 @@ impl App {
                     return;
                 }
                 crate::shortcuts::Resolution::AwaitSequence => {
+                    self.forwarded = Some(crate::shortcuts::ledger::Owner::SequencePending);
+                    self.sequence_target = self.current_input_owner();
                     self.mode = Mode::Prefix;
                     return;
                 }
                 crate::shortcuts::Resolution::Handled => {
+                    self.sequence_target = None;
                     self.mode = Mode::Normal;
                     return;
                 }
@@ -1212,9 +1242,7 @@ impl App {
             return;
         }
         if let Some(sidebar) = &mut self.sidebar
-            && (sidebar.focus != crate::sidebar::Focus::Terminal
-                || sidebar.modal()
-                || (key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL))
+            && (sidebar.focus != crate::sidebar::Focus::Terminal || sidebar.modal())
         {
             if pressed {
                 match sidebar.key(key) {

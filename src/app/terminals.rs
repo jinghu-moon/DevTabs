@@ -840,6 +840,7 @@ pub(super) mod tests {
             shortcut_router: Default::default(),
             key_ledger: Default::default(),
             forwarded: None,
+            sequence_target: None,
             size: Rect::new(0, 0, 100, 30),
             popup: None,
             popup_window: popup::Window::default(),
@@ -1262,6 +1263,48 @@ pub(super) mod tests {
                 }
             });
         }
+    }
+    #[test]
+    fn prefix_send_requires_two_physical_cycles_and_never_repeats_while_held() {
+        let mut app = app();
+        let key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
+        let down = b"\x1b[71;34;7;1;8;1_".to_vec();
+        let up = b"\x1b[71;34;7;0;8;1_".to_vec();
+        app.key(key, Some(down.clone()), 1);
+        assert!(app.mode == Mode::Prefix);
+        for _ in 0..5 {
+            app.key(key, Some(down.clone()), 1);
+        }
+        assert!(app.mode == Mode::Prefix);
+        assert!(app.message.is_empty());
+        app.key(
+            KeyEvent {
+                kind: KeyEventKind::Release,
+                ..key
+            },
+            Some(up.clone()),
+            1,
+        );
+        assert!(app.mode == Mode::Prefix);
+        app.key(key, Some(down.clone()), 1);
+        assert!(app.mode == Mode::Normal);
+        assert!(app.message.contains("No connected terminal target"));
+        app.message.clear();
+        for _ in 0..5 {
+            app.key(key, Some(down.clone()), 1);
+        }
+        assert!(app.mode == Mode::Normal);
+        assert!(app.message.is_empty());
+        app.key(
+            KeyEvent {
+                kind: KeyEventKind::Release,
+                ..key
+            },
+            Some(up),
+            1,
+        );
+        app.key(key, Some(down), 1);
+        assert!(app.mode == Mode::Prefix);
     }
 
     #[test]

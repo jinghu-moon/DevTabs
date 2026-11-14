@@ -641,6 +641,8 @@
   "shortcuts": "Keyboard shortcuts",
   "chrome.command.settings": "Settings",
   "chrome.command.shortcuts": "Keyboard shortcuts",
+  "chrome.command.send_prefix": "Send original prefix",
+  "chrome.command.send_quick_open_key": "Send original Ctrl+P",
   "image_status": "%{path} · %{fit} Fit · %{actual} 100% · %{zoom_in}/%{zoom_out} Zoom · Arrows Pan · %{quality} Quality · %{info} Info · %{menu} More%{fallback}",
   "ui.copy_active_path_hint": "Copy active path · Right click to copy tab path"
 }

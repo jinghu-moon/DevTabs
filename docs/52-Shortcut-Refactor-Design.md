@@ -99,7 +99,7 @@
 | 按键 | 当前代码事实 | 重构后默认 |
 | --- | --- | --- |
 | Ctrl+G | `App::key` 在终端路由前进入前缀模式；当前 contains(CONTROL) 还可能接受额外修饰键 | 精确 Ctrl+G 进入命令模式；支持更换或关闭终端区前缀入口 |
-| Ctrl+P | `App::key` 对存在的 Sidebar 有特例；`explorer_key` 会在树焦点判断之前调用 quick_open | 普通终端默认透传；files.quick_open 的 Ctrl+P 保留在文件区域，用户可显式扩展到终端区，不为保留旧行为而抢 CLI 历史导航 |
+| Ctrl+P | `App::key` 对存在的 Sidebar 有特例；`explorer_key` 会在树焦点判断之前调用 quick_open | 普通终端默认透传；panel.quick_open 的 Ctrl+P 保留在文件区域，用户可显式扩展到终端区，不为保留旧行为而抢 CLI 历史导航 |
 | F1–F12，包括 F3 / Ctrl+F3 | 普通终端路径没有总览功能键处理 | 继续交给终端程序；不会因总览新增别名而扩大占用 |
 | Ctrl+C、Ctrl+Z、Ctrl+S、Ctrl+F、Tab、Enter、方向键、普通字符 | 在普通终端上下文中沿 forward_key 处理，前提是事件实际送达且目标可用 | 保持透传；受管前缀及用户显式新增项之外，没有隐式工作区拦截 |
 
@@ -119,7 +119,7 @@
 
 | 属性 | 约定 |
 | --- | --- |
-| `id` | 稳定、无语言依赖，例如 `overview.note.edit`、`editor.search.next`、`shortcuts.open` |
+| `id` | 稳定、无语言依赖，例如 `overview.note.edit`、`editor.match.next`、`shortcuts.open` |
 | `label_key` / `category_key` | 复用中英文文案体系 |
 | `contexts` | 明确允许执行的上下文，不能通过命令前缀字符串猜作用域 |
 | `default_bindings` | 显式绑定集合，可以为空、单个或多个 |
@@ -165,7 +165,7 @@
 ### 3.3 默认双绑定策略
 
 1. 保留现有有效、明确的默认快捷键，修饰键精确化的差异按 §12.1 导出，不能把所有旧的宽松匹配都当作正式别名。
-2. 本轮明确增加的默认双绑定只有两个命令：总览 `overview.note.edit`、编辑器 `editor.search.next`，各自在原有区域接受 `Ctrl+F3` 与 `F3`，首选显示 Ctrl+F3。
+2. 本轮明确增加的默认双绑定只有两个命令：总览 `overview.note.edit`、编辑器 `editor.match.next`，各自在原有区域接受 `Ctrl+F3` 与 `F3`，首选显示 Ctrl+F3。
 3. 其他 F1–F10 保留原有显式默认值，用户可以追加 Ctrl+Fn 或其他组合；新的内置备用键须逐项说明常用需求、检查内部冲突和系统语义。尤其不自动将 Ctrl+F4 绑定为重命名/上一处匹配。[R6]
 4. 所有别名都必须是注册表中的明确记录，管理页“有效绑定”完整展示并允许单独删除；配置文件只保存用户相对默认的差异，无需把默认别名再写一遍。运行时没有“Ctrl+任意功能键视为裸功能键”的降级规则。
 5. 只改变展示首选不会改变有效绑定、命令优先级或按键消费；日常底栏优先使用用户指定项，再使用命令的默认首选。拥有 Ctrl+Fn 别名时默认优先显示该项，没有则显示原键，不虚构绑定。
@@ -181,7 +181,7 @@
 | `overview` | 总览共享命令的父级；只向声明允许的子区域传播 | 不穿透模态，不把普通字符提升成全区域命令 |
 | `overview.projects` | 总览项目列表及其命令 | 搜索框正文、对话框输入 |
 | `overview.search` | 搜索输入与确认 | 项目列表的普通字符动作 |
-| `overview.detail` / `overview.stats` / `overview.queue` | 各区域的滚动、选择与局部命令 | 其他区域相同字母命令 |
+| `overview.detail` / `overview.statistics` / `overview.queue` | 各区域的滚动、选择与局部命令 | 其他区域相同字母命令 |
 | `workspace` | 显式注册的工作区管理入口 | 不无差别抢所有终端组合键 |
 | `terminal.input` | 透传与用户显式启用的绑定 | 不继承总览快捷键 |
 | `tree` | 文件导航、操作、模糊查找入口 | 编辑器的保存与撤销 |
@@ -440,12 +440,12 @@ preferred = "Ctrl+F3"
 notes = { "F3" = "截图软件使用；仅删除此命令的本地 F3" }
 
 [[shortcuts.bindings]]
-command = "editor.search.next"
+command = "editor.match.next"
 context = "editor"
 preferred = "Ctrl+F3"
 
 [[shortcuts.bindings]]
-command = "files.quick_open"
+command = "panel.quick_open"
 context = "terminal.input"
 disabled = true
 

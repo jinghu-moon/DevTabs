@@ -11,7 +11,6 @@ control	src/app.rs	KeyCode::PageDown => selection.screen.set_scrollback(offset.s
 control	src/app.rs	KeyCode::PageUp => selection.screen.set_scrollback(offset + 10),
 control	src/app.rs	if pressed && key.code == KeyCode::Esc && self.cancel_file_drag() {
 control	src/app.rs	if self.parallel.drag && key.code == KeyCode::Esc {
-control	src/app.rs	|| (key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL))
 control	src/app/terminals.rs	KeyCode::Char('c' | 'C') => Some(Action::Place(selected, Placement::Collapsed)),
 control	src/app/terminals.rs	KeyCode::Char('d' | 'D') => Some(Action::Place(selected, Placement::Docked)),
 control	src/app/terminals.rs	KeyCode::Char('f' | 'F') => Some(Action::Float(selected)),
@@ -187,7 +186,6 @@ control	src/sidebar/image.rs	return Ok(!(key.modifiers.contains(KeyModifiers::AL
 control	src/sidebar/reading.rs	.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
 control	src/sidebar/reading.rs	guard: KeyCode::Char(c) if !key .modifiers .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) && outline.filter.chars().count() < 256 =>
 protocol	src/app.rs	KeyEvent::new(self.shortcuts.prefix.code, self.shortcuts.prefix.modifiers);
-protocol	src/app.rs	let key = KeyEvent::new(chord.code, chord.modifiers);
 protocol	src/app/terminals.rs	KeyModifiers::NONE,
 protocol	src/app/terminals.rs	self.terminal_key(KeyEvent::new(
 protocol	src/events.rs	13 => KeyCode::Enter,
@@ -652,3 +650,7 @@ registry	src/shortcuts.rs	modifiers.remove(Mods::SHIFT);
 registry	src/shortcuts.rs	|| (self.code == KeyCode::Char(' ')
 registry	src/shortcuts.rs	|| (self.modifiers == Mods::ALT
 registry	src/shortcuts.rs	|| (self.modifiers == Mods::CONTROL
+widget	src/settings/shortcut_ui.rs	&& !matches!(key.code, KeyCode::Modifier(_))
+widget	src/settings/shortcut_ui.rs	KeyCode::Delete => {
+widget	src/settings/shortcut_ui.rs	KeyCode::Down => *selected = selected.saturating_add(1),
+widget	src/settings/shortcut_ui.rs	} else if key.code == KeyCode::Enter && key.modifiers == Mods::CONTROL {

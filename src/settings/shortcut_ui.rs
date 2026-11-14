@@ -3,7 +3,7 @@ use super::{
     draft::{self, Draft},
     model::{self, Binding, Sequence as ModelSequence},
 };
-use crate::shortcuts::{Chord, Index, Sequence, allowed_contexts};
+use crate::shortcuts::{Chord, Index, Sequence, command_contexts};
 use anyhow::{Context, Result, ensure};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as Mods};
 use ratatui::{
@@ -43,6 +43,13 @@ pub enum Action {
     Details,
     Menu,
     Removed,
+    RecordSequence,
+    ConfirmRisk,
+    ClearNotes,
+    ClearNote,
+    ExportEffective,
+    Inactive,
+    DeleteInactive(usize),
 }
 enum Transfer {
     Import(model::Shortcuts),
@@ -52,6 +59,7 @@ enum Mode {
     Browse,
     Menu(usize),
     Removed(usize),
+    Inactive(usize),
     Search,
     Record(Vec<Chord>),
     Text(TextArea<'static>),
@@ -83,6 +91,12 @@ pub struct Manager {
     raw_events: std::collections::VecDeque<String>,
     replacing: Option<(String, String, Sequence)>,
     detail_scroll: u16,
+    candidate: Option<(model::Shortcuts, toml::Value)>,
+    record_sequence: bool,
+    native_down: Option<crate::shortcuts::ledger::PhysicalKey>,
+    record_pending: Option<(crate::shortcuts::ledger::PhysicalKey, Chord)>,
+    note_key: Option<String>,
+    export_effective: bool,
 }
 impl Default for Manager {
     fn default() -> Self {
@@ -108,6 +122,12 @@ impl Default for Manager {
             raw_events: Default::default(),
             replacing: None,
             detail_scroll: 0,
+            candidate: None,
+            record_sequence: false,
+            native_down: None,
+            record_pending: None,
+            note_key: None,
+            export_effective: false,
         }
     }
 }
@@ -124,15 +144,48 @@ fn set(d: &mut Draft, p: model::Shortcuts) -> Result<()> {
         Some(toml::Value::try_from(p)?),
     )
 }
-const CONTEXTS: &[&str] = &[
-    "terminal.input",
-    "overview",
-    "tree",
-    "editor",
-    "preview",
-    "preview.image",
-];
+static CONTEXTS: std::sync::LazyLock<Vec<&str>> = std::sync::LazyLock::new(|| {
+    let mut out = vec![
+        "terminal.input",
+        "overview",
+        "tree",
+        "editor",
+        "preview",
+        "preview.image",
+    ];
+    for &c in crate::shortcuts::CONTEXTS {
+        if !out.contains(&c) {
+            out.push(c);
+        }
+    }
+    out
+});
 impl Manager {
+    /// All entry paths share the same validation and risk/preview confirmation.
+    fn candidate(&mut self, d: &mut Draft, p: model::Shortcuts, preview: bool) -> Result<()> {
+        Index::build(&p)?;
+        let risks = crate::shortcuts::configuration_risks(&p);
+        let existing = crate::shortcuts::configuration_risks(&settings(d)?);
+        let added = risks
+            .into_iter()
+            .filter(|s| !existing.contains(s))
+            .collect::<Vec<_>>();
+        if preview || !added.is_empty() {
+            self.message = format!(
+                "Review draft / 审阅草稿: {} binding overrides. {}\n{}\nConfirm explicitly; system/input-method keys may never arrive / 确认后仅改草稿，系统/输入法按键可能无法送达",
+                p.bindings.len(),
+                if preview {
+                    "Import preview / 导入预览"
+                } else {
+                    "Risk / 风险"
+                },
+                added.join(", ")
+            );
+            self.candidate = Some((p, toml::Value::try_from(settings(d)?)?));
+            return Ok(());
+        }
+        set(d, p)
+    }
     fn commands(&self, d: &Draft) -> Vec<crate::shortcuts::Command> {
         let settings = settings(d).unwrap_or_default();
         let index = Index::load(&settings);
@@ -181,7 +234,7 @@ impl Manager {
     }
     fn command(&self, d: &Draft) -> Option<crate::shortcuts::Command> {
         let mut c = self.commands(d).get(self.selected).cloned()?;
-        let contexts = allowed_contexts(c.context);
+        let contexts = command_contexts(c.id, c.context);
         c.context = contexts[self.scope.min(contexts.len() - 1)];
         Some(c)
     }
@@ -222,6 +275,21 @@ impl Manager {
             .find(|b| b.command == c.id && b.context == c.context)
             .map_or_else(|| c.defaults.clone(), |b| b.keys.clone())
     }
+    pub fn reset_all(d: &mut Draft, keep_notes: bool) -> Result<()> {
+        if !keep_notes {
+            return draft::put(&mut d.tree, &draft::key(&[], "shortcuts"), None);
+        }
+        let mut p = settings(d)?;
+        p.prefix = None;
+        p.bindings.retain_mut(|b| {
+            b.add.clear();
+            b.remove.clear();
+            b.preferred = None;
+            b.disabled = false;
+            !b.notes.is_empty()
+        });
+        set(d, p)
+    }
     fn append(&mut self, d: &mut Draft, sequence: Sequence) -> Result<()> {
         let command = self.command(d).context("Select a command")?;
         let mut p = settings(d)?;
@@ -246,11 +314,6 @@ impl Manager {
             self.mode = Mode::Browse;
             self.error = None;
             return Ok(());
-        }
-        for chord in &sequence.0 {
-            if let Some(w) = chord.warning() {
-                self.message = w.into();
-            }
         }
         let collisions = index
             .bindings
@@ -285,7 +348,7 @@ impl Manager {
             self.conflict = Some((command.id.into(), command.context.into(), model));
             return Err(e);
         }
-        set(d, p)?;
+        self.candidate(d, p, false)?;
         self.replacing = None;
         self.mode = Mode::Browse;
         self.error = None;
@@ -293,21 +356,99 @@ impl Manager {
     }
     fn remove_replaced(&self, p: &mut model::Shortcuts, replacement: &Sequence) -> Result<()> {
         if let Some((id, context, old)) = &self.replacing {
-            let binding = Self::edit_binding(p, id, context);
-            let key = old.model();
-            if binding.add.contains(&key) {
-                binding.add.retain(|s| s != &key);
-            } else if !binding.remove.contains(&key) {
-                binding.remove.push(key.clone());
+            let prefix = Index::load(p).prefix;
+            let preferred = Self::edit_binding(p, id, context)
+                .preferred
+                .as_ref()
+                .is_some_and(|s| Sequence::parse(s, prefix).is_ok_and(|s| &s == old));
+            Self::delete_key(p, id, context, old)?;
+            if preferred {
+                Self::edit_binding(p, id, context).preferred = Some(replacement.model());
             }
-            if binding.preferred.as_ref() == Some(&key) {
-                binding.preferred = Some(replacement.model());
+        }
+        Ok(())
+    }
+    fn delete_key(p: &mut model::Shortcuts, id: &str, context: &str, key: &Sequence) -> Result<()> {
+        let prefix = Index::load(p).prefix;
+        let binding = Self::edit_binding(p, id, context);
+        binding
+            .add
+            .retain(|s| !Sequence::parse(s, prefix).is_ok_and(|s| &s == key));
+        if binding
+            .preferred
+            .as_ref()
+            .is_some_and(|s| Sequence::parse(s, prefix).is_ok_and(|s| &s == key))
+        {
+            binding.preferred = None;
+        }
+        if Index::build(p)?
+            .binding(id, context)
+            .is_some_and(|b| b.keys.contains(key))
+        {
+            let binding = Self::edit_binding(p, id, context);
+            if !binding
+                .remove
+                .iter()
+                .any(|s| Sequence::parse(s, prefix).is_ok_and(|s| &s == key))
+            {
+                binding.remove.push(key.model());
             }
         }
         Ok(())
     }
     pub fn action(&mut self, action: Action, d: &mut Draft) -> Result<()> {
+        if self.candidate.is_some() && !matches!(action, Action::ConfirmRisk | Action::Cancel) {
+            anyhow::bail!("Confirm or cancel the pending candidate first / 请先确认或取消候选");
+        }
         match action {
+            Action::ConfirmRisk => {
+                let (p, base) = self.candidate.as_ref().context("No candidate pending")?;
+                ensure!(
+                    toml::Value::try_from(settings(d)?)? == *base,
+                    "Shortcut draft changed; cancel and review again"
+                );
+                Index::build(p)?;
+                set(d, p.clone())?;
+                self.candidate = None;
+                self.replacing = None;
+                self.mode = Mode::Browse;
+                self.message =
+                    "Accepted into draft; Save all to apply / 已确认草稿，保存全部后生效".into();
+            }
+            Action::ClearNotes => self.modify(d, |b| b.notes.clear())?,
+            Action::ClearNote => {
+                let key = self
+                    .note_key
+                    .clone()
+                    .context("Select a deletion history first")?;
+                self.modify(d, |b| {
+                    b.notes.remove(&key);
+                })?;
+            }
+            Action::Inactive => self.mode = Mode::Inactive(0),
+            Action::DeleteInactive(i) => {
+                let mut p = settings(d)?;
+                let index = Index::build(&p)?;
+                let indices = p
+                    .bindings
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, b)| {
+                        index
+                            .commands
+                            .iter()
+                            .find(|c| c.id == b.command)
+                            .is_none_or(|c| {
+                                !command_contexts(c.id, c.context).contains(&b.context.as_str())
+                            })
+                    })
+                    .map(|(n, _)| n)
+                    .collect::<Vec<_>>();
+                if let Some(n) = indices.get(i) {
+                    p.bindings.remove(*n);
+                    set(d, p)?;
+                }
+            }
             Action::Menu => self.mode = Mode::Menu(0),
             Action::Removed => self.mode = Mode::Removed(0),
             Action::Details => {
@@ -324,8 +465,9 @@ impl Manager {
                 self.scope = 0;
             }
             Action::Scope => {
+                self.note_key = None;
                 if let Some(c) = self.commands(d).get(self.selected) {
-                    self.scope = (self.scope + 1) % allowed_contexts(c.context).len();
+                    self.scope = (self.scope + 1) % command_contexts(c.id, c.context).len();
                 }
             }
             Action::RestoreKey(i) => {
@@ -338,14 +480,11 @@ impl Manager {
                     .and_then(|b| b.remove.get(i))
                     .cloned()
                 {
+                    self.note_key = Some(Sequence::parse(&key, Index::load(&p).prefix)?.display());
                     self.modify(d, |b| {
                         b.remove.retain(|s| s != &key);
-                        b.notes.remove(
-                            &Sequence::parse(&key, Index::load(&p).prefix)
-                                .map(|s| s.display())
-                                .unwrap_or_default(),
-                        );
                     })?;
+                    self.message="Binding restored; history note retained. Clear notes to remove it / 已恢复绑定并保留历史备注，可清除备注".into();
                 }
             }
             Action::PreferTest => {
@@ -376,6 +515,7 @@ impl Manager {
             }
             Action::ConfirmExport => {
                 let path = self.export_confirm.take().context("No export pending")?;
+                let effective = self.export_effective;
                 let root = self.root.clone();
                 let (tx, rx) = std::sync::mpsc::channel();
                 self.transfer = Some(rx);
@@ -384,7 +524,11 @@ impl Manager {
                     let _ = tx.send(
                         super::operations::execute_at(
                             &root,
-                            &super::operations::Action::ExportShortcuts,
+                            &if effective {
+                                super::operations::Action::ExportEffectiveShortcuts
+                            } else {
+                                super::operations::Action::ExportShortcuts
+                            },
                             &path,
                         )
                         .map(Transfer::Export)
@@ -393,6 +537,7 @@ impl Manager {
                 });
             }
             Action::Select(i) => {
+                self.note_key = None;
                 self.selected = i;
                 self.binding = 0;
                 self.scope = 0;
@@ -401,7 +546,10 @@ impl Manager {
                 self.mode = Mode::Browse;
             }
             Action::Search => self.mode = Mode::Search,
-            Action::Add | Action::Record => {
+            Action::Add | Action::Record | Action::RecordSequence => {
+                self.record_sequence = matches!(action, Action::RecordSequence);
+                self.record_pending = None;
+                self.native_down = None;
                 self.replacing = None;
                 self.mode = Mode::Record(vec![]);
             }
@@ -430,6 +578,9 @@ impl Manager {
                 self.mode = Mode::Prefix(TextArea::new(vec![p]));
             }
             Action::Cancel => {
+                self.candidate = None;
+                self.record_pending = None;
+                self.native_down = None;
                 self.export_confirm = None;
                 self.mode = Mode::Browse;
                 self.conflict = None;
@@ -453,17 +604,13 @@ impl Manager {
             Action::Remove(i) => {
                 let keys = self.effective_keys(d);
                 if let Some(key) = keys.get(i) {
-                    let key = key.model();
-                    self.modify(d, |b| {
-                        if b.preferred.as_ref() == Some(&key) {
-                            b.preferred = None;
-                        }
-                        if b.add.contains(&key) {
-                            b.add.retain(|s| *s != key);
-                        } else if !b.remove.contains(&key) {
-                            b.remove.push(key);
-                        }
-                    })?;
+                    self.note_key = Some(key.display());
+                    let c = self.command(d).context("Select a command")?;
+                    let mut p = settings(d)?;
+                    Self::delete_key(&mut p, c.id, c.context, key)?;
+                    set(d, p)?;
+                    // Removed aliases can have historical notes without becoming tombstones.
+                    self.message="Deleted selected binding. Note adds an optional explanation / 已删除选中绑定，可添加备注".into();
                 }
             }
             Action::Prefer(i) => {
@@ -485,13 +632,24 @@ impl Manager {
             Action::Restore => {
                 let c = self.command(d).context("Select a command")?;
                 let mut p = settings(d)?;
-                p.bindings
-                    .retain(|b| b.command != c.id || b.context != c.context);
+                p.bindings.retain_mut(|b| {
+                    if b.command != c.id || b.context != c.context {
+                        return true;
+                    }
+                    b.add.clear();
+                    b.remove.clear();
+                    b.disabled = false;
+                    b.preferred = None;
+                    !b.notes.is_empty()
+                });
                 set(d, p)?;
             }
             Action::Note => self.mode = Mode::Note(TextArea::default()),
             Action::Import => self.mode = Mode::Import(TextArea::default()),
-            Action::Export => self.mode = Mode::Export(TextArea::default()),
+            Action::Export | Action::ExportEffective => {
+                self.export_effective = matches!(action, Action::ExportEffective);
+                self.mode = Mode::Export(TextArea::default());
+            }
             Action::ReplaceConflict => {
                 let (id, context, sequence) =
                     self.conflict.clone().context("No pending conflict")?;
@@ -514,7 +672,7 @@ impl Manager {
                 let b = Self::edit_binding(&mut p, &id, &context);
                 b.add.push(sequence);
                 Index::build(&p)?;
-                set(d, p)?;
+                self.candidate(d, p, false)?;
                 self.conflict = None;
                 self.replacing = None;
                 self.mode = Mode::Browse;
@@ -527,6 +685,10 @@ impl Manager {
         let prefix = Index::load(&settings(d).unwrap_or_default()).prefix;
         match &self.mode {
             Mode::Record(chords) => {
+                ensure!(
+                    self.record_pending.is_none(),
+                    "Release the recorded key first / 请先松开录制的键"
+                );
                 ensure!(!chords.is_empty(), "Press one or two chords first");
                 self.append(d, Sequence(chords.clone()))?;
             }
@@ -546,7 +708,7 @@ impl Manager {
                 let mut p = settings(d)?;
                 p.prefix = Some(chord.to_string());
                 Index::build(&p)?;
-                set(d, p)?;
+                self.candidate(d, p, false)?;
                 self.mode = Mode::Browse;
             }
             Mode::Note(area) => {
@@ -561,9 +723,17 @@ impl Manager {
                         b.remove
                             .get(self.binding.min(b.remove.len().saturating_sub(1)))
                     })
-                    .context("Delete a default binding before adding its note")?
-                    .clone();
-                let key = Sequence::parse(&removed, prefix)?.display();
+                    .cloned();
+                let key = self
+                    .note_key
+                    .clone()
+                    .or_else(|| {
+                        removed
+                            .as_ref()
+                            .and_then(|s| Sequence::parse(s, prefix).ok())
+                            .map(|s| s.display())
+                    })
+                    .context("Delete or select a binding before adding its note")?;
                 self.modify(d, |b| {
                     if text.is_empty() {
                         b.notes.remove(&key);
@@ -625,10 +795,7 @@ impl Manager {
                         p.prefix = incoming.prefix;
                     }
                     Index::build(&p)?;
-                    set(d, p)?;
-                    self.message =
-                        "Imported into draft; Save all to apply / 已导入草稿，保存全部后生效"
-                            .into();
+                    self.candidate(d, p, true)?;
                 }
             }
             self.mode = Mode::Browse;
@@ -640,6 +807,22 @@ impl Manager {
         true
     }
     pub fn observe_raw(&mut self, raw: &crate::shortcuts::ledger::RawKey) {
+        if let Mode::Record(chords) = &mut self.mode {
+            if raw.down {
+                self.native_down = Some(raw.physical);
+            } else if self
+                .record_pending
+                .as_ref()
+                .is_some_and(|(p, _)| *p == raw.physical)
+            {
+                let (_, chord) = self.record_pending.take().unwrap();
+                if chords.len() < if self.record_sequence { 2 } else { 1 } {
+                    chords.push(chord);
+                }
+                self.native_down = None;
+            }
+            return;
+        }
         if !matches!(self.mode, Mode::Test { .. }) {
             return;
         }
@@ -661,6 +844,14 @@ impl Manager {
         if self.pending() {
             return Ok(true);
         }
+        if self.candidate.is_some() {
+            if key.code == KeyCode::Esc {
+                self.action(Action::Cancel, d)?;
+            } else if key.code == KeyCode::Enter && key.modifiers == Mods::CONTROL {
+                self.action(Action::ConfirmRisk, d)?;
+            }
+            return Ok(true);
+        }
         let committed = Index::load(&d.base.effective.shortcuts);
         let proposed = Index::build(&settings(d)?);
         let removed_count = self
@@ -675,6 +866,19 @@ impl Manager {
             })
             .unwrap_or(0);
         match &mut self.mode {
+            Mode::Inactive(selected) => {
+                match key.code {
+                    KeyCode::Esc => self.mode = Mode::Browse,
+                    KeyCode::Up => *selected = selected.saturating_sub(1),
+                    KeyCode::Down => *selected = selected.saturating_add(1),
+                    KeyCode::Delete => {
+                        let n = *selected;
+                        self.action(Action::DeleteInactive(n), d)?;
+                    }
+                    _ => {}
+                }
+                return Ok(true);
+            }
             Mode::Menu(selected) => {
                 let actions = menu_actions();
                 match key.code {
@@ -714,7 +918,11 @@ impl Manager {
                 }
                 if !matches!(key.code, KeyCode::Modifier(_)) {
                     let chord = Chord::event(key);
-                    if chords.len() < 2 {
+                    if let Some(physical) = self.native_down.take() {
+                        self.record_pending.get_or_insert((physical, chord));
+                        return Ok(true);
+                    }
+                    if chords.len() < if self.record_sequence { 2 } else { 1 } {
                         chords.push(chord);
                     }
                     if let Some(w) = chord.warning() {
@@ -726,7 +934,14 @@ impl Manager {
             Mode::Test { received } => {
                 let chord = Chord::event(key);
                 let context = CONTEXTS[self.context];
-                if !matches!(key.code, KeyCode::Modifier(_)) {
+                if key.kind == crossterm::event::KeyEventKind::Press
+                    && !self.proposed_router.waiting()
+                {
+                    self.last_test = None;
+                }
+                if key.kind == crossterm::event::KeyEventKind::Press
+                    && !matches!(key.code, KeyCode::Modifier(_))
+                {
                     self.test_keys.push(chord);
                 }
                 let result = self.committed_router.route(&committed, context, key);
@@ -826,12 +1041,14 @@ impl Manager {
         }
         match (key.code, key.modifiers) {
             (KeyCode::Up, Mods::NONE) => {
+                self.note_key = None;
                 self.selected = self.selected.saturating_sub(1);
                 self.detail_scroll = 0;
                 self.binding = 0;
                 Ok(true)
             }
             (KeyCode::Down, Mods::NONE) => {
+                self.note_key = None;
                 self.selected = (self.selected + 1).min(self.commands(d).len().saturating_sub(1));
                 self.detail_scroll = 0;
                 self.binding = 0;
@@ -858,17 +1075,71 @@ impl Manager {
                 self.search.push_str(&text.replace(['\r', '\n'], ""));
                 true
             }
-            Mode::Menu(_) | Mode::Removed(_) | Mode::Record(_) | Mode::Test { .. } => true,
+            Mode::Menu(_)
+            | Mode::Removed(_)
+            | Mode::Inactive(_)
+            | Mode::Record(_)
+            | Mode::Test { .. } => true,
             Mode::Browse => false,
         }
     }
     pub fn exclusive(&self) -> bool {
-        !matches!(self.mode, Mode::Browse | Mode::Search)
+        self.candidate.is_some() || !matches!(self.mode, Mode::Browse | Mode::Search)
     }
     pub fn draw(&mut self, f: &mut Frame, r: Rect, d: &Draft) -> Vec<(Rect, Action)> {
         let mut hits = vec![];
         let p = crate::appearance::palette();
         if r.width == 0 || r.height == 0 {
+            return hits;
+        }
+        if let Mode::Inactive(selected) = &self.mode {
+            let index = Index::load(&settings(d).unwrap_or_default());
+            let p = settings(d).unwrap_or_default();
+            let rows = p
+                .bindings
+                .iter()
+                .filter(|b| {
+                    index
+                        .commands
+                        .iter()
+                        .find(|c| c.id == b.command)
+                        .is_none_or(|c| {
+                            !command_contexts(c.id, c.context).contains(&b.context.as_str())
+                        })
+                })
+                .collect::<Vec<_>>();
+            f.render_widget(
+                Paragraph::new(
+                    "Inactive entries / 失效配置：保留原始差异和备注；点击删除或 Esc 返回",
+                ),
+                Rect::new(r.x, r.y, r.width, 1),
+            );
+            let first = selected.saturating_sub(r.height.saturating_sub(3) as usize);
+            for (i, b) in rows
+                .iter()
+                .enumerate()
+                .skip(first)
+                .take(r.height.saturating_sub(2) as usize)
+            {
+                let row = Rect::new(r.x, r.y + 1 + (i - first) as u16, r.width, 1);
+                f.render_widget(
+                    Paragraph::new(single_line(
+                        &format!(
+                            "{} {} [{}] {:?} [删除]",
+                            if i == *selected { "▸" } else { " " },
+                            b.command,
+                            b.context,
+                            b.notes
+                        ),
+                        r.width as usize,
+                    )),
+                    row,
+                );
+                hits.push((row, Action::DeleteInactive(i)));
+            }
+            let row = Rect::new(r.x, r.bottom() - 1, r.width, 1);
+            f.render_widget(Paragraph::new("[返回 Back / Esc]"), row);
+            hits.push((row, Action::Cancel));
             return hits;
         }
         if let Mode::Menu(selected) | Mode::Removed(selected) = &self.mode {
@@ -1047,13 +1318,16 @@ impl Manager {
                 format!("Default / 默认: {}", declared.defaults.iter().map(Sequence::display).collect::<Vec<_>>().join(", ")),
                 format!("Source / 来源: {}", if edit.is_some() { "custom / 自定义差异" } else if c.context != declared.context { "inherited / 继承父区域" } else { "default / 默认" }),
                 format!("Status / 状态: {}", if effective.is_some_and(|b| b.disabled) { "disabled / 已停用" } else if keys.is_empty() { "unbound / 未绑定" } else { "enabled / 已启用" }),
-                format!("Allowed / 允许区域: {}", allowed_contexts(declared.context).join(", ")),
+                format!("Allowed / 允许区域: {}", command_contexts(declared.id,declared.context).join(", ")),
                 "Availability / 可用性: evaluated in the active view; settings does not execute commands / 由运行时当前视图判断，设置页不执行命令".into(),
                 format!("Removed / 已删除: {}", edit.map(|b| b.remove.iter().filter_map(|s| Sequence::parse(s, index.prefix).ok()).map(|s| s.display()).collect::<Vec<_>>().join(", ")).unwrap_or_default()),
                 format!("Notes / 备注: {:?}", edit.map(|b| &b.notes)),
                 "PgUp/PgDn scroll details / 翻页查看详情".into(),
             ] {
                 lines.extend(wrap_lines(&text, detail.width as usize));
+            }
+            for diagnostic in index.diagnostics.iter().filter(|s| s.contains(c.id)) {
+                lines.extend(wrap_lines(diagnostic, detail.width as usize));
             }
             self.detail_scroll = self
                 .detail_scroll
@@ -1086,10 +1360,14 @@ impl Manager {
                 }
             }
         }
-        let status=match &self.mode {
+        let status = if self.candidate.is_some() {
+            self.message.clone()
+        } else {
+            match &self.mode {
             Mode::Record(keys)=>format!("Recording / 录制: {}\nEsc/Enter are recorded too. Use mouse Done/Cancel. Esc/Enter 也作为按键录制，使用鼠标完成/取消。",keys.iter().map(ToString::to_string).collect::<Vec<_>>().join(" → ")),
             Mode::Test{received}=>format!("Key test / 按键测试 [{}]. Commands are never executed.\n{}",CONTEXTS[self.context],received.iter().rev().take(2).cloned().chain(self.raw_events.back().cloned().or_else(|| Some("Physical fields unavailable until a native event arrives / 尚未收到原生物理事件；不能推断外部占用".into()))).collect::<Vec<_>>().join("\n")),
             Mode::Text(_)=>"Text: Ctrl+F3 or Ctrl+G -> N".into(),Mode::Prefix(_)=>"Prefix / 前缀 chord".into(),Mode::Note(_)=>"Deletion note / 删除备注".into(),Mode::Import(_)=>"Import file path / 导入文件路径（只修改草稿）".into(),Mode::Export(_)=>"Export committed bindings; existing destination is replaced / 导出已提交绑定；覆盖目标".into(),_=>self.error.as_ref().unwrap_or(&self.message).clone(),
+        }
         };
         let overlay = Rect::new(r.x, r.bottom().saturating_sub(8), r.width, 5.min(r.height));
         if self.exclusive() {
@@ -1151,7 +1429,16 @@ impl Manager {
                 ("确认导出已提交绑定 Confirm export", Action::ConfirmExport),
             ];
         }
+        if self.candidate.is_some() {
+            buttons = vec![
+                ("确认草稿 Ctrl+Enter", Action::ConfirmRisk),
+                ("取消 Cancel", Action::Cancel),
+            ];
+        }
         let mut x = r.x;
+        if self.note_key.is_some() && !self.exclusive() {
+            buttons.push(("清除此备注 Clear note", Action::ClearNote));
+        }
         let mut y = r.bottom().saturating_sub(3);
         use unicode_width::UnicodeWidthStr;
         for (label, action) in buttons {
@@ -1177,7 +1464,14 @@ impl Manager {
 
 fn menu_actions() -> Vec<(&'static str, Action)> {
     vec![
-        ("录制 Record (R)", Action::Record),
+        ("录制组合键 Record chord (R)", Action::Record),
+        ("录制前缀序列 Record sequence", Action::RecordSequence),
+        ("清除当前命令历史备注 Clear notes", Action::ClearNotes),
+        ("失效配置 Inactive entries", Action::Inactive),
+        (
+            "导出完整有效目录 Export effective catalog",
+            Action::ExportEffective,
+        ),
         ("文本 Text (E)", Action::Text),
         ("修改选中绑定 Modify (M)", Action::Modify),
         ("前缀 Prefix (P)", Action::Prefix),

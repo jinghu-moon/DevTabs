@@ -641,6 +641,8 @@
   "shortcuts": "快捷键管理",
   "chrome.command.settings": "设置",
   "chrome.command.shortcuts": "快捷键管理",
+  "chrome.command.send_prefix": "发送前缀原键",
+  "chrome.command.send_quick_open_key": "发送 Ctrl+P 原键",
   "image_status": "%{path} · %{fit} 适应 · %{actual} 100% · %{zoom_in}/%{zoom_out} 缩放 · 方向键平移 · %{quality} 质量 · %{info} 信息 · %{menu} 更多%{fallback}",
   "ui.copy_active_path_hint": "复制当前路径 · 右键可复制标签路径"
 }

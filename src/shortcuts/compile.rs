@@ -14,7 +14,7 @@ pub(super) fn build(settings: &crate::settings::model::Shortcuts) -> Result<Inde
         if let Some(c) = commands.iter().find(|c| c.id == edit.command) {
             if CONTEXTS.contains(&edit.context.as_str()) {
                 ensure!(
-                    allowed_contexts(c.context).contains(&edit.context.as_str()),
+                    command_contexts(c.id, c.context).contains(&edit.context.as_str()),
                     "{} is unavailable in {}",
                     c.id,
                     edit.context
@@ -51,7 +51,7 @@ pub(super) fn build(settings: &crate::settings::model::Shortcuts) -> Result<Inde
     let mut bindings: Vec<Binding> = vec![];
     let mut explicit: Vec<Vec<Sequence>> = vec![];
     for command in &commands {
-        for context in allowed_contexts(command.context) {
+        for context in command_contexts(command.id, command.context) {
             let parent = bindings
                 .iter()
                 .enumerate()
@@ -72,6 +72,13 @@ pub(super) fn build(settings: &crate::settings::model::Shortcuts) -> Result<Inde
                 )
             };
             b.context = context.into();
+            if command.id == "panel.quick_open" && context == "terminal.input" {
+                // Extension is opt-in: panel defaults and parent edits never take terminal input.
+                b.keys.clear();
+                b.preferred = None;
+                origins.clear();
+                b.disabled = false;
+            }
             if let Some(edit) = settings
                 .bindings
                 .iter()

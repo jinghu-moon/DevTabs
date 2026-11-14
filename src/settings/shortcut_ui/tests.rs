@@ -53,6 +53,8 @@ fn aliases_preference_disable_delete_notes_and_restore_are_only_drafts() {
     m.action(Action::Disable, &mut d).unwrap();
     m.action(Action::RestoreKey(0), &mut d).unwrap();
     assert!(settings(&d).unwrap().bindings[0].remove.is_empty());
+    assert!(settings(&d).unwrap().bindings[0].notes.contains_key("F3"));
+    m.action(Action::ClearNotes, &mut d).unwrap();
     assert!(settings(&d).unwrap().bindings[0].notes.is_empty());
     m.action(Action::Restore, &mut d).unwrap();
     assert!(settings(&d).unwrap().bindings.is_empty());
@@ -260,12 +262,17 @@ fn record_esc_enter_and_search_by_key_are_supported() {
     select(&mut m, &d, "overview.note.edit");
     m.action(Action::Record, &mut d).unwrap();
     key(&mut m, &mut d, "Esc");
-    key(&mut m, &mut d, "Enter");
     let Mode::Record(chords) = &m.mode else {
         panic!()
     };
-    assert_eq!(chords.len(), 2);
+    assert_eq!(chords.len(), 1);
     assert_eq!(chords[0], Chord::parse("Esc").unwrap());
+    m.action(Action::Cancel, &mut d).unwrap();
+    m.action(Action::Record, &mut d).unwrap();
+    key(&mut m, &mut d, "Enter");
+    assert!(
+        matches!(&m.mode,Mode::Record(chords) if chords==&vec![Chord::parse("Enter").unwrap()])
+    );
     m.action(Action::Cancel, &mut d).unwrap();
     assert!(!d.dirty());
     m.search = "ctrl+f3".into();
@@ -339,6 +346,12 @@ fn asynchronous_import_is_only_a_draft_and_export_uses_committed_values() {
         assert!(std::time::Instant::now() < until);
         std::thread::yield_now();
     }
+    assert_eq!(settings(&d).unwrap().prefix.as_deref(), Some("Ctrl+G"));
+    assert!(
+        m.candidate.is_some(),
+        "imports are reviewed before changing the draft"
+    );
+    m.action(Action::ConfirmRisk, &mut d).unwrap();
     assert_eq!(settings(&d).unwrap().prefix.as_deref(), Some("Ctrl+K"));
     assert!(
         std::fs::read_to_string(root.join("config.toml"))
@@ -355,5 +368,106 @@ fn asynchronous_import_is_only_a_draft_and_export_uses_committed_values() {
     }
     assert!(std::fs::read_to_string(export).unwrap().contains("Ctrl+G"));
     assert!(d.dirty());
+    std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn native_recording_waits_for_release_and_risks_require_explicit_confirmation() {
+    use crate::shortcuts::ledger::RawKey;
+    let mut d = draft();
+    let mut m = Manager::default();
+    select(&mut m, &d, "overview.note.edit");
+    m.action(Action::Record, &mut d).unwrap();
+    let raw = RawKey::parse(b"\x1b[9;15;9;1;2;1_").unwrap();
+    m.observe_raw(&raw);
+    key(&mut m, &mut d, "Alt+Tab");
+    assert!(matches!(&m.mode,Mode::Record(keys) if keys.is_empty()));
+    assert!(m.finish(&mut d).is_err());
+    assert!(!d.dirty());
+    m.observe_raw(&RawKey::parse(&raw.release(2)).unwrap());
+    assert!(matches!(&m.mode,Mode::Record(keys) if keys.len()==1));
+    m.finish(&mut d).unwrap();
+    assert!(m.candidate.is_some());
+    assert!(!d.dirty());
+    key(&mut m, &mut d, "Enter");
+    assert!(!d.dirty(), "Enter is not risk acknowledgement");
+    m.action(Action::ConfirmRisk, &mut d).unwrap();
+    assert!(d.dirty());
+    assert_eq!(
+        Index::build(&settings(&d).unwrap())
+            .unwrap()
+            .resolve("overview", &[Chord::parse("Alt+Tab").unwrap()]),
+        crate::shortcuts::Resolution::Execute("overview.note.edit")
+    );
+    m.mode = Mode::Text(TextArea::new(vec!["Ctrl+F4".into()]));
+    m.finish(&mut d).unwrap();
+    assert!(m.candidate.is_some());
+    let before = toml::Value::try_from(settings(&d).unwrap()).unwrap();
+    m.action(Action::Cancel, &mut d).unwrap();
+    assert_eq!(
+        toml::Value::try_from(settings(&d).unwrap()).unwrap(),
+        before
+    );
+}
+#[test]
+fn removed_custom_alias_can_keep_history_without_becoming_a_binding_mask() {
+    let mut d = draft();
+    let mut m = Manager::default();
+    select(&mut m, &d, "overview.note.edit");
+    let alias = Sequence(vec![Chord::parse("Ctrl+J").unwrap()]);
+    m.append(&mut d, alias.clone()).unwrap();
+    let n = m
+        .effective_keys(&d)
+        .iter()
+        .position(|s| s == &alias)
+        .unwrap();
+    m.action(Action::Remove(n), &mut d).unwrap();
+    m.mode = Mode::Note(TextArea::new(vec!["history".into()]));
+    m.finish(&mut d).unwrap();
+    let b = &settings(&d).unwrap().bindings[0];
+    assert!(b.add.is_empty());
+    assert!(b.remove.is_empty());
+    assert_eq!(b.notes.get("Ctrl+J").map(String::as_str), Some("history"));
+    m.append(&mut d, alias).unwrap();
+    assert!(
+        settings(&d).unwrap().bindings[0]
+            .notes
+            .contains_key("Ctrl+J")
+    );
+    m.action(Action::Restore, &mut d).unwrap();
+    assert!(
+        settings(&d).unwrap().bindings[0]
+            .notes
+            .contains_key("Ctrl+J")
+    );
+    assert_eq!(
+        Index::build(&settings(&d).unwrap())
+            .unwrap()
+            .resolve("overview", &[Chord::parse("F3").unwrap()]),
+        crate::shortcuts::Resolution::Execute("overview.note.edit")
+    );
+}
+#[test]
+fn effective_export_is_separate_from_importable_differences_and_does_not_write_settings() {
+    let root = std::env::temp_dir().join(format!("devtabs-catalog-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("catalog.json");
+    super::super::operations::execute_at(
+        &root,
+        &super::super::operations::Action::ExportEffectiveShortcuts,
+        &path.display().to_string(),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let report: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(report["kind"], "devtabs.effective-shortcut-catalog");
+    assert!(
+        report["bindings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["command"] == "overview.note.edit" && b["preferred"] == "Ctrl+F3")
+    );
+    assert!(super::super::store::Snapshot::parse(text).is_err());
+    assert!(!root.join("config.toml").exists());
     std::fs::remove_dir_all(root).unwrap();
 }
