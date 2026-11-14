@@ -275,11 +275,67 @@ impl App {
         false
     }
     pub(super) fn review_key(&mut self, key: KeyEvent) {
-        if key.kind == KeyEventKind::Release {
+        self.review_input(Some(key), None);
+    }
+    pub(super) fn review_command(&mut self, id: &str) {
+        self.review_input(None, Some(id));
+    }
+    fn review_input(&mut self, key: Option<KeyEvent>, direct: Option<&str>) {
+        if !self.parallel.review.open {
+            return;
+        }
+        let s = &self.parallel.review;
+        let context = if s.resources {
+            "dialog.resources"
+        } else if s.inbox {
+            "dialog.notifications"
+        } else {
+            "dialog.review"
+        };
+        if let Some(id) = direct {
+            if s.search
+                || s.editing_scope
+                || !self
+                    .shortcuts
+                    .commands
+                    .iter()
+                    .any(|c| c.id == id && c.context == context)
+            {
+                return;
+            }
+        }
+        let command = direct.or_else(|| {
+            if s.search || s.editing_scope {
+                None
+            } else {
+                key.and_then(|k| {
+                    match self
+                        .shortcuts
+                        .resolve(context, &[crate::shortcuts::Chord::event(k)])
+                    {
+                        crate::shortcuts::Resolution::Execute(id) => Some(id),
+                        _ => None,
+                    }
+                })
+            }
+        });
+        if command.is_some() {
+            self.forwarded = Some(crate::shortcuts::ledger::Owner::Ui {
+                context: self.input_context(),
+                repeat: false,
+            });
+        }
+        let code = if command.is_some() {
+            KeyCode::Null
+        } else {
+            key.map_or(KeyCode::Null, |k| k.code)
+        };
+
+        if key.is_some_and(|k| k.kind == KeyEventKind::Release) {
             return;
         }
         let s = &mut self.parallel.review;
-        if key.code == KeyCode::Esc {
+        if code == KeyCode::Esc {
             if s.search || s.editing_scope {
                 s.search = false;
                 s.editing_scope = false;
@@ -293,7 +349,7 @@ impl App {
             if s.pending.is_some() {
                 return;
             }
-            let action = match key.code {
+            let action = match code {
                 KeyCode::Down => {
                     s.target = (s.target + 1).min(s.catalog.len().saturating_sub(1));
                     s.operation = None;
@@ -306,30 +362,32 @@ impl App {
                     s.archive_pending = false;
                     None
                 }
-                KeyCode::Char('m' | 'd') => {
+                _ if matches!(command, Some("resources.merge" | "resources.cleanup")) => {
                     s.archive_pending = false;
                     s.catalog.get(s.target).map(|t| L::Plan {
                         source: s.task.clone(),
                         target: t.id.clone(),
-                        cleanup: key.code == KeyCode::Char('d'),
+                        cleanup: command == Some("resources.cleanup"),
                         require_check: s.require_check,
                     })
                 }
-                KeyCode::Char('p') => {
+                _ if command == Some("resources.require_check") => {
                     s.require_check = !s.require_check;
                     s.operation = None;
                     None
                 }
-                KeyCode::Char('a') => {
+                _ if command == Some("resources.archive") => {
                     s.archive_pending = true;
                     s.operation = None;
                     None
                 }
-                KeyCode::Char('l') => Some(L::List),
-                KeyCode::Char('q') => s.operation.as_ref().map(|op| L::Query {
-                    operation: op.id.clone(),
-                }),
-                KeyCode::Char('y') => {
+                _ if command == Some("resources.list") => Some(L::List),
+                _ if command == Some("resources.query") => {
+                    s.operation.as_ref().map(|op| L::Query {
+                        operation: op.id.clone(),
+                    })
+                }
+                _ if command == Some("resources.copy_command") => {
                     if let Some(op) = &s.operation {
                         let result = std::env::current_exe()
                             .map_err(anyhow::Error::from)
@@ -347,17 +405,19 @@ impl App {
                     }
                     None
                 }
-                KeyCode::Enter if s.archive_pending => {
+                _ if command == Some("resources.confirm") && s.archive_pending => {
                     s.archive_pending = false;
                     Some(L::Archive {
                         task: s.task.clone(),
                         confirm: s.task.clone(),
                     })
                 }
-                KeyCode::Enter => s.operation.as_ref().map(|op| L::Apply {
-                    operation: op.id.clone(),
-                    confirm: op.id.clone(),
-                }),
+                _ if command == Some("resources.confirm") => {
+                    s.operation.as_ref().map(|op| L::Apply {
+                        operation: op.id.clone(),
+                        confirm: op.id.clone(),
+                    })
+                }
                 _ => None,
             };
             if let Some(action) = action {
@@ -367,7 +427,7 @@ impl App {
         }
         if s.search || s.editing_scope {
             let text = if s.search { &mut s.query } else { &mut s.scope };
-            match key.code {
+            match code {
                 KeyCode::Backspace => {
                     text.pop();
                 }
@@ -380,7 +440,7 @@ impl App {
             }
             return;
         }
-        if key.code == KeyCode::Char('/') {
+        if matches!(command, Some("review.search" | "notifications.search")) {
             s.search = true;
             s.query.clear();
             return;
@@ -388,7 +448,7 @@ impl App {
         if s.inbox {
             use crate::notifications::Action as N;
             let selected = s.notices.pending.get(s.file).cloned();
-            let action = match key.code {
+            let action = match code {
                 KeyCode::Down => {
                     s.file = (s.file + 1).min(s.notices.pending.len().saturating_sub(1));
                     None
@@ -397,36 +457,50 @@ impl App {
                     s.file = s.file.saturating_sub(1);
                     None
                 }
-                KeyCode::Enter => selected.map(|(target, _)| N::Navigate { target }),
-                KeyCode::Char('a') => selected.map(|(target, _)| N::Ack { target }),
-                KeyCode::Char('m') => selected.map(|(target, _)| N::Mute {
+                _ if command == Some("notifications.navigate") => {
+                    selected.map(|(target, _)| N::Navigate { target })
+                }
+                _ if command == Some("notifications.ack") => {
+                    selected.map(|(target, _)| N::Ack { target })
+                }
+                _ if command == Some("notifications.mute") => selected.map(|(target, _)| N::Mute {
                     task: target.task,
                     muted: true,
                 }),
-                KeyCode::Char('u') => selected.map(|(target, _)| N::Mute {
-                    task: target.task,
-                    muted: false,
-                }),
-                KeyCode::Char('1') => selected.map(|(target, _)| N::Once { task: target.task }),
-                KeyCode::Char('5') => selected.map(|(target, _)| N::Snooze {
-                    target,
-                    seconds: 300,
-                }),
-                KeyCode::Char('3') => selected.map(|(target, _)| N::Snooze {
-                    target,
-                    seconds: 1800,
-                }),
-                KeyCode::Char('0') => selected.map(|(target, _)| N::Snooze { target, seconds: 0 }),
-                KeyCode::Char('t') => Some(N::Test),
-                KeyCode::Char('d') => Some(N::Diagnostics),
-                KeyCode::Char('y') => {
+                _ if command == Some("notifications.unmute") => {
+                    selected.map(|(target, _)| N::Mute {
+                        task: target.task,
+                        muted: false,
+                    })
+                }
+                _ if command == Some("notifications.once") => {
+                    selected.map(|(target, _)| N::Once { task: target.task })
+                }
+                _ if command == Some("notifications.snooze_short") => {
+                    selected.map(|(target, _)| N::Snooze {
+                        target,
+                        seconds: 300,
+                    })
+                }
+                _ if command == Some("notifications.snooze_long") => {
+                    selected.map(|(target, _)| N::Snooze {
+                        target,
+                        seconds: 1800,
+                    })
+                }
+                _ if command == Some("notifications.snooze_clear") => {
+                    selected.map(|(target, _)| N::Snooze { target, seconds: 0 })
+                }
+                _ if command == Some("notifications.test") => Some(N::Test),
+                _ if command == Some("notifications.diagnostics") => Some(N::Diagnostics),
+                _ if command == Some("notifications.copy_diagnostic") => {
                     let text = s.notices.diagnostic.join("\n");
                     if let Err(e) = crate::files::copy(text) {
                         s.error = e.to_string();
                     }
                     None
                 }
-                KeyCode::Char('g') => Some(N::Global {
+                _ if command == Some("notifications.global") => Some(N::Global {
                     enabled: !s.notices.enabled,
                 }),
                 _ => None,
@@ -436,7 +510,7 @@ impl App {
             }
             return;
         }
-        if key.code == KeyCode::Char('c') {
+        if command == Some("review.check") {
             let task = s.task.clone();
             self.review_request(Request::Check {
                 workspace: self.workspace_id.clone(),
@@ -446,7 +520,7 @@ impl App {
             });
             return;
         }
-        if key.code == KeyCode::Char('k') {
+        if command == Some("review.check_status") {
             let task = s.task.clone();
             self.review_request(Request::CheckStatus { task });
             return;
@@ -456,8 +530,8 @@ impl App {
             .records
             .get(s.round.min(s.data.records.len().saturating_sub(1)))
             .cloned();
-        let action = match key.code {
-            KeyCode::Char('b') => Some(Action::Begin {
+        let action = match code {
+            _ if command == Some("review.begin") => Some(Action::Begin {
                 scope: s
                     .scope
                     .split(';')
@@ -465,13 +539,13 @@ impl App {
                     .map(|p| p.trim().into())
                     .collect(),
             }),
-            KeyCode::Char('e') => Some(Action::End),
-            KeyCode::Char('l') => Some(Action::List),
-            KeyCode::Char('s') => {
+            _ if command == Some("review.end") => Some(Action::End),
+            _ if command == Some("review.list") => Some(Action::List),
+            _ if command == Some("review.scope") => {
                 s.editing_scope = true;
                 None
             }
-            KeyCode::Char('[') => {
+            _ if command == Some("review.previous") => {
                 s.round = s.round.saturating_sub(1);
                 s.data.offset = 0;
                 s.file = 0;
@@ -481,7 +555,7 @@ impl App {
                     offset: 0,
                 })
             }
-            KeyCode::Char(']') => {
+            _ if command == Some("review.next") => {
                 s.round = (s.round + 1).min(s.data.records.len().saturating_sub(1));
                 s.data.offset = 0;
                 s.file = 0;
@@ -529,18 +603,18 @@ impl App {
                 s.scroll = 0;
                 None
             }
-            KeyCode::Enter => {
+            _ if command == Some("review.diff") => {
                 s.scroll = 0;
                 record.map(|r| Action::Open {
                     round: r.id,
                     path: Some(s.file),
                 })
             }
-            KeyCode::Char('a') => record.map(|r| Action::Ack {
+            _ if command == Some("review.ack") => record.map(|r| Action::Ack {
                 round: r.id,
                 revision: r.revision,
             }),
-            KeyCode::Char('n') => {
+            _ if command == Some("review.match") => {
                 if let Some(diff) = &s.data.diff
                     && let Some((i, _)) =
                         diff.lines().enumerate().skip(s.scroll + 1).find(|(_, l)| {
@@ -551,7 +625,7 @@ impl App {
                 }
                 None
             }
-            KeyCode::Char('o') => {
+            _ if command == Some("review.open") => {
                 let path = record.and_then(|r| {
                     r.changes
                         .get(s.file.saturating_sub(s.data.offset))

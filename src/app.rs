@@ -470,6 +470,7 @@ impl App {
         ledger.blur(|target, bytes| self.send_owned(target, bytes));
         self.key_ledger = ledger;
         self.shortcut_router.cancel();
+        self.sequence_target = None;
     }
     fn attach_visible(&mut self) -> Result<()> {
         if self.parallel.restore_popup
@@ -742,19 +743,18 @@ impl App {
         }
     }
     fn toggle_selection(&mut self) {
+        if self.selection.take().is_some() {
+            return;
+        }
         if let Err(error) = self.sessions[self.focus].history() {
             self.message = format!("{error:#}");
             return;
         }
-        self.selection = if self.selection.is_some() {
-            None
-        } else {
-            Some(SelectionView {
-                pane: self.focus,
-                screen: self.sessions[self.focus].state().terminal.screen().clone(),
-                range: None,
-            })
-        };
+        self.selection = Some(SelectionView {
+            pane: self.focus,
+            screen: self.sessions[self.focus].state().terminal.screen().clone(),
+            range: None,
+        });
     }
     fn copy(&mut self) -> Result<()> {
         let selection = self
@@ -769,18 +769,41 @@ impl App {
         Ok(())
     }
     fn shortcut_context(&self) -> &'static str {
+        if self.selection.is_some() {
+            return "terminal.selection";
+        }
         self.sidebar
             .as_ref()
             .map_or("terminal.input", |s| s.shortcut_context())
     }
     fn input_context(&self) -> u64 {
-        ((self.settings_ui.is_some() as u64) << 12)
-            | (self.parallel.review.open as u64)
-            | ((self.parallel.dialog.is_some() as u64) << 1)
-            | ((self.terminal_menu.is_some() as u64) << 2)
-            | ((self.mode as u64) << 3)
-            | ((self.sidebar.as_ref().is_some_and(|s| s.modal()) as u64) << 5)
-            | ((self.sidebar.as_ref().map_or(0, |s| s.focus as u64)) << 6)
+        use std::hash::{Hash, Hasher};
+        let mut hash = std::collections::hash_map::DefaultHasher::new();
+        self.shortcut_context().hash(&mut hash);
+        self.sessions
+            .get(self.focus)
+            .map(|s| (&s.info.id, s.input_lease()))
+            .hash(&mut hash);
+        (
+            self.settings_ui.is_some(),
+            self.mode as u8,
+            self.terminal_menu,
+            self.parallel.dialog.is_some(),
+            self.sidebar.as_ref().is_some_and(|s| s.modal()),
+            self.popup_window.edit.is_some(),
+        )
+            .hash(&mut hash);
+        let review = &self.parallel.review;
+        (
+            review.open,
+            review.resources,
+            review.inbox,
+            review.search,
+            review.editing_scope,
+            &review.task,
+        )
+            .hash(&mut hash);
+        hash.finish()
     }
     fn send_owned(&mut self, target: &crate::shortcuts::ledger::Target, bytes: Vec<u8>) -> bool {
         self.sessions
@@ -864,7 +887,12 @@ impl App {
         }
     }
     pub(crate) fn execute_command(&mut self, id: &str) {
-        let sequence_target = self.sequence_target.take();
+        let captured = self.sequence_target.take();
+        let sequence_target = if self.mode == Mode::Prefix {
+            captured
+        } else {
+            None
+        };
         self.forwarded = Some(crate::shortcuts::ledger::Owner::Ui {
             context: self.input_context(),
             repeat: self
@@ -875,6 +903,17 @@ impl App {
         });
         self.shortcut_router.cancel();
         self.mode = Mode::Normal;
+        if id.starts_with("terminals.") {
+            self.terminal_command(id);
+            return;
+        }
+        if ["resources.", "notifications.", "review."]
+            .iter()
+            .any(|p| id.starts_with(p))
+        {
+            self.review_command(id);
+            return;
+        }
         let leaving = match id {
             "workspace.detach" => 'x',
             "workspace.overview" => 'p',
@@ -1177,6 +1216,13 @@ impl App {
             }
             return;
         }
+        if self.popup.is_some() && self.popup_window.edit.is_some() {
+            self.shortcut_router.cancel();
+            self.sequence_target = None;
+            self.mode = Mode::Normal;
+            self.popup_key(key);
+            return;
+        }
         if matches!(
             key.code,
             KeyCode::Modifier(_) | KeyCode::CapsLock | KeyCode::NumLock | KeyCode::ScrollLock
@@ -1215,12 +1261,6 @@ impl App {
                 }
                 _ => {}
             }
-        }
-        if self.popup.is_some() && self.popup_window.edit.is_some() {
-            if pressed {
-                self.popup_key(key);
-            }
-            return;
         }
         if let Some(selection) = &mut self.selection {
             if pressed {
@@ -1647,6 +1687,7 @@ impl App {
                     ledger.blur(|target, bytes| self.send_owned(target, bytes));
                     self.key_ledger = ledger;
                     self.shortcut_router.cancel();
+                    self.sequence_target = None;
                     self.mode = Mode::Normal;
                     if self.cancel_file_drag() {
                         self.attach_visible()?;

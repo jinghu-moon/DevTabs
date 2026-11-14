@@ -476,6 +476,9 @@ pub fn command_contexts(id: &str, declared: &'static str) -> Vec<&'static str> {
     if id == "panel.quick_open" {
         contexts.push("terminal.input");
     }
+    if matches!(id, "terminal.selection.toggle" | "terminal.selection.copy") {
+        contexts.push("terminal.selection");
+    }
     contexts
 }
 impl Index {

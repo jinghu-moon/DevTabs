@@ -145,6 +145,29 @@ impl App {
         Ok(changed)
     }
     fn terminal_action(&mut self, action: Action) -> Result<()> {
+        let (id, selected) = match action {
+            Action::NewTask => {
+                self.execute_command("workspace.task.new");
+                return Ok(());
+            }
+            Action::Overview => {
+                self.execute_command("workspace.overview");
+                return Ok(());
+            }
+            Action::Menu(_) => return self.terminal_effect(action),
+            Action::Activate(i) => ("terminals.activate", i),
+            Action::Float(i) => ("terminals.float", i),
+            Action::Move(i) => ("terminals.move", i),
+            Action::Resize(i) => ("terminals.resize", i),
+            Action::Place(i, Placement::Docked) => ("terminals.dock", i),
+            Action::Place(i, Placement::Collapsed) => ("terminals.collapse", i),
+            Action::Place(i, Placement::Floating) => ("terminals.float", i),
+        };
+        self.terminal_menu = Some(selected);
+        self.terminal_command(id);
+        Ok(())
+    }
+    fn terminal_effect(&mut self, action: Action) -> Result<()> {
         self.terminal_menu = None;
         match action {
             Action::NewTask => self.new_task(),
@@ -181,6 +204,17 @@ impl App {
         Ok(())
     }
     pub(super) fn terminal_key(&mut self, key: KeyEvent) {
+        if let crate::shortcuts::Resolution::Execute(id) = self
+            .shortcuts
+            .resolve("menu.terminals", &[crate::shortcuts::Chord::event(key)])
+        {
+            self.forwarded = Some(crate::shortcuts::ledger::Owner::Ui {
+                context: self.input_context(),
+                repeat: false,
+            });
+            self.terminal_command(id);
+            return;
+        }
         let Some(mut selected) = self.terminal_menu else {
             return;
         };
@@ -205,12 +239,6 @@ impl App {
                 selected = self.sessions.len() - 1;
                 None
             }
-            KeyCode::Enter => Some(Action::Activate(selected)),
-            KeyCode::Char('d' | 'D') => Some(Action::Place(selected, Placement::Docked)),
-            KeyCode::Char('c' | 'C') => Some(Action::Place(selected, Placement::Collapsed)),
-            KeyCode::Char('f' | 'F') => Some(Action::Float(selected)),
-            KeyCode::Char('m' | 'M') => Some(Action::Move(selected)),
-            KeyCode::Char('r' | 'R') => Some(Action::Resize(selected)),
             _ => None,
         };
         self.terminal_menu = Some(selected);
@@ -218,6 +246,27 @@ impl App {
             && let Err(error) = self.terminal_action(action)
         {
             self.message = format!("{error:#}");
+        }
+    }
+    pub(super) fn terminal_command(&mut self, id: &str) {
+        let Some(selected) = self.terminal_menu else {
+            return;
+        };
+        if selected >= self.sessions.len() {
+            self.message = "Terminal target is unavailable / 终端目标不可用".into();
+            return;
+        }
+        let action = match id {
+            "terminals.activate" => Action::Activate(selected),
+            "terminals.dock" => Action::Place(selected, Placement::Docked),
+            "terminals.collapse" => Action::Place(selected, Placement::Collapsed),
+            "terminals.float" => Action::Float(selected),
+            "terminals.move" => Action::Move(selected),
+            "terminals.resize" => Action::Resize(selected),
+            _ => return,
+        };
+        if let Err(e) = self.terminal_effect(action) {
+            self.message = format!("{e:#}");
         }
     }
     pub(super) fn terminal_mouse(&mut self, event: MouseEvent) -> bool {
@@ -1263,6 +1312,118 @@ pub(super) mod tests {
                 }
             });
         }
+    }
+    #[test]
+    fn workspace_modal_rebinding_keeps_guards_and_physical_once_ownership() {
+        let mut app = app();
+        let settings = toml::from_str(
+            r#"
+            [[bindings]]
+            command = "resources.archive"
+            context = "dialog.resources"
+            add = ["F6"]
+            remove = ["A"]
+            [[bindings]]
+            command = "review.scope"
+            context = "dialog.review"
+            add = ["F6"]
+            remove = ["S"]
+            [[bindings]]
+            command = "terminals.activate"
+            context = "menu.terminals"
+            add = ["F6"]
+            remove = ["Enter"]
+        "#,
+        )
+        .unwrap();
+        app.shortcuts = crate::shortcuts::Index::build(&settings).unwrap();
+        app.parallel.review.open = true;
+        app.parallel.review.resources = true;
+        app.key(
+            KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+            None,
+            1,
+        );
+        assert!(!app.parallel.review.archive_pending);
+        app.key(KeyEvent::new(KeyCode::F(6), KeyModifiers::ALT), None, 1);
+        assert!(!app.parallel.review.archive_pending);
+        let key = KeyEvent::new(KeyCode::F(6), KeyModifiers::NONE);
+        let down = b"\x1b[117;64;0;1;0;1_".to_vec();
+        app.key(key, Some(down.clone()), 1);
+        assert!(app.parallel.review.archive_pending);
+        assert!(
+            app.parallel.review.pending.is_none(),
+            "archive still needs explicit confirmation"
+        );
+        app.parallel.review.archive_pending = false;
+        app.key(key, Some(down), 1);
+        assert!(
+            !app.parallel.review.archive_pending,
+            "held business key cannot repeat"
+        );
+        app.parallel.review.resources = false;
+        app.execute_command("resources.archive");
+        assert!(
+            !app.parallel.review.archive_pending,
+            "wrong modal cannot execute command"
+        );
+        app.key(key, None, 1);
+        assert!(app.parallel.review.editing_scope);
+        app.key(
+            KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+            None,
+            1,
+        );
+        assert_eq!(app.parallel.review.scope, "b");
+        app.parallel.review.open = false;
+        app.sessions[2].info.placement = Placement::Docked;
+        app.terminal_menu = Some(2);
+        app.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE), None, 1);
+        assert_eq!(app.terminal_menu, Some(2));
+        app.key(key, None, 1);
+        assert!(app.terminal_menu.is_none());
+        assert_eq!(app.focus, 2);
+    }
+    #[test]
+    fn gestures_selection_and_focus_cancel_keep_background_commands_isolated() {
+        let mut app = app();
+        app.popup = Some(0);
+        app.popup_window.edit = Some(popup::Edit::Move);
+        app.key(
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            None,
+            1,
+        );
+        assert!(app.mode == Mode::Normal);
+        app.popup_window.edit = None;
+        app.selection = Some(SelectionView {
+            pane: 0,
+            screen: app.sessions[0].state().terminal.screen().clone(),
+            range: None,
+        });
+        let before = app.focus;
+        app.key(
+            KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+            None,
+            1,
+        );
+        app.key(
+            KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE),
+            None,
+            1,
+        );
+        assert_eq!(app.focus, before);
+        assert!(app.selection.is_some());
+        app.sequence_target = Some((
+            crate::shortcuts::ledger::Target {
+                session: "old".into(),
+                generation: "old".into(),
+            },
+            crate::shortcuts::ledger::WireMode::Win32,
+        ));
+        app.balance_keys();
+        assert!(app.sequence_target.is_none());
+        assert!(!app.shortcut_router.waiting());
     }
     #[test]
     fn prefix_send_requires_two_physical_cycles_and_never_repeats_while_held() {
