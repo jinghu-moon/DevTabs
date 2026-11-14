@@ -33,7 +33,7 @@ pub struct Report {
     pub elapsed_ms: u64,
 }
 pub fn run(task: &str, result: u64, root: &Path, spec: &Spec) -> Result<Report> {
-    let _lease = crate::lifecycle::lease(&crate::config::home(), task, false, false)?;
+    let _lease = crate::lifecycle::lease(&crate::config::runtime(), task, false, false)?;
     run_with_executable(task, result, root, spec, &std::env::current_exe()?)
 }
 pub fn run_with_executable(
@@ -232,14 +232,46 @@ pub fn child(job: &str, args: &[std::ffi::OsString]) -> Result<i32> {
     command.args(&args[1..]);
     Ok(command.status()?.code().unwrap_or(1))
 }
-pub fn initialize(task: &str, root: &Path, home: &Path) -> Result<()> {
-    let _lease = crate::lifecycle::lease(home, task, false, false)?;
-    initialize_with_executable(task, root, home, &std::env::current_exe()?)
+pub fn prepare_definition(project: &Path) -> Result<Vec<Spec>> {
+    let source = crate::settings::store::SettingsStore::current().read()?;
+    source.require(&format!(
+        "{}.checks.prepare",
+        crate::settings::model::project_scope(project)
+    ))?;
+    Ok(source
+        .effective
+        .project(project)
+        .map(|p| p.checks.prepare.clone())
+        .unwrap_or_default())
 }
-pub fn initialize_with_executable(task: &str, root: &Path, home: &Path, exe: &Path) -> Result<()> {
-    let profile = crate::project_profile::Profile::load(root)?.unwrap_or_default();
-    ensure!(profile.prepare.len() <= 16, "At most 16 preparation steps");
-    for (i, spec) in profile.prepare.iter().enumerate() {
+pub fn check_definition(project: &Path) -> Result<Spec> {
+    let source = crate::settings::store::SettingsStore::current().read()?;
+    source.require(&format!(
+        "{}.checks.check",
+        crate::settings::model::project_scope(project)
+    ))?;
+    source
+        .effective
+        .project(project)
+        .and_then(|p| p.checks.check.clone())
+        .context("Configure a project check in config.toml")
+}
+pub fn initialize(task: &str, root: &Path, home: &Path, prepare: &[Spec]) -> Result<()> {
+    let _lease = crate::lifecycle::lease(home, task, false, false)?;
+    initialize_with_executable(task, root, home, &std::env::current_exe()?, prepare)
+}
+pub fn initialize_with_executable(
+    task: &str,
+    root: &Path,
+    home: &Path,
+    exe: &Path,
+    prepare: &[Spec],
+) -> Result<()> {
+    ensure!(prepare.len() <= 16, "At most 16 preparation steps");
+    for spec in prepare {
+        crate::settings::model::validate_check(spec)?;
+    }
+    for (i, spec) in prepare.iter().enumerate() {
         let key = format!("{:x}", spec.timeout_ms);
         let data = serde_json::to_vec(spec)?;
         let hash = Sha256::digest(&data)

@@ -317,7 +317,7 @@ impl App {
         if uuid::Uuid::parse_str(&self.workspace_id).is_ok()
             && let Ok(bytes) = serde_json::to_vec(&self.parallel.layout)
         {
-            let path = crate::config::home()
+            let path = crate::config::runtime()
                 .join("layouts")
                 .join(format!("{}.json", self.workspace_id));
             if let Err(e) = crate::config::atomic_write(&path, &bytes) {

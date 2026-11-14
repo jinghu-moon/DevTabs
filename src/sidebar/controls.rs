@@ -8,6 +8,7 @@ pub(super) struct Controls {
     pub panel: Option<Panel>,
     pub hover: Option<(Rect, PathBuf)>,
     entries: Vec<Entry>,
+    note_base: Option<Entry>,
     selected: usize,
     pending: Option<u64>,
     jump: Option<Entry>,
@@ -180,6 +181,7 @@ impl Sidebar {
                     .chars()
                     .take(128)
                     .collect();
+                self.controls.note_base = None;
                 self.controls.panel = Some(Panel::Note(Entry {
                     id: uuid::Uuid::new_v4(),
                     project: self.files.root.clone(),
@@ -297,7 +299,11 @@ impl Sidebar {
                 Some(Panel::Note(entry)) => match key.code {
                     KeyCode::Enter => {
                         let entry = entry.clone();
-                        self.bookmark_request(Operation::Put(entry))?;
+                        let operation = match self.controls.note_base.clone() {
+                            Some(base) => Operation::Edit { base, draft: entry },
+                            None => Operation::Put(entry),
+                        };
+                        self.bookmark_request(operation)?;
                     }
                     KeyCode::Backspace => {
                         entry.note.pop();
@@ -335,13 +341,14 @@ impl Sidebar {
                     }
                     KeyCode::Delete => {
                         if let Some(entry) = self.controls.entries.get(self.controls.selected) {
-                            self.bookmark_request(Operation::Delete(entry.id))?;
+                            self.bookmark_request(Operation::Delete(entry.clone()))?;
                         }
                     }
                     KeyCode::Char('e' | 'E') => {
                         if let Some(entry) =
                             self.controls.entries.get(self.controls.selected).cloned()
                         {
+                            self.controls.note_base = Some(entry.clone());
                             self.controls.panel = Some(Panel::Note(entry));
                         }
                     }

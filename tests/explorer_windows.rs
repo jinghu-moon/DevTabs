@@ -585,9 +585,9 @@ fn truncated_tree_names_keep_a_blank_before_each_trailing_badge() {
     );
 }
 #[test]
-fn both_dividers_drag_plain_borders_preserve_minima_cancel_and_persist_ratio() {
+fn both_dividers_preserve_minima_cancel_and_keep_changes_local() {
     isolated(
-        "both_dividers_drag_plain_borders_preserve_minima_cancel_and_persist_ratio",
+        "both_dividers_preserve_minima_cancel_and_keep_changes_local",
         || {
             let f = Fixture::new();
             let file = f.write("read.txt", "hello\n");
@@ -620,19 +620,18 @@ fn both_dividers_drag_plain_borders_preserve_minima_cancel_and_persist_ratio() {
             assert_eq!(s.geometry.agent.unwrap().width, 90);
             mouse(&mut s, Mouse::Up(MouseButton::Left), 126, 10, Mods::NONE);
             let ratio = s.sidebar_preferences().agent_ratio;
-            wait(&mut s, |_| {
-                devtabs::config::Config::load()
-                    .ok()
-                    .and_then(|c| c.projects.get(&devtabs::config::key(&f.0)).cloned())
-                    .is_some_and(|p| p.sidebar.agent_ratio == ratio)
-            });
+            assert_ne!(ratio, 5000);
+            assert!(!devtabs::config::home().join("config.toml").exists());
             let mut next = Sidebar::new(f.0.clone());
             next.open(s.document.as_ref().unwrap().path.clone(), true)
                 .unwrap();
             next.update_layout(Rect::new(0, 0, 180, 32), false);
-            wait(&mut next, |s| s.sidebar_preferences().agent_ratio == ratio);
+            wait(&mut next, |s| {
+                s.document.as_ref().is_some_and(|d| !d.loading)
+            });
+            assert_eq!(next.sidebar_preferences().agent_ratio, 5000);
             draw(&mut next);
-            assert_eq!(next.geometry.preview.unwrap().x, 126);
+            assert_ne!(next.geometry.preview.unwrap().x, 126);
             mouse(&mut s, Mouse::Down(MouseButton::Left), 125, 10, Mods::NONE);
             mouse(&mut s, Mouse::Drag(MouseButton::Left), 0, 10, Mods::NONE);
             assert_eq!(s.geometry.agent.unwrap().width, 62);
@@ -657,52 +656,44 @@ fn both_dividers_drag_plain_borders_preserve_minima_cancel_and_persist_ratio() {
     );
 }
 #[test]
-fn resize_is_persistent_and_preserves_agent_minimum_width() {
-    isolated(
-        "resize_is_persistent_and_preserves_agent_minimum_width",
-        || {
-            let f = Fixture::new();
-            let mut s = start(&f);
-            let tree = s.geometry.tree.unwrap();
-            mouse(
-                &mut s,
-                Mouse::Down(MouseButton::Left),
-                tree.right(),
-                10,
-                Mods::NONE,
-            );
-            mouse(&mut s, Mouse::Drag(MouseButton::Left), 45, 10, Mods::NONE);
-            mouse(&mut s, Mouse::Up(MouseButton::Left), 45, 10, Mods::NONE);
-            assert_eq!(s.geometry.tree.unwrap().width, 46);
-            assert!(s.geometry.agent.unwrap().width >= 62);
-            wait(&mut s, |_| {
-                devtabs::config::Config::load()
-                    .ok()
-                    .and_then(|c| c.projects.get(&devtabs::config::key(&f.0)).cloned())
-                    .is_some_and(|p| p.sidebar.width == 46)
-            });
-            let mut next = Sidebar::new(f.0.clone());
-            next.update_layout(Rect::new(0, 0, 180, 32), false);
-            wait(&mut next, |s| s.sidebar_preferences().width == 46);
-            draw(&mut next);
-            assert_eq!(next.geometry.tree.unwrap().width, 46);
-            for width in [0, 60, 80, 100, 120, 180, 400] {
-                for desired in [0, 20, 40, 80, 200] {
-                    let p = devtabs::sidebar::panels_with_width(
-                        Rect::new(0, 0, width, 32),
-                        true,
-                        true,
-                        true,
-                        desired,
-                    );
-                    if let Some(a) = p.agent {
-                        assert!(a.width >= 62);
-                        assert!(a.right() <= width);
-                    }
+fn resize_is_local_and_preserves_agent_minimum_width() {
+    isolated("resize_is_local_and_preserves_agent_minimum_width", || {
+        let f = Fixture::new();
+        let mut s = start(&f);
+        let tree = s.geometry.tree.unwrap();
+        mouse(
+            &mut s,
+            Mouse::Down(MouseButton::Left),
+            tree.right(),
+            10,
+            Mods::NONE,
+        );
+        mouse(&mut s, Mouse::Drag(MouseButton::Left), 45, 10, Mods::NONE);
+        mouse(&mut s, Mouse::Up(MouseButton::Left), 45, 10, Mods::NONE);
+        assert_eq!(s.geometry.tree.unwrap().width, 46);
+        assert!(s.geometry.agent.unwrap().width >= 62);
+        assert!(!devtabs::config::home().join("config.toml").exists());
+        let mut next = Sidebar::new(f.0.clone());
+        next.update_layout(Rect::new(0, 0, 180, 32), false);
+        draw(&mut next);
+        assert_eq!(next.sidebar_preferences().width, 28);
+        assert_eq!(next.geometry.tree.unwrap().width, 28);
+        for width in [0, 60, 80, 100, 120, 180, 400] {
+            for desired in [0, 20, 40, 80, 200] {
+                let p = devtabs::sidebar::panels_with_width(
+                    Rect::new(0, 0, width, 32),
+                    true,
+                    true,
+                    true,
+                    desired,
+                );
+                if let Some(a) = p.agent {
+                    assert!(a.width >= 62);
+                    assert!(a.right() <= width);
                 }
             }
-        },
-    );
+        }
+    });
 }
 #[test]
 fn compact_projection_and_refresh_preserve_selection_expansion_and_scroll() {
@@ -811,7 +802,7 @@ fn rename_directory_saves_dirty_file_and_remaps_tabs_history_and_bookmarks() {
             wait(&mut s, |s| {
                 s.document.as_ref().is_some_and(|d| d.loaded().is_some())
             });
-            let store = devtabs::config::home().join("bookmarks.json");
+            let store = devtabs::config::home().join("user-data.json");
             let entry = devtabs::bookmarks::Entry {
                 id: uuid::Uuid::new_v4(),
                 project: f.0.clone(),

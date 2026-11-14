@@ -82,7 +82,7 @@ enum Input {
     Root,
     Add,
     Exclude,
-    Note(PathBuf),
+    Note(PathBuf, String),
     Preset,
     NewProject(PathBuf),
     RenamePreset(String),
@@ -505,6 +505,13 @@ impl Overview {
     }
     fn start(&mut self, w: &Workers, options: Vec<Options>) -> Result<()> {
         for o in &options {
+            if let Some(source) = &self.config.source {
+                source.require("launch")?;
+                source.require(&format!(
+                    "{}.launch",
+                    crate::settings::model::project_scope(&o.project)
+                ))?;
+            }
             anyhow::ensure!(
                 o.new_instance
                     || o.workspace.is_some()
@@ -549,6 +556,9 @@ impl Overview {
         Ok(())
     }
     fn launch_spec(&self, path: &std::path::Path) -> LaunchSpec {
+        if self.config.source.is_some() {
+            return LaunchSpec::from_config(path, &self.config);
+        }
         let key = config::key(path);
         let p = self
             .profiles
@@ -1505,7 +1515,6 @@ impl Overview {
             }
             Command::SetFilter(filter) => {
                 self.config.overview.filter = filter;
-                self.edit(w, Edit::Preferences(self.config.overview.clone()))?;
                 self.rebuild();
             }
             Command::NewProject => {
@@ -1575,7 +1584,7 @@ impl Overview {
                         .get(&config::key(&p))
                         .map(|p| p.note.clone())
                         .unwrap_or_default();
-                    self.dialog = Some(Dialog::Input(Input::Note(p), value))
+                    self.dialog = Some(Dialog::Input(Input::Note(p, value.clone()), value))
                 }
             }
             Command::Settings => {
@@ -1628,17 +1637,14 @@ impl Overview {
                         self.show_detail = !self.show_detail;
                         self.config.overview.detail = Some(self.show_detail);
                     }
-                    self.edit(w, Edit::Preferences(self.config.overview.clone()))?;
                 }
             }
             Command::Filter => {
                 self.config.overview.filter = self.config.overview.filter.next();
-                self.edit(w, Edit::Preferences(self.config.overview.clone()))?;
                 self.rebuild()
             }
             Command::Sort => {
                 self.config.overview.sort = self.config.overview.sort.next();
-                self.edit(w, Edit::Preferences(self.config.overview.clone()))?;
                 self.discover(w)?;
                 self.rebuild()
             }
@@ -1656,7 +1662,10 @@ impl Overview {
                     if !self.config.overview.collapsed.remove(&g) {
                         self.config.overview.collapsed.insert(g);
                     }
-                    self.edit(w, Edit::Preferences(self.config.overview.clone()))?;
+                    self.edit(
+                        w,
+                        Edit::Collapsed(g, self.config.overview.collapsed.contains(&g)),
+                    )?;
                     self.rebuild()
                 }
             }
@@ -1912,7 +1921,9 @@ impl Overview {
                             Input::Root => Edit::Root(value.clone().into()),
                             Input::Add => Edit::Add(value.clone().into()),
                             Input::Exclude => Edit::Exclude(value.clone().into()),
-                            Input::Note(path) => Edit::Note(path.clone(), value.clone()),
+                            Input::Note(path, base) => {
+                                Edit::Note(path.clone(), base.clone(), value.clone())
+                            }
                             Input::Preset => Edit::Preset(value.clone(), self.specs()),
                         };
                         self.edit(w, edit)?;

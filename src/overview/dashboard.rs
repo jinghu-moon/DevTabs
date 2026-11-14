@@ -1756,7 +1756,6 @@ impl Overview {
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
                     self.dashboard.drag = None;
-                    self.edit(w, Edit::Preferences(self.config.overview.clone()))?;
                 }
                 _ => {}
             }

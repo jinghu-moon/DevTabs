@@ -313,7 +313,7 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     Input::Root => "root",
                     Input::Add => "add",
                     Input::Exclude => "exclude",
-                    Input::Note(_) => "edit_note",
+                    Input::Note(..) => "edit_note",
                     Input::Preset => "preset_name",
                 });
                 let rect = popup(frame, 86, 9);

@@ -29,4 +29,16 @@
 
 完整阶段回归：`cargo test --workspace --all-targets -- --test-threads=1` 退出 0，480 通过、0 失败、33 忽略；日志 artifacts/settings-refactor/stage1/tests.log。`cargo fmt --all -- --check`、`git diff --check` 通过。阶段 1 完成，运行时格式接入属于阶段 2。
 
-阶段 2、3、4：待实施。C04–C20 尚未验收；Windows 外部热键、输入法与真实 Agent 场景尚未运行。
+阶段 1 提交并推送：48e17b3。
+
+## 阶段 2：统一存储与业务接入
+
+SettingsStore 保留原文、注释和未知项，使用语义身份三方合并与字段错误隔离；保存失败不发布内存状态。UserData 管理便签与书签，UiState 管理最近时间、折叠与浮层。原 Config 仅作为现有总览的内存投影，不再作为文件格式。CLI 用 clap ValueSource 识别显式参数；布尔参数支持显式 false。运行记录位于 runtime，可重算统计位于 cache；项目模板不再自动读取或回写。
+
+准备步骤在 Task/Plan 捕获，检查每次读取；空列表也为确定快照，缺少快照字段报错。预设持久结构只保存完整启动值与续接策略。通知全局偏好与任务策略分离，发送前复核当前偏好，宿主诊断报告检查/采用摘要。
+
+有意变化：总览和文件树就地视图改动不自动保存默认；有额外会话不再隐式启用 Custom；代码默认 Agent 为 Codex；取消项目文件自动覆盖。原测试更新格式/路径/上述行为断言，保留 PTY、租约、重连、字面参数、恢复、文件保护等业务断言。
+
+验证：`cargo test --workspace --all-targets --no-fail-fast -- --test-threads=1`，44 套件，493 通过、0 失败、33 忽略；日志 artifacts/settings-refactor/stage2/tests-confirmed.log。前两轮失败与修正日志同目录保留。补充配置服务/辅助存储单测、书签冲突与 Remap 合并、通知交付策略，以及 tests/unified_configuration.rs 的三项端到端配置验证。
+
+阶段 2 完成配置/存储层的 C01、C02、C04、C05、C07–C10；C03 的运行时快照覆盖，具体会话转策略 UI 待阶段 4。含界面的验收 ID 仍需阶段 4 执行，不能以本轮全套通过代替。阶段 3、4：待实施；Windows 外部热键、输入法与真实 Agent 场景尚未运行。

@@ -77,7 +77,7 @@ pub struct Options {
     #[serde(default)]
     pub fresh: bool,
     /// Continue the latest conversation if readable history exists.
-    #[arg(long, conflicts_with = "fresh")]
+    #[arg(long, conflicts_with = "fresh", action=clap::ArgAction::Set, num_args=0..=1, require_equals=true, default_missing_value="true", default_value="false")]
     #[serde(default)]
     pub continue_latest: bool,
     /// Extra Agent arguments, repeated once per argument; passed as literal values.
@@ -93,7 +93,7 @@ pub struct Options {
     #[serde(default)]
     pub color: Option<String>,
     /// Open a new Windows Terminal window rather than append to the current one.
-    #[arg(long)]
+    #[arg(long, action=clap::ArgAction::Set, num_args=0..=1, require_equals=true, default_missing_value="true", default_value="false")]
     #[serde(default)]
     pub new_window: bool,
     #[arg(skip)]

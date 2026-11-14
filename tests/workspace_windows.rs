@@ -579,7 +579,7 @@ fn agent_only_creates_exactly_one_pty_and_roundtrips_recovery() {
         1,
         "there must be no hidden Debug process"
     );
-    let journal = devtabs::recovery::Journal::load_at(&h.root.join("data")).unwrap();
+    let journal = devtabs::recovery::Journal::load_at(&h.root.join("data/runtime")).unwrap();
     let restored = devtabs::recovery::restore_options(&journal.entries[&workspace.id]);
     assert_eq!(restored.terminal_count(), 1);
     assert_eq!(
@@ -620,7 +620,7 @@ fn legacy_host_cannot_receive_new_build_requests_or_reject_new_sidebar_settings(
     project.sidebar.width = 46;
     project.sidebar.agent_ratio = 6250;
     let path = home.join("config.toml");
-    fs::write(&path, toml::to_string_pretty(&config).unwrap()).unwrap();
+    fs::write(&path, configuration_text(&config)).unwrap();
 
     // A real listener with the exact namespace used by existing v4 binaries.
     // It accepts Ping but rejects Open exactly where the old configuration parser failed.
@@ -678,8 +678,7 @@ fn legacy_host_cannot_receive_new_build_requests_or_reject_new_sidebar_settings(
         panic!("host identity")
     };
     assert_ne!(pid, std::process::id());
-    let loaded: devtabs::config::Config =
-        toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    let loaded: devtabs::config::Config = read_configuration(&path);
     let saved = &loaded.projects[&devtabs::config::key(&h.root)].sidebar;
     assert_eq!(saved.width, 46);
     assert_eq!(saved.agent_ratio, 6250);
@@ -721,7 +720,7 @@ fn launch_journal_survives_host_crash_restore_is_idempotent_and_last_reuses_work
     let old_pid = h.info(&original.id).sessions[0].shell_pid.unwrap();
     let old_task = original.tasks[0].id.clone();
     let home = h.root.join("data");
-    let journal = devtabs::recovery::Journal::load_at(&home).unwrap();
+    let journal = devtabs::recovery::Journal::load_at(&home.join("runtime")).unwrap();
     assert!(journal.entries.contains_key(&original.id));
     let live_restore = h
         .command()
@@ -751,7 +750,7 @@ fn launch_journal_survives_host_crash_restore_is_idempotent_and_last_reuses_work
     }
     wait("isolated host exits", || h.rpc(Request::Ping).is_err());
     assert!(
-        devtabs::recovery::Journal::load_at(&home)
+        devtabs::recovery::Journal::load_at(&home.join("runtime"))
             .unwrap()
             .entries
             .contains_key(&original.id)
@@ -781,7 +780,7 @@ fn launch_journal_survives_host_crash_restore_is_idempotent_and_last_reuses_work
         "Restoration must retain the authoritative task identity"
     );
     assert_ne!(h.info(&id).sessions[0].shell_pid, Some(old_pid));
-    let journal = devtabs::recovery::Journal::load_at(&home).unwrap();
+    let journal = devtabs::recovery::Journal::load_at(&home.join("runtime")).unwrap();
     assert_eq!(journal.entries.len(), 1);
     assert!(!journal.entries.contains_key(&original.id));
     assert!(journal.entries.contains_key(&id));
@@ -803,7 +802,7 @@ fn launch_journal_survives_host_crash_restore_is_idempotent_and_last_reuses_work
     assert_eq!(data["workspaces"][0]["id"], id);
     h.rpc(Request::Close { workspace: id }).unwrap();
     assert!(
-        devtabs::recovery::Journal::load_at(&home)
+        devtabs::recovery::Journal::load_at(&home.join("runtime"))
             .unwrap()
             .entries
             .is_empty()
@@ -1177,8 +1176,7 @@ fn installation_and_project_configuration_use_isolated_directories() {
             .status
             .success()
     );
-    let c: devtabs::config::Config =
-        toml::from_str(&fs::read_to_string(h.root.join("data/config.toml")).unwrap()).unwrap();
+    let c: devtabs::config::Config = read_configuration(&h.root.join("data/config.toml"));
     assert_eq!(c.scan().len(), 2);
     assert!(
         h.command()
@@ -1189,8 +1187,7 @@ fn installation_and_project_configuration_use_isolated_directories() {
             .status
             .success()
     );
-    let c: devtabs::config::Config =
-        toml::from_str(&fs::read_to_string(h.root.join("data/config.toml")).unwrap()).unwrap();
+    let c: devtabs::config::Config = read_configuration(&h.root.join("data/config.toml"));
     assert_eq!(c.scan(), vec![root.join("Two")]);
 }
 
@@ -1301,10 +1298,9 @@ fn killed_frontend_reconnects_without_restarting_shells() {
     });
     let before = h.info(&id);
     wait("frontend draft guard", || {
-        before
-            .tasks
-            .iter()
-            .all(|t| devtabs::lifecycle::lease(&h.root.join("data"), &t.id, true, true).is_err())
+        before.tasks.iter().all(|t| {
+            devtabs::lifecycle::lease(&h.root.join("data/runtime"), &t.id, true, true).is_err()
+        })
     });
     child.kill().unwrap();
     child.wait().unwrap();
@@ -1312,7 +1308,7 @@ fn killed_frontend_reconnects_without_restarting_shells() {
     drain.join().unwrap();
     for task in &before.tasks {
         assert!(
-            devtabs::lifecycle::lease(&h.root.join("data"), &task.id, true, true).is_ok(),
+            devtabs::lifecycle::lease(&h.root.join("data/runtime"), &task.id, true, true).is_ok(),
             "A killed frontend must release draft guards without a host restart"
         );
     }
@@ -1408,8 +1404,7 @@ fn managed_run_cancels_unsubmitted_edit_buffer_and_config_writers_merge() {
     for mut writer in writers {
         assert!(writer.wait().unwrap().success());
     }
-    let c: devtabs::config::Config =
-        toml::from_str(&fs::read_to_string(h.root.join("data/config.toml")).unwrap()).unwrap();
+    let c: devtabs::config::Config = read_configuration(&h.root.join("data/config.toml"));
     assert_eq!(c.roots.len(), 6);
 }
 
@@ -1423,6 +1418,7 @@ fn named_sessions_keep_identity_and_relative_directory_across_reuse() {
     config.projects.insert(
         devtabs::config::key(&h.root),
         devtabs::config::Project {
+            composition: Some(devtabs::launch::Composition::Custom),
             sessions: vec![devtabs::config::SessionConfig {
                 name: "Docs".into(),
                 directory: Some("docs".into()),
@@ -1435,11 +1431,7 @@ fn named_sessions_keep_identity_and_relative_directory_across_reuse() {
         },
     );
     fs::create_dir(h.root.join("data")).unwrap();
-    fs::write(
-        h.root.join("data/config.toml"),
-        toml::to_string(&config).unwrap(),
-    )
-    .unwrap();
+    fs::write(h.root.join("data/config.toml"), configuration_text(&config)).unwrap();
     let w = h.open(&[]);
     assert_eq!(w.sessions.len(), 3);
     assert_eq!(w.sessions[2].name, "Docs");
@@ -2015,8 +2007,8 @@ fn headless_host_validation_failure_returns_nonzero_and_equals_data_dir_is_honor
         .unwrap();
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("PowerShell not found"));
-    assert!(alternate.join("launches.json").is_file());
-    assert!(!h.root.join("data/launches.json").exists());
+    assert!(alternate.join("runtime/launches.json").is_file());
+    assert!(!h.root.join("data/runtime/launches.json").exists());
     let _ = h
         .command()
         .env("DEVTABS_HOME", alternate)
@@ -2031,7 +2023,7 @@ fn literal_agent_argument_cannot_override_devtabs_data_directory() {
     let arg = format!("--data-dir={}", decoy.display());
     let workspace = h.open(&["--agent-arg", &arg]);
     assert_eq!(workspace.options.agent_args, vec![arg]);
-    assert!(h.root.join("data/launches.json").is_file());
+    assert!(h.root.join("data/runtime/launches.json").is_file());
     assert!(!decoy.exists());
 }
 
@@ -2049,12 +2041,13 @@ fn floating_handoff_preserves_processes_and_rejects_stale_views_and_sizes() {
         command: None,
         directory: None,
     }];
+    config
+        .projects
+        .get_mut(&devtabs::config::key(&h.root))
+        .unwrap()
+        .composition = Some(devtabs::launch::Composition::Custom);
     fs::create_dir_all(h.root.join("data")).unwrap();
-    fs::write(
-        h.root.join("data/config.toml"),
-        toml::to_string(&config).unwrap(),
-    )
-    .unwrap();
+    fs::write(h.root.join("data/config.toml"), configuration_text(&config)).unwrap();
     let work = h.open(&[
         "--debug-command",
         "for($i=0;$i -lt 40;$i++){Write-Output ('CONTINUE-'+$i);Start-Sleep -Milliseconds 50}",
@@ -2264,9 +2257,9 @@ fn terminal_panel_stays_in_one_frontend_and_routes_geometry_and_input() {
     // SGR mouse coordinates are one based; drag title five cells right/two down.
     keys(&main, b"\x1b[<0;26;7M\x1b[<32;31;9M\x1b[<0;31;9m");
     let geometry = || {
-        fs::read(h.root.join("data/terminal-panel.json"))
+        devtabs::settings::data::UiState::read(&h.root.join("data"))
             .ok()
-            .and_then(|v| serde_json::from_slice::<[u16; 4]>(&v).ok())
+            .and_then(|s| s.floating)
     };
     wait("drag saved cell coordinates", || {
         geometry().is_some_and(|r| r[0] == 28 && r[1] == 8)
@@ -2455,4 +2448,55 @@ fn collapsed_terminal_output_workload() {
     )
     .unwrap();
     println!("{report}");
+}
+
+fn configuration_text(config: &devtabs::config::Config) -> String {
+    use devtabs::settings::model as m;
+    let mut p = m::Preferences::default();
+    p.general.language = Some(config.language);
+    p.appearance.theme = Some(config.theme);
+    p.launch.agent = config.default_agent;
+    p.discovery.roots = config.roots.clone();
+    p.discovery.added = config.added.clone();
+    p.discovery.excluded = config.excluded.clone();
+    for (path, v) in &config.projects {
+        p.project.push(m::Project {
+            path: path.into(),
+            favorite: v.favorite,
+            checks: Default::default(),
+            sidebar: m::Sidebar {
+                width: Some(v.sidebar.width),
+                agent_ratio: Some(v.sidebar.agent_ratio),
+                follow: Some(v.sidebar.follow),
+                compact: Some(v.sidebar.compact),
+                ..Default::default()
+            },
+            launch: m::LaunchOverrides {
+                agent: v.agent,
+                layout: v.layout,
+                composition: v.composition,
+                title: v.title.clone(),
+                color: v.color.clone(),
+                agent_args: Some(v.agent_args.clone()),
+                debug_command: v.debug_command.clone(),
+                resume_latest: v.resume_latest,
+                sessions: Some(v.sessions.clone()),
+                ..Default::default()
+            },
+        });
+    }
+    toml::to_string_pretty(&p).unwrap()
+}
+fn read_configuration(path: &Path) -> devtabs::config::Config {
+    let source =
+        devtabs::settings::store::Snapshot::parse(fs::read_to_string(path).unwrap()).unwrap();
+    assert!(source.diagnostics.is_empty(), "{:?}", source.diagnostics);
+    let mut config = devtabs::settings::projection::from_preferences(&source.effective);
+    if let Ok(state) = devtabs::settings::data::UiState::read(path.parent().unwrap()) {
+        for (key, p) in state.projects {
+            config.projects.entry(key).or_default().last_opened = p.last_opened;
+        }
+    }
+    config.source = Some(source);
+    config
 }

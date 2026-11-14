@@ -53,7 +53,7 @@ impl App {
                 if !leases.contains_key(&t.id) {
                     leases.insert(
                         t.id.clone(),
-                        crate::lifecycle::lease(&crate::config::home(), &t.id, true, false)?,
+                        crate::lifecycle::lease(&crate::config::runtime(), &t.id, true, false)?,
                     );
                 }
             }

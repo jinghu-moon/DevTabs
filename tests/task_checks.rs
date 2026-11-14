@@ -81,12 +81,14 @@ fn initialization_retry_skips_successful_steps_and_does_not_initialize_other_tas
         ],
         ..Default::default()
     };
-    profile.save(&root).unwrap();
     let exe = std::path::Path::new(env!("CARGO_BIN_EXE_devtabs"));
     let home = f.0.join("home");
-    assert!(devtabs::checks::initialize_with_executable("B", &root, &home, exe).is_err());
+    assert!(
+        devtabs::checks::initialize_with_executable("B", &root, &home, exe, &profile.prepare)
+            .is_err()
+    );
     fs::write(root.join("ready"), "").unwrap();
-    devtabs::checks::initialize_with_executable("B", &root, &home, exe).unwrap();
+    devtabs::checks::initialize_with_executable("B", &root, &home, exe, &profile.prepare).unwrap();
     assert_eq!(
         fs::read_to_string(root.join("one.txt"))
             .unwrap()

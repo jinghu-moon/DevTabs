@@ -1,4 +1,4 @@
-//! Launch settings may be shared in .devtabs.toml; private notes stay in Config.
+//! Explicit project-template export and launch validation; templates are never auto-loaded.
 use crate::{
     config::{self, Config, Project, SessionConfig},
     launch::{Agent, Layout, Options},
@@ -74,18 +74,7 @@ impl Profile {
         crate::overview::model::validate_settings(&p)?;
         config::atomic_write(
             &root.join(".devtabs.toml"),
-            toml::to_string_pretty(&{
-                let mut profile = self.clone();
-                if profile.prepare.is_empty()
-                    && profile.check.is_none()
-                    && let Some(old) = Self::load(root)?
-                {
-                    profile.prepare = old.prepare;
-                    profile.check = old.check;
-                }
-                profile
-            })?
-            .as_bytes(),
+            toml::to_string_pretty(self)?.as_bytes(),
         )
     }
 }
@@ -95,8 +84,21 @@ pub fn effective(c: &Config, path: &Path) -> Result<Project> {
         .get(&config::key(path))
         .cloned()
         .unwrap_or_default();
-    if let Some(profile) = Profile::load(path)? {
-        profile.apply(&mut p);
+    if let Some(source) = &c.source {
+        let key = crate::settings::model::project_scope(path);
+        source.require("launch")?;
+        source.require(&format!("{key}.launch"))?;
+        let resolved = source.effective.resolve(path, &Default::default());
+        let v = resolved.snapshot.launch;
+        p.agent = Some(v.agent);
+        p.layout = Some(v.layout);
+        p.composition = Some(v.composition);
+        p.title = v.title;
+        p.color = v.color;
+        p.agent_args = v.agent_args;
+        p.resume_latest = Some(v.conversation == crate::settings::model::Conversation::Latest);
+        p.debug_command = Some(v.debug_command);
+        p.sessions = v.sessions;
     }
     crate::overview::model::validate_settings(&p)?;
     Ok(p)

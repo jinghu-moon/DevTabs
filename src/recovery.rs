@@ -74,13 +74,13 @@ impl Journal {
 }
 fn edit(f: impl FnOnce(&mut Journal)) -> Result<()> {
     let _lock = ConfigLock::acquire()?;
-    let home = config::home();
+    let home = config::runtime();
     let mut j = Journal::load_at(&home)?;
     f(&mut j);
     j.save_at(&home)
 }
 pub fn load() -> Result<Journal> {
-    Journal::load_at(&config::home())
+    Journal::load_at(&config::runtime())
 }
 pub fn register(id: &str, o: &Options) -> Result<()> {
     edit(|j| j.register(id, o))
@@ -91,14 +91,16 @@ pub fn register_tasks(id: &str, o: &Options, tasks: &[crate::tasks::Task]) -> Re
             uuid::Uuid::parse_str(old).is_ok() && uuid::Uuid::parse_str(id).is_ok(),
             "Invalid recovery layout identity"
         );
-        let source = config::home().join("layouts").join(format!("{old}.json"));
+        let source = config::runtime()
+            .join("layouts")
+            .join(format!("{old}.json"));
         match std::fs::File::open(source) {
             Ok(file) => {
                 let mut bytes = vec![];
                 file.take(65537).read_to_end(&mut bytes)?;
                 anyhow::ensure!(bytes.len() <= 65536, "Recovery layout exceeds 64 KiB");
                 config::atomic_write(
-                    &config::home().join("layouts").join(format!("{id}.json")),
+                    &config::runtime().join("layouts").join(format!("{id}.json")),
                     &bytes,
                 )?;
             }

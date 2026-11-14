@@ -228,8 +228,8 @@ fn terminal_composition_preserves_extra_configuration_and_persists_through_all_l
         }],
         ..Default::default()
     };
-    Profile::from_project(&project).save(&f.0).unwrap();
-    let prefs = project_profile::effective(&Config::default(), &f.0).unwrap();
+    let config = central(&f.0, &project);
+    let prefs = project_profile::effective(&config, &f.0).unwrap();
     assert_eq!(prefs.composition, Some(Composition::AgentOnly));
     assert_eq!(prefs.sessions.len(), 1);
     let spec = LaunchSpec::from_project(&f.0, Some(Agent::Shell), prefs);
@@ -324,7 +324,7 @@ fn journal_without_task_ids_remains_readable_without_inventing_task_ownership() 
     assert!(serde_json::from_value::<devtabs::recovery::Journal>(value).is_err());
 }
 #[test]
-fn project_profile_overrides_launch_fields_but_keeps_private_metadata() {
+fn central_project_launch_keeps_private_metadata_and_ignores_project_files() {
     let f = Fixture::new();
     let mut c = Config::default();
     let key = devtabs::config::key(&f.0);
@@ -345,18 +345,22 @@ fn project_profile_overrides_launch_fields_but_keeps_private_metadata() {
         resume_latest: Some(false),
         ..Default::default()
     };
-    Profile::from_project(&p).save(&f.0).unwrap();
-    let text = fs::read_to_string(f.0.join(".devtabs.toml")).unwrap();
+    let mut central = central(&f.0, &p);
+    central.projects.get_mut(&key).unwrap().favorite = true;
+    central.projects.get_mut(&key).unwrap().note = "私有便签".into();
+    let text = &central.source.as_ref().unwrap().text;
     assert!(!text.contains("私有便签"));
-    assert!(!text.contains("favorite"));
-    let effective = project_profile::effective(&c, &f.0).unwrap();
+    let effective = project_profile::effective(&central, &f.0).unwrap();
     assert!(effective.favorite);
     assert_eq!(effective.note, "私有便签");
     assert_eq!(effective.agent, Some(Agent::Claude));
     assert_eq!(effective.title, p.title);
     assert_eq!(effective.agent_args, p.agent_args);
     f.write(".devtabs.toml", "typo_setting = true");
-    assert!(project_profile::effective(&c, &f.0).is_err());
+    assert_eq!(
+        project_profile::effective(&central, &f.0).unwrap().agent,
+        Some(Agent::Claude)
+    );
 }
 #[test]
 fn presets_capture_every_launch_option_and_rename_delete_without_losing_order() {
@@ -588,4 +592,31 @@ fn statistics_cache_benchmark() {
         warm_us[3] < uncached_us[2],
         "Cache must outperform an uncached scan after syntax initialization"
     );
+}
+
+fn central(path: &std::path::Path, p: &Project) -> Config {
+    use devtabs::settings::{model as m, projection, store::Snapshot};
+    let mut prefs = m::Preferences::default();
+    prefs.project.push(m::Project {
+        path: path.into(),
+        favorite: p.favorite,
+        sidebar: Default::default(),
+        checks: Default::default(),
+        launch: m::LaunchOverrides {
+            agent: p.agent,
+            layout: p.layout,
+            composition: p.composition,
+            title: p.title.clone(),
+            color: p.color.clone(),
+            agent_args: Some(p.agent_args.clone()),
+            resume_latest: p.resume_latest,
+            debug_command: p.debug_command.clone(),
+            sessions: Some(p.sessions.clone()),
+            ..Default::default()
+        },
+    });
+    let source = Snapshot::parse(toml::to_string_pretty(&prefs).unwrap()).unwrap();
+    let mut config = projection::from_preferences(&source.effective);
+    config.source = Some(source);
+    config
 }

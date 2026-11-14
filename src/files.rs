@@ -222,7 +222,7 @@ impl Workers {
                 };
                 let Ok(job)=job else {break;};
                 let completion=match job {
-                    Job::Bookmarks{project,id,operation} => Some(Completed::Bookmarks{id,result:crate::bookmarks::update(&crate::config::home().join("bookmarks.json"),&project,operation)}),
+                    Job::Bookmarks{project,id,operation} => Some(Completed::Bookmarks{id,result:crate::bookmarks::update(&crate::config::home().join("user-data.json"),&project,operation)}),
                     Job::Edit{loaded,id}=>Some(Completed::Edit{id,result:crate::editor::Editor::new(loaded).map(Box::new)}),
                     Job::Save{request}=>{let result=crate::editor::save(&request);Some(Completed::Save{path:request.snapshot.path.clone(),revision:request.revision,source:request.source,result})},
                     Job::Directory{root,path,generation,reset,hidden,ignored,capacity}=>{

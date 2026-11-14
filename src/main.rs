@@ -1,5 +1,4 @@
 use anyhow::Result;
-use clap::Parser;
 use devtabs::{
     app::{self, App, TerminalGuard},
     launch::Options,
@@ -52,7 +51,9 @@ fn run() -> Result<()> {
     let options = if overview {
         None
     } else {
-        let parsed = Options::parse();
+        use clap::{CommandFactory, FromArgMatches};
+        let matches = Options::command().get_matches();
+        let parsed = Options::from_arg_matches(&matches)?;
         // Parse structurally so an Agent argument that resembles a DevTabs flag
         // cannot change the application's data directory.
         if let Some(path) = &parsed.data_dir {
@@ -64,7 +65,7 @@ fn run() -> Result<()> {
             devtabs::recovery::launch_group(&parsed)?;
             return Ok(());
         }
-        Some(devtabs::cli::resolve(parsed)?)
+        Some(devtabs::cli::resolve(parsed, &matches)?)
     };
     if let Some(o) = &options
         && o.workspace.is_none()

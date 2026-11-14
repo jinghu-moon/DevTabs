@@ -984,7 +984,7 @@ fn bookmarks_survive_sidebar_restart_edit_delete_and_source_shifts() {
     key(&mut s, KeyCode::Enter);
     wait(&mut s, |s| text(&draw_immutable(s)).contains("1 bookmarks"));
     let saved = devtabs::bookmarks::update(
-        &devtabs::config::home().join("bookmarks.json"),
+        &devtabs::config::home().join("user-data.json"),
         &f.0,
         devtabs::bookmarks::Operation::List,
     )
@@ -1017,7 +1017,7 @@ fn bookmarks_survive_sidebar_restart_edit_delete_and_source_shifts() {
     wait(&mut s, |s| text(&draw_immutable(s)).contains("0 bookmarks"));
     assert!(
         devtabs::bookmarks::update(
-            &devtabs::config::home().join("bookmarks.json"),
+            &devtabs::config::home().join("user-data.json"),
             &f.0,
             devtabs::bookmarks::Operation::List
         )

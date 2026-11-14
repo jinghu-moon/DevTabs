@@ -15,6 +15,7 @@ fn task_rows_are_distinct_from_history_and_preserve_selection_after_reordering()
         base: "commit".into(),
         owned: true,
         archived: false,
+        prepare: vec![],
         options: options.clone(),
     };
     let sessions = ["A", "B"]
@@ -154,7 +155,7 @@ fn mouse_at(kind: MouseEventKind, x: u16, y: u16) -> MouseEvent {
     }
 }
 #[test]
-fn settings_composition_matches_implicit_custom_launch_and_cycles_from_that_value() {
+fn sessions_preserve_explicit_default_composition_and_cycle_without_losing_entries() {
     use crate::launch::Composition;
     let t = worker::isolated();
     let mut app = overview();
@@ -169,10 +170,10 @@ fn settings_composition_matches_implicit_custom_launch_and_cycles_from_that_valu
             command: None,
             directory: None,
         });
-    assert_eq!(app.options_for(&path).composition, Composition::Custom);
+    assert_eq!(app.options_for(&path).composition, Composition::AgentDebug);
     app.command(&t.worker, Command::Settings).unwrap();
     assert!(
-        matches!(&app.dialog, Some(Dialog::Settings { project, .. }) if project.terminal_composition() == Composition::Custom)
+        matches!(&app.dialog, Some(Dialog::Settings { project, .. }) if project.terminal_composition() == Composition::AgentDebug)
     );
     app.key(
         &t.worker,
@@ -180,7 +181,7 @@ fn settings_composition_matches_implicit_custom_launch_and_cycles_from_that_valu
     )
     .unwrap();
     assert!(
-        matches!(&app.dialog, Some(Dialog::Settings { project, .. }) if project.composition == Some(Composition::AgentOnly) && project.sessions.len() == 1)
+        matches!(&app.dialog, Some(Dialog::Settings { project, .. }) if project.composition == Some(Composition::Custom) && project.sessions.len() == 1)
     );
     app.key(
         &t.worker,
@@ -563,7 +564,7 @@ fn filter_counts_and_identity_ignore_temporary_agent_and_use_known_history_recen
     assert_eq!(app.path(), Some(PathBuf::from("b")));
 }
 #[test]
-fn divider_release_is_persisted_and_failed_save_retains_visible_size() {
+fn divider_release_keeps_current_view_without_saving_default() {
     let t = worker::isolated();
     let mut app = overview();
     draw(&mut app, 200, 50);
@@ -588,16 +589,10 @@ fn divider_release_is_persisted_and_failed_save_retains_visible_size() {
         mouse_at(MouseEventKind::Up(MouseButton::Left), 0, 0),
     )
     .unwrap();
-    let Action::Edit(id, Edit::Preferences(prefs)) = t.edits.try_recv().unwrap() else {
-        panic!("save widths")
-    };
-    assert_eq!(prefs.list_ratio, saved);
-    t.replies
-        .send(Reply::Config(id, Err("disk full".into())))
-        .unwrap();
-    app.poll(&t.worker).unwrap();
+    assert!(t.edits.try_recv().is_err());
     assert_eq!(app.config.overview.list_ratio, saved);
-    assert_eq!(app.message, "disk full");
+    app.rebuild();
+    assert_eq!(app.config.overview.list_ratio, saved);
 }
 #[test]
 fn default_columns_respect_boundaries_and_preferences_without_auto_popups() {
@@ -1042,7 +1037,7 @@ fn note_keeps_original_project_when_background_results_change_selection() {
     assert_ne!(app.path().unwrap(), original);
     app.key(&t.worker, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
         .unwrap();
-    let Action::Edit(_, Edit::Note(path, _)) = t.edits.try_recv().unwrap() else {
+    let Action::Edit(_, Edit::Note(path, _, _)) = t.edits.try_recv().unwrap() else {
         panic!("expected note save");
     };
     assert_eq!(path, original);
@@ -1335,7 +1330,10 @@ fn chinese_popups_mouse_geometry_and_escape_do_not_reach_underlying_list() {
         assert!(app.dashboard.overlay.is_none());
         assert!(app.show_stats);
         for dialog in [
-            Dialog::Input(Input::Note(PathBuf::from("a")), "下一步".into()),
+            Dialog::Input(
+                Input::Note(PathBuf::from("a"), String::new()),
+                "下一步".into(),
+            ),
             Dialog::Settings {
                 path: "a".into(),
                 project: Project::default(),

@@ -1,12 +1,9 @@
 //! Persistent reading bookmarks. Worker-only I/O, bounded data and atomic updates.
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
-use std::{
-    io::Read,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Entry {
     pub id: uuid::Uuid,
@@ -22,45 +19,16 @@ pub struct Entry {
 pub enum Operation {
     List,
     Put(Entry),
-    Delete(uuid::Uuid),
+    Edit { base: Entry, draft: Entry },
+    Delete(Entry),
     Remap(Vec<(PathBuf, Option<PathBuf>)>),
 }
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Store {
-    version: u32,
-    entries: Vec<Entry>,
-}
-const MAX_FILE: u64 = 8 * 1024 * 1024;
+#[cfg(test)]
+const MAX_FILE: u64 = 16 * 1024 * 1024;
 
 pub fn update(file: &Path, project: &Path, operation: Operation) -> Result<Vec<Entry>> {
-    let _lock = crate::config::ConfigLock::acquire()?;
-    let mut store = match std::fs::File::open(file) {
-        Ok(f) => {
-            ensure!(
-                f.metadata()?.len() <= MAX_FILE,
-                "Bookmark store exceeds 8 MiB"
-            );
-            let mut bytes = Vec::new();
-            f.take(MAX_FILE + 1).read_to_end(&mut bytes)?;
-            ensure!(
-                bytes.len() as u64 <= MAX_FILE,
-                "Bookmark store exceeds 8 MiB"
-            );
-            let s: Store = serde_json::from_slice(&bytes)
-                .context("Cannot read bookmarks; original file preserved")?;
-            ensure!(
-                s.version == 1 && s.entries.len() <= 4096,
-                "Unsupported bookmark store"
-            );
-            s
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Store {
-            version: 1,
-            entries: vec![],
-        },
-        Err(e) => return Err(e.into()),
-    };
+    let _lock = crate::config::ConfigLock::acquire_at(file.parent().unwrap())?;
+    let mut store = crate::settings::data::UserData::read(file)?;
     let key = crate::config::key(project);
     let belongs = |e: &Entry| crate::config::key(&e.project) == key;
     let write = !matches!(operation, Operation::List);
@@ -75,16 +43,47 @@ pub fn update(file: &Path, project: &Path, operation: Operation) -> Result<Vec<E
                 entry.note.chars().count() <= 256 && entry.anchor.chars().count() <= 128,
                 "Bookmark text exceeds limit"
             );
-            store.entries.retain(|e| !belongs(e) || e.id != entry.id);
+            if let Some(existing) = store.bookmarks.iter().find(|e| e.id == entry.id) {
+                ensure!(
+                    existing == &entry,
+                    "Bookmark already exists; editing requires its base value"
+                );
+                return Ok(store.bookmarks.into_iter().filter(belongs).collect());
+            }
             ensure!(
-                store.entries.len() < 4096
-                    && store.entries.iter().filter(|e| belongs(e)).count() < 128,
+                store.bookmarks.len() < 4096
+                    && store.bookmarks.iter().filter(|e| belongs(e)).count() < 128,
                 "Bookmark limit reached (128 per project)"
             );
-            store.entries.push(entry);
+            store.bookmarks.push(entry);
         }
-        Operation::Delete(id) => store.entries.retain(|e| !belongs(e) || e.id != id),
-        Operation::Remap(paths) => store.entries.retain_mut(|entry| {
+        Operation::Edit { base, draft } => {
+            ensure!(
+                belongs(&base) && belongs(&draft) && base.id == draft.id,
+                "Invalid bookmark identity"
+            );
+            let latest = store
+                .bookmarks
+                .iter_mut()
+                .find(|e| e.id == base.id && belongs(e))
+                .ok_or_else(|| anyhow::anyhow!("Bookmark was deleted; draft retained"))?;
+            macro_rules! merge { ($($f:ident),*) => { $(if base.$f != draft.$f {
+                ensure!(latest.$f == base.$f || latest.$f == draft.$f, "Bookmark {} changed; draft retained", stringify!($f));
+                latest.$f = draft.$f;
+            })* } }
+            merge!(path, byte, line, anchor, markdown, note);
+        }
+        Operation::Delete(base) => {
+            ensure!(belongs(&base), "Invalid bookmark project");
+            if let Some(latest) = store.bookmarks.iter().find(|e| e.id == base.id) {
+                ensure!(
+                    latest == &base,
+                    "Bookmark changed before deletion; reload before retrying"
+                );
+            }
+            store.bookmarks.retain(|e| !belongs(e) || e.id != base.id);
+        }
+        Operation::Remap(paths) => store.bookmarks.retain_mut(|entry| {
             if !belongs(entry) {
                 return true;
             }
@@ -105,14 +104,9 @@ pub fn update(file: &Path, project: &Path, operation: Operation) -> Result<Vec<E
         }),
     }
     if write {
-        let bytes = serde_json::to_vec_pretty(&store)?;
-        ensure!(
-            bytes.len() as u64 <= MAX_FILE,
-            "Bookmark store exceeds 8 MiB"
-        );
-        crate::config::atomic_write(file, &bytes)?;
+        store.save(file)?;
     }
-    Ok(store.entries.into_iter().filter(belongs).collect())
+    Ok(store.bookmarks.into_iter().filter(belongs).collect())
 }
 
 /// Match the closest unchanged source line after edits; otherwise use the saved
@@ -170,7 +164,7 @@ mod tests {
             }
         }
         fn file(&self) -> PathBuf {
-            self.0.join("bookmarks.json")
+            self.0.join("user-data.json")
         }
     }
     impl Drop for Fixture {
@@ -182,7 +176,6 @@ mod tests {
     fn store_roundtrip_updates_notes_and_keeps_projects_separate() {
         let f = Fixture::new();
         let e = f.entry();
-        let id = e.id;
         assert!(update(&f.file(), &f.0, Operation::List).unwrap().is_empty());
         assert!(!f.file().exists());
         update(&f.file(), &f.0, Operation::Put(e.clone())).unwrap();
@@ -190,13 +183,14 @@ mod tests {
         let mut e2 = f.entry();
         e2.project = other.clone();
         update(&f.file(), &other, Operation::Put(e2)).unwrap();
+        let base = e.clone();
         let mut e = e;
         e.note = "修改备注".into();
-        let entries = update(&f.file(), &f.0, Operation::Put(e)).unwrap();
+        let entries = update(&f.file(), &f.0, Operation::Edit { base, draft: e }).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].note, "修改备注");
         assert!(
-            update(&f.file(), &f.0, Operation::Delete(id))
+            update(&f.file(), &f.0, Operation::Delete(entries[0].clone()))
                 .unwrap()
                 .is_empty()
         );
@@ -247,9 +241,9 @@ mod tests {
         let entries = (0..128).map(|_| f.entry()).collect::<Vec<_>>();
         std::fs::write(
             f.file(),
-            serde_json::to_vec(&Store {
-                version: 1,
-                entries: entries.clone(),
+            serde_json::to_vec(&crate::settings::data::UserData {
+                notes: Default::default(),
+                bookmarks: entries.clone(),
             })
             .unwrap(),
         )
@@ -260,7 +254,16 @@ mod tests {
         let mut e = entries[0].clone();
         e.note = "edit at limit".into();
         assert_eq!(
-            update(&f.file(), &f.0, Operation::Put(e)).unwrap().len(),
+            update(
+                &f.file(),
+                &f.0,
+                Operation::Edit {
+                    base: entries[0].clone(),
+                    draft: e
+                }
+            )
+            .unwrap()
+            .len(),
             128
         );
     }
@@ -278,5 +281,49 @@ mod tests {
         assert_eq!(position(&e, ""), 0);
         e.line = 1;
         assert_eq!(position(&e, "changed\nsecond\n"), 8);
+    }
+    #[test]
+    fn note_edit_merges_with_remap_but_conflicts_with_other_notes_or_deleted_entries() {
+        let f = Fixture::new();
+        let base = f.entry();
+        update(&f.file(), &f.0, Operation::Put(base.clone())).unwrap();
+        let moved = f.0.join("renamed.md");
+        update(
+            &f.file(),
+            &f.0,
+            Operation::Remap(vec![(base.path.clone(), Some(moved.clone()))]),
+        )
+        .unwrap();
+        let mut draft = base.clone();
+        draft.note = "edited".into();
+        let saved = update(
+            &f.file(),
+            &f.0,
+            Operation::Edit {
+                base: base.clone(),
+                draft: draft.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(saved[0].path, moved);
+        assert_eq!(saved[0].note, "edited");
+        draft.note = "conflict".into();
+        let bytes = std::fs::read(f.file()).unwrap();
+        assert!(
+            update(
+                &f.file(),
+                &f.0,
+                Operation::Edit {
+                    base: base.clone(),
+                    draft: draft.clone()
+                }
+            )
+            .is_err()
+        );
+        assert!(update(&f.file(), &f.0, Operation::Delete(base.clone())).is_err());
+        assert_eq!(std::fs::read(f.file()).unwrap(), bytes);
+        update(&f.file(), &f.0, Operation::Delete(saved[0].clone())).unwrap();
+        assert!(update(&f.file(), &f.0, Operation::Edit { base, draft }).is_err());
+        assert!(update(&f.file(), &f.0, Operation::List).unwrap().is_empty());
     }
 }

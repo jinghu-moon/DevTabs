@@ -11,10 +11,30 @@ fn notice(task: &str, result: u64, urgent: bool) -> Notice {
         title: "DevTabs".into(),
         body: "Reported".into(),
         test: false,
+        category: String::new(),
         ending: !urgent,
         urgent,
         silent: true,
     }
+}
+#[test]
+fn delivery_rechecks_current_preference_and_explicit_test_bypasses_policy() {
+    let mut n = notice("task", 1, false);
+    n.category = "end".into();
+    let mut p = devtabs::settings::model::Notifications::default();
+    assert!(devtabs::notifications::delivery_policy(&mut n, &p));
+    p.enabled = Some(false);
+    assert!(!devtabs::notifications::delivery_policy(&mut n, &p));
+    p.enabled = Some(true);
+    p.sound = Some(false);
+    assert!(devtabs::notifications::delivery_policy(&mut n, &p));
+    assert!(n.silent);
+    p.categories.insert("end".into(), false);
+    assert!(!devtabs::notifications::delivery_policy(&mut n, &p));
+    n.test = true;
+    n.silent = false;
+    assert!(devtabs::notifications::delivery_policy(&mut n, &p));
+    assert!(!n.silent);
 }
 #[test]
 fn urgent_authorization_displaces_ordinary_burst_and_results_merge_per_task_for_one_second() {

@@ -114,6 +114,7 @@ struct Host {
     checking: std::collections::HashSet<String>,
     notifications: Option<crate::notifications::Worker>,
     notification_settings: crate::notifications::Settings,
+    notification_configuration: crate::notifications::Adoption,
     policies: HashMap<String, crate::notifications::Policy>,
     diagnostic: std::collections::VecDeque<String>,
     navigation: HashMap<String, crate::notifications::Target>,
@@ -129,7 +130,7 @@ pub fn ensure() -> Result<()> {
     if protocol::rpc(Request::Ping).is_ok() {
         return Ok(());
     }
-    fs::create_dir_all(config::home())?;
+    fs::create_dir_all(config::runtime())?;
     #[cfg(windows)]
     {
         // Do not inherit any client pipe/console handles. A real detached process
@@ -255,10 +256,10 @@ pub fn serve() -> Result<()> {
     let hook_events = crate::hooks::listen(&format!("{}-hooks", protocol::endpoint()))?;
     let state = Arc::new(Mutex::new(Host {
         notifications: Some(crate::notifications::Worker::spawn()?),
-        ledger: crate::notifications::Ledger::load(&config::home())?,
+        ledger: crate::notifications::Ledger::load(&config::runtime())?,
         notification_settings: crate::notifications::Settings::load()?,
         records: Some(crate::rounds::service::Worker::spawn(
-            config::home().join("history"),
+            config::runtime().join("history"),
         )?),
         ..Host::default()
     }));
@@ -273,6 +274,7 @@ pub fn serve() -> Result<()> {
             continue;
         }
         for envelope in hook_events.try_iter().take(64) {
+            refresh_notifications(&state);
             let mut host = state.lock().unwrap_or_else(|p| p.into_inner());
             let records = host.records.clone();
             let mut notices = vec![];
@@ -372,6 +374,7 @@ pub fn serve() -> Result<()> {
                                 title: format!("DevTabs · {}", project_name),
                                 body: crate::i18n::t(phase.label()).into_owned(),
                                 test: false,
+                                category: String::new(),
                                 ending: matches!(phase, Phase::Reported | Phase::Failed),
                                 urgent: *phase != Phase::Reported,
                                 silent: false,
@@ -395,15 +398,16 @@ pub fn serve() -> Result<()> {
             }
             if !bindings.is_empty() {
                 let _lock = config::ConfigLock::acquire()?;
-                let mut catalog = crate::tasks::Catalog::load(&config::home())?;
+                let mut catalog = crate::tasks::Catalog::load(&config::runtime())?;
                 for t in bindings {
                     catalog.tasks.insert(t.id.clone(), t);
                 }
-                catalog.save(&config::home())?;
+                catalog.save(&config::runtime())?;
             }
         }
         if notification_sweep.elapsed() >= Duration::from_millis(100) {
             notification_sweep = Instant::now();
+            refresh_notifications(&state);
             let mut host = state.lock().unwrap_or_else(|p| p.into_inner());
             let clicks = host
                 .notifications
@@ -465,6 +469,13 @@ pub fn serve() -> Result<()> {
                         title: "DevTabs".into(),
                         body: crate::i18n::t(activity.phase.label()).into_owned(),
                         test: false,
+                        category: match activity.phase {
+                            crate::activity::Phase::Failed => "failure",
+                            crate::activity::Phase::Permission => "permission",
+                            crate::activity::Phase::Input => "input",
+                            _ => "end",
+                        }
+                        .into(),
                         ending: true,
                         urgent: false,
                         silent: false,
@@ -488,10 +499,31 @@ pub fn serve() -> Result<()> {
                         if let Some(response) = task_request(&state, &request)? {
                             return Ok(response);
                         }
+                        let prepare = if let Request::Open { options } = &mut request {
+                            if options.workspace.is_none() {
+                                options.validate()?;
+                                crate::settings::data::UiState::update(
+                                    &config::home(),
+                                    crate::settings::data::UiChange::Opened(
+                                        options.project.clone(),
+                                        config::now(),
+                                    ),
+                                )?;
+                                if options.recovery_id.is_none() {
+                                    Some(crate::checks::prepare_definition(&options.project)?)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
                         let mut host = state
                             .lock()
                             .map_err(|_| anyhow::anyhow!("Host state unavailable"))?;
-                        host.handle(request)
+                        host.handle(request, prepare)
                     })();
                     if let Err(error) = &result {
                         eprintln!("Host request failed: {error:#}");
@@ -630,7 +662,11 @@ impl Host {
             .find(|s| s.id == session)
             .context("Session no longer exists")
     }
-    fn handle(&mut self, request: Request) -> Result<Response> {
+    fn handle(
+        &mut self,
+        request: Request,
+        prepare: Option<Vec<crate::checks::Spec>>,
+    ) -> Result<Response> {
         let _perf = crate::perf::span(crate::perf::Metric::HostRequest);
         match request {
             Request::Lifecycle { .. }
@@ -665,7 +701,7 @@ impl Host {
                 self.workspaces.values().map(Workspace::info).collect(),
             )),
             Request::Open { options } => {
-                let mut options = *options;
+                let options = *options;
                 if let Some(id) = &options.workspace {
                     return Ok(Response::Workspace(Box::new(
                         self.workspaces.get(id).context("Unknown workspace")?.info(),
@@ -679,14 +715,6 @@ impl Host {
                 {
                     return Ok(Response::Workspace(Box::new(work.info())));
                 }
-                options.validate()?;
-                config::Config::update(|c| {
-                    c.projects
-                        .entry(config::key(&options.project))
-                        .or_default()
-                        .last_opened = config::now();
-                    Ok(())
-                })?;
                 if !options.new_instance
                     && let Some(work) = self
                         .workspaces
@@ -701,7 +729,7 @@ impl Host {
                 let id = uuid::Uuid::new_v4().to_string();
                 let tasks = {
                     let _lock = config::ConfigLock::acquire()?;
-                    let mut catalog = crate::tasks::Catalog::load(&config::home())?;
+                    let mut catalog = crate::tasks::Catalog::load(&config::runtime())?;
                     let tasks = if let Some(old) = &options.recovery_id {
                         let journal = crate::recovery::load()?;
                         let record = journal
@@ -739,9 +767,12 @@ impl Host {
                         anyhow::ensure!(!tasks.is_empty(), "All recovery tasks are archived");
                         tasks
                     } else {
-                        vec![catalog.main_task(&options)?]
+                        vec![catalog.main_task_with_prepare(
+                            &options,
+                            prepare.context("Preparation snapshot missing")?,
+                        )?]
                     };
-                    catalog.save(&config::home())?;
+                    catalog.save(&config::runtime())?;
                     tasks
                 };
                 let mut sessions = vec![];
@@ -1067,7 +1098,7 @@ fn spawn_task_filtered(
             directory.starts_with(dunce::canonicalize(&task.checkout)?),
             "Terminal cwd leaves task checkout"
         );
-        let control = config::home().join("runtime").join(format!("{id}.json"));
+        let control = config::runtime().join(format!("{id}.json"));
         let run_id = uuid::Uuid::new_v4().to_string();
         let token = uuid::Uuid::new_v4().to_string();
         let hook = crate::hooks::HookContext {
@@ -1088,7 +1119,7 @@ fn spawn_task_filtered(
                 None
             },
         )?;
-        let resource_lease = crate::lifecycle::lease(&config::home(), &task.id, false, false)?;
+        let resource_lease = crate::lifecycle::lease(&config::runtime(), &task.id, false, false)?;
         let mut session = Session::spawn(Spawn {
             id: index,
             executable: &std::env::current_exe()?,
@@ -1127,7 +1158,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
     match request {
         Request::Lifecycle { action } => {
             use crate::lifecycle::Action as L;
-            let home = config::home();
+            let home = config::runtime();
             let response = match action {
                 L::List => Response::TaskCatalog(Box::new(Catalog::load(&home)?)),
                 L::Plan {
@@ -1251,7 +1282,9 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
         }
         Request::CheckStatus { task } => {
             anyhow::ensure!(uuid::Uuid::parse_str(task).is_ok(), "Invalid task ID");
-            let path = config::home().join("checks").join(format!("{task}.json"));
+            let path = config::runtime()
+                .join("checks")
+                .join(format!("{task}.json"));
             let mut report = if path.exists() {
                 Some(serde_json::from_slice::<crate::checks::Report>(&fs::read(
                     path,
@@ -1260,7 +1293,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                 None
             };
             if let Some(r) = &mut report {
-                let catalog = crate::tasks::Catalog::load(&config::home())?;
+                let catalog = crate::tasks::Catalog::load(&config::runtime())?;
                 if let Some(t) = catalog.tasks.get(task) {
                     r.stale |= crate::checks::fingerprint(&t.checkout).ok().as_deref()
                         != Some(&r.after)
@@ -1286,7 +1319,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
             spec,
             initialize,
         } => {
-            let (root, result, run) = {
+            let (root, project, prepare, result, run) = {
                 let mut host = state
                     .lock()
                     .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
@@ -1312,8 +1345,10 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                     .map(|m| (m.activity.result, m.task.run_id.clone()))
                     .unwrap_or_default();
                 let root = t.checkout.clone();
+                let project = t.project.clone();
+                let prepare = t.prepare.clone();
                 host.checking.insert(task.clone());
-                (root, result.0, result.1)
+                (root, project, prepare, result.0, result.1)
             };
             let shared = state.clone();
             let task = task.clone();
@@ -1327,18 +1362,18 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                     let mut check_report = None;
                     let outcome = (|| -> Result<()> {
                         if initialize {
-                            crate::checks::initialize(&task, &root, &config::home())?;
+                            crate::checks::initialize(&task, &root, &config::runtime(), &prepare)?;
                         } else {
                             let spec = match spec {
                                 Some(s) => s,
-                                None => crate::project_profile::Profile::load(&root)?
-                                    .and_then(|p| p.check)
-                                    .context("Configure an explicit check in .devtabs.toml")?,
+                                None => crate::checks::check_definition(&project)?,
                             };
                             let mut report = crate::checks::run(&task, result, &root, &spec)?;
                             report.run = run.clone();
                             config::atomic_write(
-                                &config::home().join("checks").join(format!("{task}.json")),
+                                &config::runtime()
+                                    .join("checks")
+                                    .join(format!("{task}.json")),
                                 &serde_json::to_vec(&report)?,
                             )?;
                             check_report = Some(report);
@@ -1375,6 +1410,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                             })
                             .into_owned(),
                             test: false,
+                            category: String::new(),
                             ending: true,
                             urgent: report.exit != Some(0),
                             silent: host.notification_settings.silent,
@@ -1398,6 +1434,27 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
         }
         Request::Notifications { action } => {
             use crate::notifications::Action;
+            let change = match action {
+                Action::Global { enabled } => Some((vec!["notifications", "enabled"], *enabled)),
+                Action::Sound { enabled } => Some((vec!["notifications", "sound"], *enabled)),
+                Action::Category {
+                    task: None,
+                    category,
+                    enabled,
+                } => Some((
+                    vec!["notifications", "categories", category.as_str()],
+                    *enabled,
+                )),
+                _ => None,
+            };
+            if let Some((path, value)) = change {
+                let store = crate::settings::store::SettingsStore::current();
+                let base = store.read()?;
+                let mut draft = base.tree.clone();
+                crate::settings::projection::set(&mut draft, &path, Some(value.into()));
+                store.save(&base, &draft)?;
+            }
+            refresh_notifications(state);
             let mut host = state
                 .lock()
                 .map_err(|_| anyhow::anyhow!("Host unavailable"))?;
@@ -1412,8 +1469,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                     save = true;
                 }
                 Action::Sound { enabled } => {
-                    host.notification_settings.silent = !*enabled;
-                    save = true;
+                    let _ = enabled;
                 }
                 Action::Category {
                     task,
@@ -1430,12 +1486,8 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                             .entry(task.clone())
                             .or_default()
                             .insert(category.clone(), *enabled);
-                    } else {
-                        host.notification_settings
-                            .categories
-                            .insert(category.clone(), *enabled);
                     }
-                    save = true;
+                    save = task.is_some();
                 }
                 Action::Poll { workspace, clients } => {
                     for client in clients.iter().take(64) {
@@ -1481,8 +1533,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                     host.policies.entry(task.clone()).or_default().once = true;
                 }
                 Action::Global { enabled } => {
-                    host.notification_settings.disabled = !*enabled;
-                    save = true;
+                    let _ = enabled;
                 }
                 Action::Snooze { target, seconds } => {
                     anyhow::ensure!(host.valid_target(target), "Result target expired");
@@ -1513,6 +1564,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                         title: "DevTabs · TEST".into(),
                         body: crate::i18n::t("notify.test").into_owned(),
                         test: true,
+                        category: String::new(),
                         ending: false,
                         urgent: false,
                         silent: false,
@@ -1617,7 +1669,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                 );
             }
             let _lock = config::ConfigLock::acquire()?;
-            let mut catalog = Catalog::load(&config::home())?;
+            let mut catalog = Catalog::load(&config::runtime())?;
             let mut plan = catalog.plan(source, name, base, path.clone())?;
             plan.workspace = Some(workspace.clone());
             catalog.operations.insert(
@@ -1628,11 +1680,11 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                     error: None,
                 },
             );
-            catalog.save(&config::home())?;
+            catalog.save(&config::runtime())?;
             Ok(Some(Response::TaskPlan(Box::new(plan))))
         }
         Request::TaskOperation { operation } => {
-            let catalog = Catalog::load(&config::home())?;
+            let catalog = Catalog::load(&config::runtime())?;
             Ok(Some(Response::TaskOperation(Box::new(
                 catalog
                     .operations
@@ -1646,7 +1698,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
             operation,
         } => {
             let _lock = config::ConfigLock::acquire()?;
-            let mut catalog = Catalog::load(&config::home())?;
+            let mut catalog = Catalog::load(&config::runtime())?;
             let pending = catalog
                 .operations
                 .values()
@@ -1671,7 +1723,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
             let plan = op.plan.clone();
             op.phase = "Creating".into();
             let response = op.clone();
-            catalog.save(&config::home())?;
+            catalog.save(&config::runtime())?;
             let state = state.clone();
             let workspace = workspace.clone();
             let worker = thread::Builder::new()
@@ -1680,14 +1732,19 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                     let result = (|| -> Result<()> {
                         let task = {
                             let _lock = config::ConfigLock::acquire()?;
-                            let mut c = Catalog::load(&config::home())?;
-                            let task = c.create(&config::home(), &plan)?;
+                            let mut c = Catalog::load(&config::runtime())?;
+                            let task = c.create(&config::runtime(), &plan)?;
                             c.operations.get_mut(&plan.operation).unwrap().phase =
                                 "Spawning".into();
-                            c.save(&config::home())?;
+                            c.save(&config::runtime())?;
                             task
                         };
-                        crate::checks::initialize(&task.id, &task.checkout, &config::home())?;
+                        crate::checks::initialize(
+                            &task.id,
+                            &task.checkout,
+                            &config::runtime(),
+                            &task.prepare,
+                        )?;
                         let sessions = spawn_task(&task)?;
                         let mut host = state
                             .lock()
@@ -1706,12 +1763,12 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                         Ok(())
                     })();
                     if let Ok(_lock) = config::ConfigLock::acquire()
-                        && let Ok(mut c) = Catalog::load(&config::home())
+                        && let Ok(mut c) = Catalog::load(&config::runtime())
                         && let Some(op) = c.operations.get_mut(&plan.operation)
                     {
                         op.phase = if result.is_ok() { "Attached" } else { "Failed" }.into();
                         op.error = result.err().map(|e| format!("{e:#}"));
-                        let _ = c.save(&config::home());
+                        let _ = c.save(&config::runtime());
                     }
                 });
             if let Err(error) = worker {
@@ -1719,7 +1776,7 @@ fn task_request(state: &Arc<Mutex<Host>>, request: &Request) -> Result<Option<Re
                 op.phase = "Failed".into();
                 op.error = Some(format!("Cannot start task worker: {error}"));
                 let op = op.clone();
-                catalog.save(&config::home())?;
+                catalog.save(&config::runtime())?;
                 return Ok(Some(Response::TaskOperation(Box::new(op))));
             }
             Ok(Some(Response::TaskOperation(Box::new(response))))
@@ -1755,7 +1812,7 @@ fn start_role(
         if let Some(id) = host.starting.get(&key) {
             let id = id.clone();
             drop(host);
-            let catalog = Catalog::load(&config::home())?;
+            let catalog = Catalog::load(&config::runtime())?;
             return Ok(Response::TaskOperation(Box::new(
                 catalog
                     .operations
@@ -1826,7 +1883,7 @@ fn start_role(
             error: None,
         };
         let _lock = config::ConfigLock::acquire()?;
-        let mut catalog = Catalog::load(&config::home())?;
+        let mut catalog = Catalog::load(&config::runtime())?;
         anyhow::ensure!(
             catalog
                 .operations
@@ -1837,7 +1894,7 @@ fn start_role(
             "Task start queue full"
         );
         catalog.operations.insert(operation.clone(), op.clone());
-        catalog.save(&config::home())?;
+        catalog.save(&config::runtime())?;
         Ok(op)
     })();
     let op = match prepared {
@@ -1905,9 +1962,9 @@ fn start_role(
                 // Closing the previous ConPTY and job never holds the host input lock.
                 drop(old);
                 let _lock = config::ConfigLock::acquire()?;
-                let mut catalog = Catalog::load(&config::home())?;
+                let mut catalog = Catalog::load(&config::runtime())?;
                 catalog.tasks.insert(task_id.clone(), task);
-                catalog.save(&config::home())?;
+                catalog.save(&config::runtime())?;
                 Ok(())
             })();
             shared
@@ -1916,12 +1973,12 @@ fn start_role(
                 .starting
                 .remove(&worker_key);
             if let Ok(_lock) = config::ConfigLock::acquire()
-                && let Ok(mut catalog) = Catalog::load(&config::home())
+                && let Ok(mut catalog) = Catalog::load(&config::runtime())
                 && let Some(op) = catalog.operations.get_mut(&worker_op)
             {
                 op.phase = if result.is_ok() { "Attached" } else { "Failed" }.into();
                 op.error = result.err().map(|e| format!("{e:#}"));
-                let _ = catalog.save(&config::home());
+                let _ = catalog.save(&config::runtime());
             }
         });
     if let Err(e) = worker {
@@ -1931,12 +1988,12 @@ fn start_role(
             .starting
             .remove(&key);
         let _lock = config::ConfigLock::acquire()?;
-        let mut catalog = Catalog::load(&config::home())?;
+        let mut catalog = Catalog::load(&config::runtime())?;
         let failed = catalog.operations.get_mut(&operation).unwrap();
         failed.phase = "Failed".into();
         failed.error = Some(e.to_string());
         let failed = failed.clone();
-        catalog.save(&config::home())?;
+        catalog.save(&config::runtime())?;
         return Ok(Response::TaskOperation(Box::new(failed)));
     }
     Ok(Response::TaskOperation(Box::new(op)))
@@ -2007,6 +2064,7 @@ impl Host {
                 .iter()
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
+            configuration: self.notification_configuration.clone(),
         }
     }
     fn notify(&mut self, n: crate::notifications::Notice) {
@@ -2069,6 +2127,7 @@ impl Host {
             return;
         }
         n.silent = self.notification_settings.silent;
+        n.category = category.into();
         let muted = self
             .notification_settings
             .muted
@@ -2093,6 +2152,33 @@ impl Host {
 }
 
 // Snapshot after serializing writers: an older ACK cannot overwrite a newer event on disk.
+fn refresh_notifications(state: &Arc<Mutex<Host>>) {
+    use sha2::{Digest, Sha256};
+    // File I/O and validation happen before acquiring the session/input mutex.
+    let read = crate::settings::store::SettingsStore::current().read();
+    let (checked, policy, error) = match read {
+        Ok(snapshot) => {
+            let digest = Sha256::digest(snapshot.text.as_bytes())
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>();
+            match snapshot.require("notifications") {
+                Ok(()) => (Some(digest), Some(snapshot.effective.notifications), None),
+                Err(e) => (Some(digest), None, Some(format!("{e:#}"))),
+            }
+        }
+        Err(e) => (None, None, Some(format!("{e:#}"))),
+    };
+    let mut host = state.lock().unwrap_or_else(|p| p.into_inner());
+    host.notification_configuration.checked = checked.clone();
+    host.notification_configuration.error = error;
+    if let Some(policy) = policy {
+        host.notification_settings.disabled = !policy.enabled.unwrap_or(true);
+        host.notification_settings.silent = !policy.sound.unwrap_or(true);
+        host.notification_settings.categories = policy.categories;
+        host.notification_configuration.adopted = checked;
+    }
+}
 fn persist_notification_state(
     state: &Arc<Mutex<Host>>,
     activity: bool,
@@ -2109,11 +2195,11 @@ fn persist_notification_state(
         .transpose()?;
     drop(host);
     if let Some(bytes) = activity {
-        config::atomic_write(&config::home().join("activity.json"), &bytes)?;
+        config::atomic_write(&config::runtime().join("activity.json"), &bytes)?;
     }
     if let Some(bytes) = settings {
         let _lock = config::ConfigLock::acquire()?;
-        config::atomic_write(&config::home().join("notifications.json"), &bytes)?;
+        config::atomic_write(&config::runtime().join("notification-tasks.json"), &bytes)?;
     }
     Ok(())
 }

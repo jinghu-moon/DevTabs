@@ -10,6 +10,9 @@ use std::{
 };
 
 pub const SCHEMA: u32 = 1;
+pub fn project_scope(path: &Path) -> String {
+    format!("project[{}]", project_key(path).replace(']', "\\]"))
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Preferences {
@@ -413,9 +416,29 @@ impl Preferences {
 }
 pub fn project_key(path: &Path) -> String {
     let text = path.to_string_lossy().replace('/', "\\").to_lowercase();
-    let text = text.strip_prefix(r"\\?\").unwrap_or(&text);
+    let text = if let Some(unc) = text.strip_prefix(r"\\?\unc\") {
+        format!(r"\\{unc}")
+    } else {
+        text.strip_prefix(r"\\?\").unwrap_or(&text).to_owned()
+    };
+    let mut normalized = PathBuf::new();
+    for component in Path::new(&text).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(std::path::Component::Normal(_))
+                ) =>
+            {
+                normalized.pop();
+            }
+            c => normalized.push(c),
+        }
+    }
+    let text = normalized.to_string_lossy();
     if text.len() == 3 && text.as_bytes()[1] == b':' {
-        return text.to_owned();
+        return text.into_owned();
     }
     text.trim_end_matches('\\').to_owned()
 }

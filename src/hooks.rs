@@ -251,7 +251,7 @@ pub fn helper(provider: &str) {
     if let Err(e) = result {
         let text = format!("{e:#}");
         let _ = crate::config::atomic_write(
-            &crate::config::home().join("hook-last-error.txt"),
+            &crate::config::runtime().join("hook-last-error.txt"),
             text.as_bytes(),
         );
     }

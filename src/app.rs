@@ -113,7 +113,7 @@ impl App {
             .map(|t| {
                 Ok((
                     t.id.clone(),
-                    crate::lifecycle::lease(&crate::config::home(), &t.id, true, false)?,
+                    crate::lifecycle::lease(&crate::config::runtime(), &t.id, true, false)?,
                 ))
             })
             .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
@@ -168,7 +168,7 @@ impl App {
         }
         if app.view.is_none() {
             use std::io::Read;
-            let path = crate::config::home()
+            let path = crate::config::runtime()
                 .join("layouts")
                 .join(format!("{}.json", app.workspace_id));
             if let Ok(file) = std::fs::File::open(path) {

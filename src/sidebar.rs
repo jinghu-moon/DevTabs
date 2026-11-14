@@ -254,6 +254,7 @@ pub struct Document {
     markdown_end: bool,
     markdown_copy: bool,
     markdown_search_jump: bool,
+    defaults_pending: bool,
 }
 impl Document {
     fn new(path: PathBuf, id: u64) -> Self {
@@ -291,6 +292,7 @@ impl Document {
             markdown_end: false,
             markdown_copy: false,
             markdown_search_jump: false,
+            defaults_pending: false,
         }
     }
     pub fn offset(&self) -> (usize, usize) {
@@ -372,6 +374,7 @@ pub struct Sidebar {
     /// Shared preview can be embedded in a context that must never edit files.
     pub read_only: bool,
     explorer: explorer::Explorer,
+    preview_defaults: crate::settings::model::Preview,
     image_worker: preview::image::Worker,
     image_display: preview::image::Display,
     pub images_occluded: bool,
@@ -574,6 +577,7 @@ impl Sidebar {
         files.light = crate::appearance::theme() == crate::appearance::Theme::Light;
         Self {
             explorer: explorer::Explorer::new(root.clone()),
+            preview_defaults: Default::default(),
             read_only: false,
             image_worker: Default::default(),
             image_display: Default::default(),
@@ -764,7 +768,10 @@ impl Sidebar {
             return Ok(());
         }
         self.source_focus = self.focus;
-        self.document = Some(Document::new(path, self.serial));
+        let mut document = Document::new(path, self.serial);
+        document.view.wrap = self.preview_defaults.wrap.unwrap_or(false);
+        document.defaults_pending = !self.explorer.defaults_ready;
+        self.document = Some(document);
         self.restore_reading();
         self.preview_visible = true;
         if focus {
@@ -1161,7 +1168,9 @@ impl Sidebar {
                                 let different =
                                     d.loaded().is_none_or(|old| old.bytes != loaded.bytes);
                                 if first && d.reader.seek.is_none() {
-                                    d.markdown = loaded.markdown();
+                                    d.markdown = loaded.markdown()
+                                        && self.preview_defaults.markdown_mode.unwrap_or_default()
+                                            != crate::settings::model::MarkdownMode::Source;
                                 }
                                 d.set_loaded(Some(loaded));
                                 d.stale.clear();
@@ -1842,6 +1851,9 @@ impl Sidebar {
         Ok(())
     }
     pub fn key(&mut self, key: KeyEvent) -> Result<Action> {
+        if let Some(d) = &mut self.document {
+            d.defaults_pending = false;
+        }
         if let Some(action) = self.explorer_key(key)? {
             return Ok(action);
         }

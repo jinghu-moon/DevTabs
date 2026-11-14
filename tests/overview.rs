@@ -152,7 +152,7 @@ fn settings_edit_merges_and_preset_snapshots_all_launch_fields() {
     Edit::Settings(a.clone(), settings).apply(&mut c).unwrap();
     assert!(c.projects[&config::key(&a)].favorite);
     assert_eq!(c.projects[&config::key(&a)].note, "保留便签");
-    Edit::Note(a.clone(), "下一步".into())
+    Edit::Note(a.clone(), String::new(), "下一步".into())
         .apply(&mut c)
         .unwrap();
     let items = vec![
@@ -178,7 +178,7 @@ fn settings_edit_merges_and_preset_snapshots_all_launch_fields() {
 fn failed_settings_validation_never_mutates_current_config() {
     let mut c = Config::default();
     let path = PathBuf::from("p");
-    Edit::Note(path.clone(), "retain".into())
+    Edit::Note(path.clone(), String::new(), "retain".into())
         .apply(&mut c)
         .unwrap();
     let before = toml::to_string(&c).unwrap();
@@ -321,8 +321,8 @@ fn cli_persists_language_in_isolated_home() {
             .output()
             .unwrap();
         assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-        let c: Config =
+        let c: devtabs::settings::model::Preferences =
             toml::from_str(&fs::read_to_string(f.0.join("config.toml")).unwrap()).unwrap();
-        assert_eq!(c.language, expected);
+        assert_eq!(c.general.language, Some(expected));
     }
 }

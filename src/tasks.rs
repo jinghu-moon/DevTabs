@@ -41,6 +41,7 @@ pub struct Task {
     pub base: String,
     pub owned: bool,
     pub archived: bool,
+    pub prepare: Vec<crate::checks::Spec>,
     pub options: crate::launch::Options,
 }
 
@@ -59,7 +60,7 @@ pub struct Operation {
     pub error: Option<String>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
     #[serde(default)]
@@ -175,6 +176,20 @@ impl Catalog {
         crate::config::atomic_write(&home.join("tasks.json"), &bytes)
     }
     pub fn main_task(&mut self, options: &crate::launch::Options) -> Result<Task> {
+        self.main_task_with_prepare(
+            options,
+            crate::checks::prepare_definition(&options.project)?,
+        )
+    }
+    pub fn main_task_with_prepare(
+        &mut self,
+        options: &crate::launch::Options,
+        prepare: Vec<crate::checks::Spec>,
+    ) -> Result<Task> {
+        ensure!(prepare.len() <= 16, "At most 16 preparation steps");
+        for spec in &prepare {
+            crate::settings::model::validate_check(spec)?;
+        }
         let repo = Repository::discover(&options.project).ok();
         let checkout = repo
             .as_ref()
@@ -195,9 +210,14 @@ impl Catalog {
                 .unwrap_or_default(),
             owned: false,
             archived: false,
+            prepare,
             options: crate::recovery::clean(options.clone()),
         };
         self.tasks.insert(task.id.clone(), task.clone());
+        if serde_json::to_vec_pretty(self)?.len() > 8 * 1024 * 1024 {
+            self.tasks.remove(&task.id);
+            anyhow::bail!("Task catalog exceeds 8 MiB");
+        }
         Ok(task)
     }
     pub fn plan(
@@ -285,7 +305,7 @@ impl Catalog {
                 extra.directory = Some(path.join(relative));
             }
         }
-        Ok(Plan {
+        let plan = Plan {
             operation: uuid::Uuid::new_v4().to_string(),
             workspace: None,
             source: repo.root,
@@ -299,9 +319,27 @@ impl Catalog {
                 base: commit,
                 owned: true,
                 archived: false,
+                prepare: crate::checks::prepare_definition(&source.project)?,
                 options,
             },
-        })
+        };
+        let mut proposed = self.clone();
+        proposed
+            .tasks
+            .insert(plan.task.id.clone(), plan.task.clone());
+        proposed.operations.insert(
+            plan.operation.clone(),
+            Operation {
+                plan: plan.clone(),
+                phase: "Prepared".into(),
+                error: None,
+            },
+        );
+        ensure!(
+            serde_json::to_vec_pretty(&proposed)?.len() <= 8 * 1024 * 1024,
+            "Task catalog exceeds 8 MiB"
+        );
+        Ok(plan)
     }
     pub fn create(&mut self, home: &Path, plan: &Plan) -> Result<Task> {
         if let Some(previous) = self.operations.get(&plan.operation) {

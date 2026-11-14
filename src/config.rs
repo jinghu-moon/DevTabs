@@ -20,9 +20,13 @@ pub fn home() -> PathBuf {
     }
 }
 pub fn key(path: &Path) -> String {
-    path.to_string_lossy()
-        .trim_end_matches(['\\', '/'])
-        .to_lowercase()
+    crate::settings::model::project_key(path)
+}
+pub fn runtime() -> PathBuf {
+    home().join("runtime")
+}
+pub fn cache() -> PathBuf {
+    home().join("cache")
 }
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -43,11 +47,7 @@ pub struct Project {
 }
 impl Project {
     pub fn terminal_composition(&self) -> crate::launch::Composition {
-        self.composition.unwrap_or(if self.sessions.is_empty() {
-            crate::launch::Composition::AgentDebug
-        } else {
-            crate::launch::Composition::Custom
-        })
+        self.composition.unwrap_or_default()
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,6 +60,10 @@ pub struct SessionConfig {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
+    #[serde(skip)]
+    pub source: Option<crate::settings::store::Snapshot>,
+    #[serde(skip)]
+    pub baseline: Option<serde_json::Value>,
     pub language: crate::i18n::Language,
     pub theme: crate::appearance::Theme,
     pub overview: crate::overview::model::Preferences,
@@ -76,21 +80,13 @@ impl Config {
         let mut value = Self::load()?;
         edit(&mut value)?;
         value.save()?;
-        Ok(value)
+        Self::load()
     }
     pub fn load() -> Result<Self> {
-        let path = home().join("config.toml");
-        if !path.exists() {
-            return Ok(Self::default());
-        }
-        toml::from_str(&fs::read_to_string(&path)?)
-            .with_context(|| format!("Read {}", path.display()))
+        crate::settings::projection::load()
     }
     pub fn save(&self) -> Result<()> {
-        atomic_write(
-            &home().join("config.toml"),
-            toml::to_string_pretty(self)?.as_bytes(),
-        )
+        crate::settings::projection::save(self)
     }
     pub fn scan(&self) -> Vec<PathBuf> {
         let mut paths = self.added.clone();
@@ -160,7 +156,21 @@ impl Drop for ConfigLock {
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::create_dir_all(path.parent().context("Missing parent directory")?)?;
     let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
-    fs::write(&temporary, bytes)?;
+    {
+        use std::io::Write;
+        let result = (|| -> std::io::Result<()> {
+            let mut file = fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)?;
+            file.write_all(bytes)?;
+            file.sync_all()
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_file(&temporary);
+            return Err(error).context("Write and sync temporary file");
+        }
+    }
     #[cfg(windows)]
     {
         use std::os::windows::ffi::OsStrExt;

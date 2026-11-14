@@ -130,6 +130,15 @@ impl LaunchSpec {
         }
     }
     pub fn from_config(path: &Path, c: &Config) -> Self {
+        if let Some(source) = &c.source {
+            return Self::from_options(
+                &source
+                    .effective
+                    .resolve(path, &Default::default())
+                    .snapshot
+                    .options(),
+            );
+        }
         let p = c
             .projects
             .get(&config::key(path))

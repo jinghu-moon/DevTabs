@@ -166,6 +166,13 @@ pub struct View {
     pub navigation: Option<Target>,
     pub enabled: bool,
     pub policies: BTreeMap<String, Policy>,
+    pub configuration: Adoption,
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Adoption {
+    pub adopted: Option<String>,
+    pub checked: Option<String>,
+    pub error: Option<String>,
 }
 #[derive(Clone)]
 pub struct Notice {
@@ -176,6 +183,22 @@ pub struct Notice {
     pub ending: bool,
     pub urgent: bool,
     pub silent: bool,
+    pub category: String,
+}
+pub fn delivery_policy(
+    notice: &mut Notice,
+    preferences: &crate::settings::model::Notifications,
+) -> bool {
+    if notice.test {
+        return true;
+    }
+    notice.silent = !preferences.sound.unwrap_or(true);
+    preferences.enabled.unwrap_or(true)
+        && preferences
+            .categories
+            .get(&notice.category)
+            .copied()
+            .unwrap_or(true)
 }
 pub struct Worker {
     pub tx: Sender,
@@ -256,12 +279,24 @@ impl Worker {
                 };
                 #[cfg(not(windows))]
                 let _ = click_tx;
+                let mut preferences = crate::settings::model::Notifications::default();
                 loop {
                     let next = queue
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())
                         .pop(queue_clock());
-                    if let Some(n) = next {
+                    if let Some(mut n) = next {
+                        if !n.test {
+                            if let Ok(snapshot) =
+                                crate::settings::store::SettingsStore::current().read()
+                                && snapshot.require("notifications").is_ok()
+                            {
+                                preferences = snapshot.effective.notifications;
+                            }
+                            if !delivery_policy(&mut n, &preferences) {
+                                continue;
+                            }
+                        }
                         #[cfg(windows)]
                         let result = backend
                             .as_mut()
@@ -299,16 +334,21 @@ impl Worker {
 #[derive(Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
+    #[serde(skip)]
     pub disabled: bool,
     pub muted: BTreeMap<String, bool>,
     pub after_check: BTreeMap<String, bool>,
+    #[serde(skip)]
     pub categories: BTreeMap<String, bool>,
     pub task_categories: BTreeMap<String, BTreeMap<String, bool>>,
+    #[serde(skip)]
     pub silent: bool,
 }
 impl Settings {
     pub fn load() -> Result<Self> {
-        let p = crate::config::home().join("notifications.json");
+        let p = crate::config::home()
+            .join("runtime")
+            .join("notification-tasks.json");
         if !p.exists() {
             return Ok(Self::default());
         }
@@ -318,7 +358,9 @@ impl Settings {
     }
     pub fn save(&self) -> Result<()> {
         crate::config::atomic_write(
-            &crate::config::home().join("notifications.json"),
+            &crate::config::home()
+                .join("runtime")
+                .join("notification-tasks.json"),
             &serde_json::to_vec(self)?,
         )
     }
@@ -349,7 +391,7 @@ pub fn register(remove: bool) -> Result<()> {
             c.status()?.success(),
             "DevTabs notification identity registration failed"
         );
-        let path = crate::config::home().join("notification-identity.json");
+        let path = crate::config::runtime().join("notification-identity.json");
         if remove {
             if path.exists() {
                 std::fs::remove_file(path)?;
@@ -405,7 +447,7 @@ mod native {
         }
         pub fn show(&mut self, n: Notice) -> Result<()> {
             ensure!(
-                crate::config::home()
+                crate::config::runtime()
                     .join("notification-identity.json")
                     .exists(),
                 "Register the DevTabs notification identity explicitly before sending"

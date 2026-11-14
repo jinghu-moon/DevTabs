@@ -1,7 +1,7 @@
 //! Independent bounded workers for persistence/launch, discovery, host status and details.
 use super::{
     history::{self, History},
-    model::{GitSummary, LaunchSpec, LaunchState, Preferences},
+    model::{GitSummary, LaunchSpec, LaunchState},
     stats::{self, Stats},
 };
 use crate::{
@@ -22,12 +22,12 @@ use std::{
 #[derive(Clone)]
 pub enum Edit {
     Favorite(PathBuf),
-    Note(PathBuf, String),
+    Note(PathBuf, String, String),
     Settings(PathBuf, Project),
     Root(PathBuf),
     Add(PathBuf),
     Exclude(PathBuf),
-    Preferences(Preferences),
+    Collapsed(u8, bool),
     Language(crate::i18n::Language),
     Theme(crate::appearance::Theme),
     Preset(String, Vec<LaunchSpec>),
@@ -43,7 +43,7 @@ impl Edit {
                 let p = c.projects.entry(config::key(&p)).or_default();
                 p.favorite = !p.favorite
             }
-            Self::Note(p, n) => {
+            Self::Note(p, _, n) => {
                 anyhow::ensure!(
                     n.chars().count() <= 2048,
                     "{}",
@@ -79,9 +79,6 @@ impl Edit {
             }
             Self::Settings(p, value) => {
                 super::model::validate_settings(&value)?;
-                if crate::project_profile::Profile::load(&p)?.is_some() {
-                    crate::project_profile::Profile::from_project(&value).save(&p)?;
-                }
                 let p = c.projects.entry(config::key(&p)).or_default();
                 p.title = value.title;
                 p.color = value.color;
@@ -96,7 +93,13 @@ impl Edit {
             Self::Root(p) => c.roots.push(directory(p)?),
             Self::Add(p) => c.added.push(directory(p)?),
             Self::Exclude(p) => c.excluded.push(directory(p)?),
-            Self::Preferences(p) => c.overview = p,
+            Self::Collapsed(group, value) => {
+                if value {
+                    c.overview.collapsed.insert(group);
+                } else {
+                    c.overview.collapsed.remove(&group);
+                }
+            }
             Self::Language(l) => c.language = l,
             Self::Theme(t) => c.theme = t,
             Self::Preset(name, items) => {
@@ -195,15 +198,26 @@ impl Workers {
                     }
                     match action {
                         Action::Edit(id, edit) => {
-                            let result =
-                                Config::update(|c| edit.apply(c)).map_err(|e| format!("{e:#}"));
+                            let result = match edit {
+                                Edit::Note(path, base, draft) => {
+                                    crate::settings::data::UserData::note(
+                                        &config::home(),
+                                        &path,
+                                        &base,
+                                        &draft,
+                                    )
+                                    .and_then(|_| Config::load())
+                                }
+                                edit => Config::update(|c| edit.apply(c)),
+                            }
+                            .map_err(|e| format!("{e:#}"));
                             if tx.send(Reply::Config(id, result)).is_err() {
                                 break;
                             }
                         }
                         Action::Reload(id) => {
                             let invalidated = crate::config::atomic_write(
-                                &crate::config::home().join("stats-refresh"),
+                                &crate::config::cache().join("stats-refresh"),
                                 uuid::Uuid::new_v4().to_string().as_bytes(),
                             );
                             if tx

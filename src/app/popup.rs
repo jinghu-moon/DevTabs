@@ -25,18 +25,11 @@ impl Window {
         self.edit.is_some()
     }
     pub fn load() -> Self {
-        use std::io::Read;
-        let bounds = std::fs::File::open(crate::config::home().join("terminal-panel.json"))
+        let bounds = crate::settings::data::UiState::read(&crate::config::home())
+            .map_err(|e| eprintln!("UI memory: {e:#}"))
             .ok()
-            .and_then(|f| {
-                let mut bytes = Vec::new();
-                f.take(1025).read_to_end(&mut bytes).ok()?;
-                if bytes.len() > 1024 {
-                    return None;
-                }
-                let [x, y, w, h]: [u16; 4] = serde_json::from_slice(&bytes).ok()?;
-                Some(Rect::new(x, y, w, h))
-            });
+            .and_then(|s| s.floating)
+            .map(|[x, y, w, h]| Rect::new(x, y, w, h));
         Self {
             bounds,
             ..Self::default()
@@ -97,9 +90,9 @@ impl Window {
     }
     fn save(&self) -> Result<()> {
         if let Some(r) = self.bounds {
-            crate::config::atomic_write(
-                &crate::config::home().join("terminal-panel.json"),
-                &serde_json::to_vec(&[r.x, r.y, r.width, r.height])?,
+            crate::settings::data::UiState::update(
+                &crate::config::home(),
+                crate::settings::data::UiChange::Floating([r.x, r.y, r.width, r.height]),
             )?;
         }
         Ok(())

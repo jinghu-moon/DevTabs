@@ -401,7 +401,7 @@ fn scan_source_serial(
 }
 /// Source and Git collection do not wait for the full disk traversal.
 pub fn source(root: &Path, generation: &Arc<AtomicU64>, ticket: u64) -> Stats {
-    source_at(root, &crate::config::home(), generation, ticket)
+    source_at(root, &crate::config::cache(), generation, ticket)
 }
 pub fn source_at(root: &Path, home: &Path, generation: &Arc<AtomicU64>, ticket: u64) -> Stats {
     if generation.load(Ordering::Relaxed) != ticket {
@@ -785,7 +785,7 @@ fn cache_stamp(root: &Path) -> Vec<u64> {
     stamp
 }
 pub fn cached(root: &Path, generation: &Arc<AtomicU64>, ticket: u64) -> Stats {
-    cached_at(root, &crate::config::home(), generation, ticket, false)
+    cached_at(root, &crate::config::cache(), generation, ticket, false)
 }
 pub fn cached_with_progress(
     root: &Path,
@@ -795,7 +795,7 @@ pub fn cached_with_progress(
 ) -> Stats {
     cached_at_with_progress(
         root,
-        &crate::config::home(),
+        &crate::config::cache(),
         generation,
         ticket,
         false,

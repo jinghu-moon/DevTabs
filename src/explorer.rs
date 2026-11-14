@@ -581,7 +581,6 @@ pub enum Job {
     Git,
     Change(Operation),
     LoadPreferences,
-    Preferences(Preferences),
     Language(crate::i18n::Language),
     Theme(crate::appearance::Theme),
     Validate(Vec<PathBuf>),
@@ -591,10 +590,16 @@ pub enum Completed {
     Search { id: u64, result: Search },
     Git(Result<Git>),
     Change(Change),
-    Preferences(Result<Preferences>),
+    Preferences(Result<ViewDefaults>),
     SavedPreferences(Result<()>),
     Input(Result<Vec<PathBuf>>),
     External(Result<()>),
+}
+pub struct ViewDefaults {
+    pub sidebar: Preferences,
+    pub hidden: bool,
+    pub ignored: bool,
+    pub preview: crate::settings::model::Preview,
 }
 pub struct Worker {
     tx: SyncSender<Job>,
@@ -631,7 +636,7 @@ impl Worker {
                         Job::Change(op) => {
                             cache = None;
                             let mut change = apply_change(&root, op);
-                            let store = crate::config::home().join("bookmarks.json");
+                            let store = crate::config::home().join("user-data.json");
                             if store.exists()
                                 && change
                                     .paths
@@ -653,23 +658,18 @@ impl Worker {
                             }
                             Completed::Change(change)
                         }
-                        Job::LoadPreferences => {
-                            Completed::Preferences(crate::config::Config::load().map(|c| {
-                                c.projects
-                                    .get(&crate::config::key(&root))
-                                    .map(|p| p.sidebar.clone())
-                                    .unwrap_or_default()
-                            }))
-                        }
-                        Job::Preferences(p) => Completed::SavedPreferences(
-                            crate::config::Config::update(|c| {
-                                c.projects
-                                    .entry(crate::config::key(&root))
-                                    .or_default()
-                                    .sidebar = p;
-                                Ok(())
-                            })
-                            .map(|_| ()),
+                        Job::LoadPreferences => Completed::Preferences(
+                            crate::settings::store::SettingsStore::current()
+                                .read()
+                                .map(|s| {
+                                    let sidebar = s.effective.resolve_sidebar(&root);
+                                    ViewDefaults {
+                                        sidebar: crate::settings::projection::sidebar(&sidebar),
+                                        hidden: sidebar.show_hidden.unwrap_or(false),
+                                        ignored: sidebar.show_ignored.unwrap_or(false),
+                                        preview: s.effective.preview,
+                                    }
+                                }),
                         ),
                         Job::Language(language) => Completed::SavedPreferences(
                             crate::config::Config::update(|c| {

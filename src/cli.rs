@@ -272,7 +272,7 @@ pub fn dispatch() -> Result<bool> {
             );
         }
         Action::Overlap { tasks } => {
-            let catalog = crate::tasks::Catalog::load(&config::home())?;
+            let catalog = crate::tasks::Catalog::load(&config::runtime())?;
             let selected = tasks
                 .iter()
                 .map(|id| catalog.tasks.get(id).cloned().context("Unknown task"))
@@ -435,12 +435,17 @@ pub fn dispatch() -> Result<bool> {
                     println!(
                         "# {}\n{}",
                         config::home().join("config.toml").display(),
-                        toml::to_string_pretty(&c)?
+                        crate::settings::store::SettingsStore::current()
+                            .read()?
+                            .text
                     );
                     return Ok(true);
                 }
                 ConfigAction::Edit => {
-                    c.save()?;
+                    let path = config::home().join("config.toml");
+                    if !path.exists() {
+                        config::atomic_write(&path, b"schema = 1\n")?;
+                    }
                     drop(_lock);
                     Command::new("notepad.exe")
                         .arg(config::home().join("config.toml"))
@@ -482,43 +487,54 @@ pub fn dispatch() -> Result<bool> {
     }
     Ok(true)
 }
-pub fn resolve(mut options: Options) -> Result<Options> {
+pub fn resolve(mut options: Options, matches: &clap::ArgMatches) -> Result<Options> {
     if options.workspace.is_some() {
         return Ok(options);
     }
-    let args = std::env::args().collect::<Vec<_>>();
-    let supplied = |flag: &str| {
-        args.iter()
-            .any(|arg| arg == flag || arg.starts_with(&format!("{flag}=")))
-    };
-    let config = Config::load()?;
+    let supplied =
+        |field: &str| matches.value_source(field) == Some(clap::parser::ValueSource::CommandLine);
+    let source = crate::settings::store::SettingsStore::current().read()?;
+    source.require("launch")?;
+    source.require("terminal")?;
     let path = dunce::canonicalize(&options.project)?;
-    let project = crate::project_profile::effective(&config, &path)?;
-    let composition = project.terminal_composition();
-    if !supplied("--agent") {
-        options.agent=project.agent.or(config.default_agent).context("Choose a global Agent once: devtabs config agent codex (or claude); --agent overrides for this launch")?;
+    source.require(&format!(
+        "{}.launch",
+        crate::settings::model::project_scope(&path)
+    ))?;
+    let resolved = source
+        .effective
+        .resolve(&path, &Default::default())
+        .snapshot;
+    let defaults = resolved.options();
+    macro_rules! inherit { ($($f:ident),*) => {$(if !supplied(stringify!($f)) {options.$f=defaults.$f;})*}; }
+    inherit!(
+        agent,
+        layout,
+        composition,
+        debug_command,
+        title,
+        color,
+        agent_args,
+        shell,
+        history,
+        new_window
+    );
+    options.extra_sessions = defaults.extra_sessions;
+    if !supplied("continue_latest")
+        && !options.fresh
+        && !options.resume
+        && options.resume_id.is_none()
+    {
+        options.continue_latest = defaults.continue_latest;
+        options.fresh = defaults.fresh;
     }
-    if !supplied("--debug-command") {
-        options.debug_command = project.debug_command;
-    }
-    if !supplied("--layout") {
-        options.layout = project.layout.unwrap_or_default();
-    }
-    options.extra_sessions = project.sessions;
-    if !supplied("--composition") {
-        options.composition = composition;
-    }
-    if !supplied("--title") {
-        options.title = project.title;
-    }
-    if !supplied("--color") {
-        options.color = project.color;
-    }
-    if !supplied("--agent-arg") {
-        options.agent_args = project.agent_args;
-    }
-    if !options.fresh && !options.resume && options.resume_id.is_none() {
-        options.continue_latest |= project.resume_latest.unwrap_or(true);
+    if !supplied("image_protocol") {
+        options.image_protocol = source
+            .effective
+            .preview
+            .image_protocol
+            .unwrap_or_default()
+            .into();
     }
     options.project = path;
     Ok(options)

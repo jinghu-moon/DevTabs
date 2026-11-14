@@ -17,6 +17,7 @@ pub(super) struct Explorer {
     resize_origin: Preferences,
     hover: Option<(PathBuf, Instant)>,
     initialized: bool,
+    pub(super) defaults_ready: bool,
     preferences_changed: Option<Instant>,
     preferences_touched: bool,
     git_pending: bool,
@@ -64,6 +65,7 @@ impl Explorer {
             resize_origin: Preferences::default(),
             hover: None,
             initialized: false,
+            defaults_ready: false,
             preferences_changed: None,
             preferences_touched: false,
             git_pending: false,
@@ -155,18 +157,6 @@ impl Sidebar {
             self.explorer.git_pending = true;
             self.explorer.git_at = Some(Instant::now());
         }
-        if self
-            .explorer
-            .preferences_changed
-            .is_some_and(|t| t.elapsed() > Duration::from_millis(500))
-            && self
-                .explorer
-                .worker
-                .send(Work::Preferences(self.explorer.preferences.clone()))
-                .is_ok()
-        {
-            self.explorer.preferences_changed = None;
-        }
         if let Some(p) = &mut self.explorer.picker
             && p.due
                 .is_some_and(|t| t.elapsed() > Duration::from_millis(120))
@@ -196,7 +186,25 @@ impl Sidebar {
             changed = true;
             match done {
                 Done::Preferences(result) => match result {
-                    Ok(mut p) if !self.explorer.preferences_touched => {
+                    Ok(defaults) if !self.explorer.preferences_touched => {
+                        self.explorer.defaults_ready = true;
+                        let mut p = defaults.sidebar;
+                        self.files.hidden = defaults.hidden;
+                        self.files.ignored = defaults.ignored;
+                        self.preview_defaults = defaults.preview;
+                        if let Some(d) = &mut self.document
+                            && d.defaults_pending
+                            && !d.editing
+                        {
+                            d.view.wrap = self.preview_defaults.wrap.unwrap_or(false);
+                            if !d.loading {
+                                d.markdown = d.loaded().is_some_and(|l| l.markdown())
+                                    && self.preview_defaults.markdown_mode.unwrap_or_default()
+                                        != crate::settings::model::MarkdownMode::Source;
+                                d.set_rendered(None);
+                            }
+                            d.defaults_pending = false;
+                        }
                         p.width = p.width.clamp(20, 80);
                         p.agent_ratio = p.agent_ratio.clamp(1, 9999);
                         self.explorer.preferences = p;
