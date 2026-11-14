@@ -63,9 +63,9 @@ pub fn run_with_executable(
         spec.cwd.clone()
     })?;
     ensure!(cwd.starts_with(&root), "Check cwd leaves task checkout");
-    let before = fingerprint(&root)?;
+    let before = fingerprint(&root).context("Fingerprint check revision")?;
     let start = Instant::now();
-    let job = crate::platform::Job::new(0)?;
+    let job = crate::platform::Job::new(0).context("Create managed check job")?;
     let mut cmd = Command::new(exe);
     cmd.arg("__check-child")
         .arg(&job.name)
@@ -149,13 +149,17 @@ pub fn fingerprint(root: &Path) -> Result<String> {
     let mut paths = std::collections::BTreeSet::new();
     if let Ok(repo) = crate::tasks::Repository::discover(root) {
         h.update(repo.head()?.as_bytes());
-        let status = crate::explorer::git_status(&repo.root)?;
-        for p in status.entries.keys() {
-            paths.insert(if p.is_absolute() {
-                p.clone()
-            } else {
-                repo.root.join(p)
-            });
+        // The file-tree status intentionally collapses untracked directories
+        // and includes ignored paths. A revision needs actual changed files,
+        // including both sides of renames, and must not read directory badges.
+        for args in [
+            vec!["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"],
+            vec!["ls-files", "--others", "--exclude-standard", "-z"],
+        ] {
+            let bytes = crate::tasks::git(&repo.root, &args)?;
+            for p in bytes.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+                paths.insert(repo.root.join(std::str::from_utf8(p)?));
+            }
         }
     } else {
         for e in ignore::WalkBuilder::new(root)
@@ -196,7 +200,8 @@ pub fn fingerprint(root: &Path) -> Result<String> {
             meta.len() <= 8 * 1024 * 1024 && used <= 128 * 1024 * 1024,
             "Check revision content budget exceeded"
         );
-        let mut file = fs::File::open(p)?;
+        let mut file =
+            fs::File::open(&p).with_context(|| format!("Read check revision {}", p.display()))?;
         let mut buf = [0; 8192];
         loop {
             let n = file.read(&mut buf)?;
@@ -292,7 +297,8 @@ pub fn initialize_with_executable(
             i + 1,
             report.output
         );
-        crate::config::atomic_write(&path, &serde_json::to_vec(&report)?)?;
+        crate::config::atomic_write(&path, &serde_json::to_vec(&report)?)
+            .context("Persist successful preparation step")?;
     }
     Ok(())
 }

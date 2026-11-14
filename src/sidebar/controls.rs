@@ -654,8 +654,11 @@ impl Sidebar {
             crate::ui::clear_popup(frame, r);
             frame.render_widget(
                 Paragraph::new(format!(
-                    "{}\nAlt+C Copy active path · Right click Copy tab path",
-                    preview::safe_text(&path.to_string_lossy())
+                    "{}\n{} {}",
+                    preview::safe_text(&path.to_string_lossy()),
+                    self.shortcuts
+                        .preferred("preview.copy_path", self.shortcut_context()),
+                    crate::i18n::t("ui.copy_active_path_hint")
                 ))
                 .wrap(Wrap { trim: false })
                 .style(Style::new().fg(Color::White).bg(Color::Rgb(24, 27, 34)))

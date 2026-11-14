@@ -426,7 +426,7 @@ fn file_diff_handles_clean_editor_reload_and_unsaved_conflicts() {
         m.selected = m
             .items
             .iter()
-            .position(|(l, _)| *l == "File changes [D]")
+            .position(|(_, command)| command.id() == "panel.diff")
             .unwrap();
         key(&mut s, KeyCode::Enter);
         wait(&mut s, |s| text(&draw_immutable(s)).contains("+disk line"));

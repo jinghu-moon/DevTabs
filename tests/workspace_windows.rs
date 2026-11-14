@@ -2500,3 +2500,507 @@ fn read_configuration(path: &Path) -> devtabs::config::Config {
     config.source = Some(source);
     config
 }
+
+#[test]
+fn checks_resolve_per_request_from_original_project_and_keep_running_spec_and_task_cwd() {
+    use devtabs::settings::{model as m, store::SettingsStore};
+    let h = Harness::new();
+    let repo = h.root.join("repo");
+    let project = repo.join("module");
+    fs::create_dir_all(project.join("extra")).unwrap();
+    fs::create_dir_all(repo.join("checkdir")).unwrap();
+    fs::write(project.join("extra/keep"), "fixture").unwrap();
+    fs::write(repo.join("checkdir/keep"), "fixture").unwrap();
+    for args in [
+        vec!["init", "--quiet"],
+        vec!["add", "."],
+        vec![
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--quiet",
+            "-m",
+            "fixture",
+        ],
+    ] {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&repo)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_GLOBAL", "NUL")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let started = h.root.join("check-started");
+    let release = h.root.join("check-release");
+    let spec = |source: String| devtabs::checks::Spec {
+        argv: vec![
+            "pwsh.exe".into(),
+            "-NoProfile".into(),
+            "-Command".into(),
+            // Managed checks capture UTF-8 bytes. A console-less PowerShell can
+            // inherit an OEM encoding; the fixture selects its output encoding
+            // explicitly without DevTabs rewriting the literal command argv.
+            format!("[Console]::OutputEncoding=[Text.UTF8Encoding]::new(); {source}"),
+        ],
+        cwd: "checkdir".into(),
+        env: Default::default(),
+        timeout_ms: 15000,
+    };
+    let store = SettingsStore::new(h.root.join("data"));
+    let mut prefs = m::Preferences::default();
+    prefs.launch.composition = Some(devtabs::launch::Composition::Custom);
+    prefs.launch.sessions = Some(vec![devtabs::config::SessionConfig {
+        name: "Extra".into(),
+        directory: Some("extra".into()),
+        command: None,
+    }]);
+    prefs.project.push(m::Project { path: project.clone(), favorite: false, launch: Default::default(), sidebar: Default::default(), checks: m::Checks {
+        prepare: vec![], check: Some(spec(format!("[IO.File]::WriteAllText({},'started'); while (!(Test-Path {})) {{ Start-Sleep -Milliseconds 20 }}; Write-Output old-spec; (Get-Location).Path", quoted(&started), quoted(&release)))),
+    } });
+    let base = store.read().unwrap();
+    let initial = store
+        .save(&base, &toml::Value::try_from(&prefs).unwrap())
+        .unwrap();
+    let out = h
+        .command()
+        .args([
+            "--headless",
+            "--agent",
+            "shell",
+            "--no-profile",
+            "--layout",
+            "split",
+            "--project",
+        ])
+        .arg(&project)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let workspace: WorkspaceInfo = serde_json::from_slice(&out.stdout).unwrap();
+    let target = h.root.join("child");
+    let Response::TaskPlan(plan) = h
+        .rpc(Request::PlanTask {
+            workspace: workspace.id.clone(),
+            source: workspace.tasks[0].id.clone(),
+            name: "Child".into(),
+            base: "HEAD".into(),
+            path: Some(target.clone()),
+        })
+        .unwrap()
+    else {
+        panic!("plan")
+    };
+    h.rpc(Request::AddTask {
+        workspace: workspace.id.clone(),
+        operation: plan.operation.clone(),
+    })
+    .unwrap();
+    wait("child task starts", || {
+        h.info(&workspace.id).tasks.len() == 2
+    });
+    let child = h
+        .info(&workspace.id)
+        .tasks
+        .into_iter()
+        .find(|t| t.id == plan.task.id)
+        .unwrap();
+    assert_eq!(
+        devtabs::config::key(&child.project),
+        devtabs::config::key(&project)
+    );
+    assert_eq!(
+        devtabs::config::key(&child.checkout),
+        devtabs::config::key(&target)
+    );
+    assert_eq!(
+        devtabs::config::key(&child.cwd),
+        devtabs::config::key(&target.join("module"))
+    );
+    let info = h.info(&workspace.id);
+    let extra = info
+        .sessions
+        .iter()
+        .find(|s| s.task.task_id == child.id && s.name == "Extra")
+        .unwrap();
+    assert_eq!(
+        devtabs::config::key(&extra.task.initial_cwd),
+        devtabs::config::key(&target.join("module/extra"))
+    );
+    let agent_run = info
+        .sessions
+        .iter()
+        .find(|s| s.task.task_id == child.id && s.task.role == devtabs::tasks::Role::Agent)
+        .unwrap()
+        .task
+        .run_id
+        .clone();
+    let request = |explicit: Option<devtabs::checks::Spec>| Request::Check {
+        workspace: workspace.id.clone(),
+        task: child.id.clone(),
+        spec: explicit,
+        initialize: false,
+    };
+    assert!(matches!(h.rpc(request(None)).unwrap(), Response::Ok));
+    wait("original check process captured", || started.exists());
+    prefs.project[0].checks.check = Some(spec("Write-Output new-spec; (Get-Location).Path".into()));
+    store
+        .save(&initial, &toml::Value::try_from(&prefs).unwrap())
+        .unwrap();
+    fs::write(&release, "go").unwrap();
+    let report = |tag: &str| -> Option<devtabs::checks::Report> {
+        match h
+            .rpc(Request::CheckStatus {
+                task: child.id.clone(),
+            })
+            .unwrap()
+        {
+            Response::Check(r) => r.filter(|r| r.output.contains(tag)),
+            _ => None,
+        }
+    };
+    wait("running check keeps original definition", || {
+        report("old-spec").is_some()
+    });
+    let first = report("old-spec").unwrap();
+    assert_eq!(first.exit, Some(0));
+    assert_eq!(first.run, agent_run);
+    assert_eq!(first.task, child.id);
+    assert!(
+        first
+            .output
+            .contains(&target.join("checkdir").display().to_string()),
+        "check cwd output {:?}; expected {:?}",
+        first.output,
+        target.join("checkdir")
+    );
+    assert!(!first.output.contains("new-spec"));
+    wait("next request accepts latest default", || {
+        matches!(h.rpc(request(None)).unwrap(), Response::Ok)
+    });
+    wait("next check uses new definition", || {
+        report("new-spec").is_some()
+    });
+    let explicit = spec("Write-Output explicit-spec; (Get-Location).Path".into());
+    wait("explicit check accepted", || {
+        matches!(
+            h.rpc(request(Some(explicit.clone()))).unwrap(),
+            Response::Ok
+        )
+    });
+    wait("explicit spec overrides project default", || {
+        report("explicit-spec").is_some()
+    });
+    let last = report("explicit-spec").unwrap();
+    assert_eq!(last.task, first.task);
+    assert_eq!(last.run, first.run);
+    assert_eq!(last.exit, Some(0));
+    assert!(
+        last.output
+            .contains(&target.join("checkdir").display().to_string())
+    );
+}
+#[test]
+fn host_restart_preserves_empty_and_populated_prepare_snapshots_and_successful_steps() {
+    use devtabs::settings::{model as m, store::SettingsStore};
+    struct Server(std::process::Child);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let h = Harness::new();
+    let project = h.root.join("project");
+    fs::create_dir(&project).unwrap();
+    let git = Command::new("git")
+        .args(["init", "--quiet"])
+        .arg(&project)
+        .output()
+        .unwrap();
+    assert!(
+        git.status.success(),
+        "{}",
+        String::from_utf8_lossy(&git.stderr)
+    );
+    let commit = Command::new("git")
+        .arg("-C")
+        .arg(&project)
+        .args([
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--allow-empty",
+            "--quiet",
+            "-m",
+            "baseline",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        commit.status.success(),
+        "{}",
+        String::from_utf8_lossy(&commit.stderr)
+    );
+    let start = || {
+        Server(
+            h.command()
+                .arg("__serve")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        )
+    };
+    let mut server = start();
+    wait("snapshot host starts", || h.rpc(Request::Ping).is_ok());
+    let old_marker = project.join("original-prepare.txt");
+    let latest_marker = project.join("latest-prepare.txt");
+    let open = || {
+        let out = h
+            .command()
+            .args([
+                "--headless",
+                "--agent",
+                "shell",
+                "--no-profile",
+                "--layout",
+                "split",
+                "--composition",
+                "agent-only",
+                "--new-instance",
+                "--project",
+            ])
+            .arg(&project)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        serde_json::from_slice::<WorkspaceInfo>(&out.stdout).unwrap()
+    };
+    let spec = |marker: &Path| devtabs::checks::Spec {
+        argv: vec![
+            "pwsh.exe".into(),
+            "-NoProfile".into(),
+            "-Command".into(),
+            format!(
+                "Add-Content -LiteralPath {} -Value executed",
+                quoted(marker)
+            ),
+        ],
+        cwd: ".".into(),
+        env: Default::default(),
+        timeout_ms: 5000,
+    };
+    let store = SettingsStore::new(h.root.join("data"));
+    let mut prefs = m::Preferences::default();
+    prefs.notifications.enabled = Some(false);
+    prefs.project.push(m::Project {
+        path: project.clone(),
+        favorite: false,
+        launch: Default::default(),
+        sidebar: Default::default(),
+        checks: m::Checks {
+            prepare: vec![spec(&old_marker)],
+            check: None,
+        },
+    });
+    let first = store
+        .save(
+            &store.read().unwrap(),
+            &toml::Value::try_from(&prefs).unwrap(),
+        )
+        .unwrap();
+    let populated = open();
+    prefs.project[0].checks.prepare.clear();
+    let second = store
+        .save(&first, &toml::Value::try_from(&prefs).unwrap())
+        .unwrap();
+    let empty = open();
+    prefs.project[0].checks.prepare = vec![spec(&latest_marker)];
+    store
+        .save(&second, &toml::Value::try_from(&prefs).unwrap())
+        .unwrap();
+    assert!(
+        !old_marker.exists() && !latest_marker.exists(),
+        "loading/launching never runs preparation implicitly"
+    );
+    let journal = devtabs::recovery::Journal::load_at(&h.root.join("data/runtime")).unwrap();
+    let restore =
+        [&populated, &empty].map(|w| devtabs::recovery::restore_options(&journal.entries[&w.id]));
+    // End the actual host process without clearing its durable recovery records.
+    // ConPTY handles belong to that process, so its child consoles close too.
+    server.0.kill().unwrap();
+    server.0.wait().unwrap();
+    server = start();
+    wait("replacement snapshot host starts", || {
+        h.rpc(Request::Ping).is_ok()
+    });
+    let recovered = restore.map(|options| {
+        let Response::Workspace(w) = h
+            .rpc(Request::Open {
+                options: Box::new(options),
+            })
+            .unwrap()
+        else {
+            panic!("restored workspace")
+        };
+        w
+    });
+    assert_eq!(recovered[0].tasks[0].id, populated.tasks[0].id);
+    assert_eq!(recovered[0].tasks[0].prepare, vec![spec(&old_marker)]);
+    assert_eq!(recovered[1].tasks[0].id, empty.tasks[0].id);
+    assert!(
+        recovered[1].tasks[0].prepare.is_empty(),
+        "an empty snapshot cannot inherit newly configured steps"
+    );
+    assert!(!old_marker.exists() && !latest_marker.exists());
+    let diagnostics = || {
+        let Response::Notifications(view) = h
+            .rpc(Request::Notifications {
+                action: devtabs::notifications::Action::Diagnostics,
+            })
+            .unwrap()
+        else {
+            panic!("diagnostics")
+        };
+        view.diagnostic
+    };
+    let initialize = |w: &WorkspaceInfo| {
+        let ended = |entries: &[String]| {
+            entries
+                .iter()
+                .filter(|s| s.as_str() == "Managed check ended; view its bound revision")
+                .count()
+        };
+        let before = ended(&diagnostics());
+        h.rpc(Request::Check {
+            workspace: w.id.clone(),
+            task: w.tasks[0].id.clone(),
+            spec: None,
+            initialize: true,
+        })
+        .unwrap();
+        wait("explicit preparation completes", || {
+            let entries = diagnostics();
+            assert!(
+                !entries
+                    .iter()
+                    .any(|s| s.starts_with("Managed check failed:")),
+                "{entries:?}"
+            );
+            ended(&entries) > before
+        });
+    };
+    initialize(&recovered[0]);
+    initialize(&recovered[0]);
+    assert_eq!(
+        fs::read_to_string(&old_marker).unwrap().lines().count(),
+        1,
+        "successful frozen steps do not rerun"
+    );
+    initialize(&recovered[1]);
+    assert!(
+        !latest_marker.exists(),
+        "empty recovered task executes no new configuration"
+    );
+    let fresh = open();
+    assert_eq!(fresh.tasks[0].prepare, vec![spec(&latest_marker)]);
+    initialize(&fresh);
+    assert_eq!(
+        fs::read_to_string(&latest_marker).unwrap().lines().count(),
+        1
+    );
+    for w in [&*recovered[0], &*recovered[1], &fresh] {
+        h.rpc(Request::Close {
+            workspace: w.id.clone(),
+        })
+        .unwrap();
+    }
+    h.rpc(Request::Shutdown).unwrap();
+    server.0.wait().unwrap();
+}
+
+#[test]
+fn notification_adoption_reports_failure_and_retry_without_rolling_back_preferences() {
+    let h = Harness::new();
+    let w = h.open(&[]);
+    wait("notification fixture shell starts", || {
+        h.info(&w.id).sessions[0].shell_pid.is_some()
+    });
+    let initial_pid = h.info(&w.id).sessions[0].shell_pid;
+    let path = h.root.join("data/config.toml");
+    fs::write(
+        &path,
+        "schema=1\n[notifications]\nenabled=false\nsound=false\n",
+    )
+    .unwrap();
+    let view = || {
+        let Response::Notifications(v) = h
+            .rpc(Request::Notifications {
+                action: devtabs::notifications::Action::Diagnostics,
+            })
+            .unwrap()
+        else {
+            panic!("notification view")
+        };
+        v
+    };
+    let first = view();
+    assert!(!first.enabled);
+    assert!(first.configuration.error.is_none());
+    assert_eq!(first.configuration.checked, first.configuration.adopted);
+    assert!(first.configuration.adopted.is_some());
+    let broken = "schema=1\n[notifications]\nenabled=false\nsound='invalid'\n";
+    fs::write(&path, broken).unwrap();
+    let rejected = view();
+    assert!(rejected.configuration.error.is_some());
+    assert_ne!(
+        rejected.configuration.checked,
+        rejected.configuration.adopted
+    );
+    assert_eq!(rejected.configuration.adopted, first.configuration.adopted);
+    assert!(!rejected.enabled);
+    assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+    let task = w.tasks[0].id.clone();
+    h.rpc(Request::Notifications {
+        action: devtabs::notifications::Action::Mute { task, muted: true },
+    })
+    .unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), broken);
+    fs::write(
+        &path,
+        "schema=1\n[notifications]\nenabled=false\nsound=true\n",
+    )
+    .unwrap();
+    let retried = view();
+    assert!(retried.configuration.error.is_none());
+    assert_eq!(retried.configuration.checked, retried.configuration.adopted);
+    assert_ne!(retried.configuration.adopted, first.configuration.adopted);
+    assert!(!retried.enabled);
+    assert!(
+        !h.root.join("data/notification-identity.json").exists(),
+        "diagnostics must not register or send notifications"
+    );
+    assert_eq!(h.info(&w.id).sessions[0].shell_pid, initial_pid);
+}

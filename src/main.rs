@@ -94,7 +94,11 @@ fn run() -> Result<()> {
         devtabs::overview::launch_tab(options)?;
         return Ok(());
     }
-    let config = devtabs::config::Config::load()?;
+    let config = if overview {
+        devtabs::config::Config::load().unwrap_or_default()
+    } else {
+        devtabs::config::Config::load()?
+    };
     devtabs::i18n::set(
         options
             .as_ref()

@@ -552,20 +552,27 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
         app.path()
             .map(|p| {
                 format!(
-                    "Enter → {} · {}",
+                    "{} → {} · {}",
+                    app.shortcuts
+                        .preferred("overview.activate", "overview.projects"),
                     p.file_name().unwrap_or_default().to_string_lossy(),
                     app.launch_description(&app.options_for(&p))
                 )
             })
             .unwrap_or_else(|| t("no_project").into_owned())
     } else {
-        let mut text = String::from("Ctrl+Enter → ");
+        let mut text = format!(
+            "{} → ",
+            app.shortcuts
+                .preferred("overview.launch", app.dashboard_context())
+        );
         let mut shown = 0;
         for (i, entry) in app.marked.0.iter().enumerate() {
             let options = entry
                 .restore
                 .clone()
                 .or_else(|| entry.connect.clone())
+                .or_else(|| entry.frozen.clone())
                 .unwrap_or_else(|| app.options_for(&entry.path));
             let part = format!(
                 "{} {} · {}{}  ",
@@ -585,15 +592,24 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             shown += 1;
         }
         if shown < app.marked.len() {
-            text.push_str(&format!(" +{} [Enter]", app.marked.len() - shown));
+            text.push_str(&format!(
+                " +{} [{}]",
+                app.marked.len() - shown,
+                app.shortcuts
+                    .preferred("overview.queue.open", "overview.queue")
+            ));
         }
         text
     };
     let summary = if footer_height == 1 {
         format!(
-            "[{} {}] Tab · Enter · F1",
+            "[{} {}] Tab · {} · {}",
             t("overview.queue"),
-            app.marked.len()
+            app.marked.len(),
+            app.shortcuts
+                .preferred("overview.activate", "overview.projects"),
+            app.shortcuts
+                .preferred("overview.help", app.dashboard_context())
         )
     } else {
         summary
@@ -636,7 +652,21 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             })
             .unwrap_or_default()
     } else {
-        t("overview.hint").into_owned()
+        format!(
+            "{} {} · {} {} · {} {} · Tab · {} {}",
+            app.shortcuts
+                .preferred("overview.activate", "overview.projects"),
+            t("open"),
+            app.shortcuts
+                .preferred("overview.queue.toggle", "overview.projects"),
+            t("overview.queue"),
+            app.shortcuts
+                .preferred("overview.launch", app.dashboard_context()),
+            t("launch"),
+            app.shortcuts
+                .preferred("overview.help", app.dashboard_context()),
+            t("help")
+        )
     };
     if footer_height > 1 {
         frame.render_widget(
@@ -1202,7 +1232,128 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
     }
 }
 impl Overview {
+    pub(super) fn dashboard_context(&self) -> &'static str {
+        match self.dashboard.overlay.unwrap_or(self.dashboard.focus) {
+            Focus::Projects => "overview.projects",
+            Focus::Detail => "overview.detail",
+            Focus::Stats => "overview.statistics",
+            Focus::Queue => "overview.queue",
+            Focus::Search => "overview.search",
+        }
+    }
+    pub(super) fn dashboard_command(&mut self, w: &Workers, id: &str) -> Result<Option<Outcome>> {
+        match id {
+            "overview.quit" => return self.command(w, Command::Quit).map(Some),
+            "overview.activate" => {
+                return self
+                    .command(
+                        w,
+                        if matches!(self.rows.get(self.selected), Some(Row::Group(_))) {
+                            Command::Group
+                        } else {
+                            Command::Open
+                        },
+                    )
+                    .map(Some);
+            }
+            "overview.search" => self.dashboard.focus = Focus::Search,
+            "overview.queue.open" => self.dialog = Some(Dialog::Queue { selected: 0 }),
+            "overview.queue.toggle" => {
+                self.dashboard.undo = Some(self.marked.clone());
+                self.toggle_selected_queue();
+            }
+            "overview.queue.delete" => {
+                if !self.marked.is_empty() {
+                    self.dashboard.undo = Some(self.marked.clone());
+                    self.marked.0.remove(0);
+                }
+            }
+            "overview.queue.undo" => {
+                if let Some(previous) = self.dashboard.undo.take() {
+                    self.marked = previous;
+                }
+            }
+            "overview.project.expand" | "overview.project.collapse" => {
+                if let Some(Row::Project(path)) = self.rows.get(self.selected) {
+                    let key = config::key(path);
+                    if id.ends_with("expand") {
+                        self.dashboard.expanded_projects.insert(key);
+                    } else {
+                        self.dashboard.expanded_projects.remove(&key);
+                    }
+                    self.rebuild();
+                }
+            }
+            "overview.agent.next" | "overview.agent.previous" => {
+                if matches!(self.rows.get(self.selected), Some(Row::Group(_))) {
+                    return self.command(w, Command::Group).map(Some);
+                }
+                if let Some(path) = self.path() {
+                    let mut o = self.options_for(&path);
+                    o.agent = match (o.agent, id.ends_with("next")) {
+                        (Agent::Codex, true) | (Agent::Shell, false) => Agent::Claude,
+                        (Agent::Claude, true) | (Agent::Codex, false) => Agent::Shell,
+                        _ => Agent::Codex,
+                    };
+                    o.resume_id = None;
+                    o.resume = false;
+                    if o.agent == Agent::Shell {
+                        o.continue_latest = false;
+                        o.fresh = true;
+                    }
+                    self.staged.insert(config::key(&path), o);
+                }
+            }
+            "overview.statistics.period" => {
+                self.heatmap_action(HeatmapAction::Period(!self.dashboard.stats_year))
+            }
+            "overview.statistics.expand" => self.heatmap_action(HeatmapAction::Expand),
+            "overview.detail.expand" => self.dashboard.expanded = !self.dashboard.expanded,
+            "overview.detail.activate" | "overview.statistics.activate" => {
+                if id == "overview.detail.activate"
+                    && let Some((file, line)) = self.dashboard.file_selected.clone()
+                {
+                    self.open_file(file, line)?;
+                } else {
+                    self.dashboard.expanded = !self.dashboard.expanded;
+                }
+            }
+            _ => return Ok(None),
+        }
+        Ok(Some(Outcome::Stay))
+    }
     pub(super) fn dashboard_key(&mut self, w: &Workers, key: KeyEvent) -> Result<Option<Outcome>> {
+        if self.dialog.is_none() && self.dashboard.viewer.is_none() {
+            let search_text = self.dashboard.focus == dashboard::Focus::Search
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                && matches!(
+                    key.code,
+                    KeyCode::Char(_) | KeyCode::Enter | KeyCode::Esc | KeyCode::Backspace
+                );
+            let cancel = key.code == KeyCode::Esc
+                && (!self.query.is_empty()
+                    || self.dashboard.overlay.is_some()
+                    || self.dashboard.drag.is_some()
+                    || self.dashboard.scrollbar.is_some()
+                    || self.dashboard.pressed.is_some()
+                    || self.dashboard.text_selection.is_some());
+            let selection_copy = key.code == KeyCode::Char('c')
+                && key.modifiers == KeyModifiers::CONTROL
+                && self.dashboard.text_selection.is_some();
+            if !search_text && !cancel && !selection_copy {
+                let context = self.dashboard_context();
+                match self.shortcut_router.route(&self.shortcuts, context, key) {
+                    crate::shortcuts::Resolution::Execute(id) => {
+                        return self.execute_shortcut(w, id).map(Some);
+                    }
+                    crate::shortcuts::Resolution::AwaitSequence
+                    | crate::shortcuts::Resolution::Handled => return Ok(Some(Outcome::Stay)),
+                    _ => {}
+                }
+            }
+        }
         use Focus::*;
         if let Some(viewer) = self.dashboard.viewer.as_mut() {
             if matches!(key.code, KeyCode::Esc) && !viewer.modal() {
@@ -1228,23 +1379,6 @@ impl Overview {
         }
         self.dashboard.text_selection = None;
         self.dashboard.heatmap_hover = None;
-        if (self.dashboard.overlay == Some(Stats) || self.dashboard.focus == Stats)
-            && !key
-                .modifiers
-                .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
-        {
-            match key.code {
-                KeyCode::Char('y' | 'Y') => {
-                    self.heatmap_action(HeatmapAction::Period(!self.dashboard.stats_year));
-                    return Ok(Some(Outcome::Stay));
-                }
-                KeyCode::Char('z' | 'Z') => {
-                    self.heatmap_action(HeatmapAction::Expand);
-                    return Ok(Some(Outcome::Stay));
-                }
-                _ => {}
-            }
-        }
         if self.dashboard.focus == Projects && scroll_key(key.code).is_some() {
             self.dashboard.list_detached = false;
         }
@@ -1264,27 +1398,6 @@ impl Overview {
             let stats = self.dashboard.overlay == Some(Stats);
             if let Some(delta) = scroll_key(key.code) {
                 self.scroll_panel(stats, delta);
-                return Ok(Some(Outcome::Stay));
-            }
-            if key.code == KeyCode::Enter
-                && !key
-                    .modifiers
-                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
-            {
-                if !stats && let Some((file, line)) = self.dashboard.file_selected.clone() {
-                    self.open_file(file, line)?;
-                } else {
-                    self.dashboard.expanded = !self.dashboard.expanded;
-                }
-                return Ok(Some(Outcome::Stay));
-            }
-            if key.code == KeyCode::Char('e')
-                && !stats
-                && !key
-                    .modifiers
-                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
-            {
-                self.dashboard.expanded = !self.dashboard.expanded;
                 return Ok(Some(Outcome::Stay));
             }
             if !matches!(key.code, KeyCode::F(_) | KeyCode::Enter)
@@ -1307,25 +1420,7 @@ impl Overview {
                 visible[(i + if backwards { visible.len() - 1 } else { 1 }) % visible.len()];
             return Ok(Some(Outcome::Stay));
         }
-        if self.dashboard.focus == Projects
-            && key.modifiers.contains(KeyModifiers::ALT)
-            && matches!(key.code, KeyCode::Left | KeyCode::Right)
-            && let Some(Row::Project(path)) = self.rows.get(self.selected)
-        {
-            let keypath = config::key(path);
-            if key.code == KeyCode::Right {
-                self.dashboard.expanded_projects.insert(keypath);
-            } else {
-                self.dashboard.expanded_projects.remove(&keypath);
-            }
-            self.rebuild();
-            return Ok(Some(Outcome::Stay));
-        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if key.code == KeyCode::Char('/') && !ctrl && self.dashboard.focus != Search {
-            self.dashboard.focus = Search;
-            return Ok(Some(Outcome::Stay));
-        }
         if self.dashboard.focus == Search && !ctrl {
             match key.code {
                 KeyCode::Enter | KeyCode::Esc => self.dashboard.focus = Projects,
@@ -1350,72 +1445,9 @@ impl Overview {
                 self.scroll_panel(self.dashboard.focus == Stats, 10);
                 return Ok(Some(Outcome::Stay));
             }
-            if key.code == KeyCode::Char('e')
-                && !key
-                    .modifiers
-                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
-            {
-                self.dashboard.expanded = !self.dashboard.expanded;
-                return Ok(Some(Outcome::Stay));
-            }
-            if key.code == KeyCode::Enter
-                && !key
-                    .modifiers
-                    .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
-            {
-                if let Some((file, line)) = self.dashboard.file_selected.clone() {
-                    self.open_file(file, line)?;
-                } else {
-                    self.dashboard.expanded = !self.dashboard.expanded;
-                }
-                return Ok(Some(Outcome::Stay));
-            }
-        }
-        if self.dashboard.focus == Queue && key.code == KeyCode::Delete && !self.marked.is_empty() {
-            self.dashboard.undo = Some(self.marked.clone());
-            self.marked.0.remove(0);
-            return Ok(Some(Outcome::Stay));
         }
         if self.dashboard.focus != Projects && key.code == KeyCode::Char(' ') && !ctrl {
             return Ok(Some(Outcome::Stay));
-        }
-        if self.dashboard.focus == Queue
-            && key.code == KeyCode::Enter
-            && !key
-                .modifiers
-                .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
-        {
-            self.dialog = Some(Dialog::Queue { selected: 0 });
-            return Ok(Some(Outcome::Stay));
-        }
-        if ctrl && key.code == KeyCode::Char('z') {
-            if let Some(previous) = self.dashboard.undo.take() {
-                self.marked = previous;
-            }
-            return Ok(Some(Outcome::Stay));
-        }
-        if self.dashboard.focus == Projects
-            && matches!(key.code, KeyCode::Left | KeyCode::Right)
-            && self.path().is_some()
-        {
-            let path = self.path().unwrap();
-            let mut o = self.options_for(&path);
-            o.agent = match (o.agent, key.code == KeyCode::Right) {
-                (Agent::Codex, true) | (Agent::Shell, false) => Agent::Claude,
-                (Agent::Claude, true) | (Agent::Codex, false) => Agent::Shell,
-                _ => Agent::Codex,
-            };
-            o.resume_id = None;
-            o.resume = false;
-            if o.agent == Agent::Shell {
-                o.continue_latest = false;
-                o.fresh = true;
-            }
-            self.staged.insert(config::key(&path), o);
-            return Ok(Some(Outcome::Stay));
-        }
-        if self.dashboard.focus == Projects && key.code == KeyCode::Char(' ') && !ctrl {
-            self.dashboard.undo = Some(self.marked.clone());
         }
         // Existing printable-character search remains available and has a visible focus.
         if matches!(key.code, KeyCode::Char(c) if !c.is_whitespace())
@@ -1837,7 +1869,7 @@ impl Overview {
                 self.dashboard.focus = Focus::Projects;
                 self.last_click = None;
                 self.dashboard.pressed = None;
-                self.dashboard_key(w, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))?;
+                self.execute_shortcut(w, "overview.agent.next")?;
                 return Ok(Some(Outcome::Stay));
             }
             if mouse.column == c.list.right() - 1

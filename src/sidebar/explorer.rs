@@ -20,6 +20,7 @@ pub(super) struct Explorer {
     pub(super) defaults_ready: bool,
     preferences_changed: Option<Instant>,
     preferences_touched: bool,
+    defaults_refreshed: bool,
     git_pending: bool,
     git_at: Option<Instant>,
     git_error: String,
@@ -68,6 +69,7 @@ impl Explorer {
             defaults_ready: false,
             preferences_changed: None,
             preferences_touched: false,
+            defaults_refreshed: false,
             git_pending: false,
             git_at: None,
             git_error: String::new(),
@@ -103,6 +105,49 @@ impl Sidebar {
     }
     pub fn explorer_metrics(&self) -> &str {
         &self.explorer.metrics
+    }
+    /// Reload defaults for future documents without changing a live view/editor.
+    pub fn refresh_defaults(&mut self) {
+        self.explorer.preferences_touched = true;
+        self.explorer.defaults_refreshed = true;
+        if let Some(d) = &mut self.document {
+            d.defaults_pending = false;
+        }
+        if let Err(e) = self.explorer.worker.send(Work::LoadPreferences) {
+            self.say(format!("Cannot refresh view defaults: {e:#}"), false);
+        }
+    }
+    pub(super) fn accept_defaults(&mut self, defaults: crate::explorer::ViewDefaults) {
+        if self.explorer.defaults_refreshed {
+            self.future_image_protocol = Some(defaults.preview.image_protocol.unwrap_or_default());
+        }
+        self.preview_defaults = defaults.preview;
+        self.explorer.defaults_ready = true;
+        if self.explorer.preferences_touched {
+            return;
+        }
+        self.explorer.defaults_ready = true;
+        let mut p = defaults.sidebar;
+        self.files.hidden = defaults.hidden;
+        self.files.ignored = defaults.ignored;
+        if let Some(d) = &mut self.document
+            && d.defaults_pending
+            && !d.editing
+        {
+            d.view.wrap = self.preview_defaults.wrap.unwrap_or(false);
+            if !d.loading {
+                d.markdown = d.loaded().is_some_and(|l| l.markdown())
+                    && self.preview_defaults.markdown_mode.unwrap_or_default()
+                        != crate::settings::model::MarkdownMode::Source;
+                d.set_rendered(None);
+            }
+            d.defaults_pending = false;
+        }
+        p.width = p.width.clamp(20, 80);
+        p.agent_ratio = p.agent_ratio.clamp(1, 9999);
+        self.explorer.preferences = p;
+        self.files.compact = self.explorer.preferences.compact;
+        self.files.reproject();
     }
     pub fn sidebar_preferences(&self) -> &Preferences {
         &self.explorer.preferences
@@ -186,33 +231,8 @@ impl Sidebar {
             changed = true;
             match done {
                 Done::Preferences(result) => match result {
-                    Ok(defaults) if !self.explorer.preferences_touched => {
-                        self.explorer.defaults_ready = true;
-                        let mut p = defaults.sidebar;
-                        self.files.hidden = defaults.hidden;
-                        self.files.ignored = defaults.ignored;
-                        self.preview_defaults = defaults.preview;
-                        if let Some(d) = &mut self.document
-                            && d.defaults_pending
-                            && !d.editing
-                        {
-                            d.view.wrap = self.preview_defaults.wrap.unwrap_or(false);
-                            if !d.loading {
-                                d.markdown = d.loaded().is_some_and(|l| l.markdown())
-                                    && self.preview_defaults.markdown_mode.unwrap_or_default()
-                                        != crate::settings::model::MarkdownMode::Source;
-                                d.set_rendered(None);
-                            }
-                            d.defaults_pending = false;
-                        }
-                        p.width = p.width.clamp(20, 80);
-                        p.agent_ratio = p.agent_ratio.clamp(1, 9999);
-                        self.explorer.preferences = p;
-                        self.files.compact = self.explorer.preferences.compact;
-                        self.files.reproject();
-                    }
+                    Ok(defaults) => self.accept_defaults(defaults),
                     Err(e) => self.say(format!("Sidebar settings: {e:#}"), false),
-                    _ => {}
                 },
                 Done::SavedPreferences(result) => {
                     if let Err(e) = result {

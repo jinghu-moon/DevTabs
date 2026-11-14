@@ -12,52 +12,54 @@ Windows Rust 项目工作区：原生 Codex / Claude Code 与 PowerShell Debug �
 
 ## 开始使用
 
-最新测试程序为 `artifacts/DevTabs-0.4.0-file-review-layout/devtabs.exe`，包含 F9 历史会话表格（名称、完整 ID、更新）、会话代码块语言与复制按钮、完整 ID 历史会话表、F9 独立弹窗、共享 Markdown 代码块全宽背景、会话滚动条端点修复、自适应高度的会话弹窗、Markdown 消息与角色标记、对话滚动边界保护、背景色填充的连续热力图、未来日期统一灰色块、统计栏最小 32 列保护、统计弹窗背景隔离和旧启动记录读取修复、紧凑连续色块日历、局部对齐的按钮与图例、月份刻度、12 周／全年切换、悬停详情与精简图例，以及无数量/时间硬截断的完整统计扫描、后台进度、明确的根目录文件标签，以及单行项目与可展开会话、最近用户消息修复、常驻返回总览按钮、提交热力图与改动热点，以及详情分区、可点击搜索和宿主断线恢复、按实际栏宽排版的统计卡片与目录扫描优化、响应式项目/详情/概况三栏、Markdown 工作上下文、可审阅启动队列、真实单 Agent 终端组合，并保留侧栏、图片、编辑、终端浮层与中英文界面；Agent 底部新增按任务隔离的引用/修改文件表格，受管 Hook 具有明确的 DevTabs 名称；修复 Codex `/D:/...` 文件引用识别及底部文件面板外边框，刷新/折叠按钮保留边框间距；文件改动弹窗居中自适应、使用表格并同步鼠标坐标，底部提示移入内容行、边框同步 Agent 焦点/提醒颜色；构建哈希与检查记录在同目录 `build.json`。当前 IPC 使用 v6 并按构建自动隔离宿主，避免新版连接到仍在运行的旧宿主；`--version` 可查看构建标识。旧版运行中的窗口和会话由旧版正常退出，新版不接管。详见 [宿主构建隔离](docs/31-Host-Build-Isolation.md)。
+当前源码已完成统一设置与快捷键管理；下列历史打包程序不包含本轮改动。先执行 `cargo build`，然后使用 `cargo run --` 或本次编译的 `target/debug/devtabs.exe`，按 F4 进入设置。以下命令以当前源码构建为准。自动回归、真实 ConPTY 流程和外部软件未测项见 [实施验证](docs/54-Settings-Refactor-Verification.md)。
+
+历史测试程序为 `artifacts/DevTabs-0.4.0-file-review-layout/devtabs.exe`，包含 F9 历史会话表格（名称、完整 ID、更新）、会话代码块语言与复制按钮、完整 ID 历史会话表、F9 独立弹窗、共享 Markdown 代码块全宽背景、会话滚动条端点修复、自适应高度的会话弹窗、Markdown 消息与角色标记、对话滚动边界保护、背景色填充的连续热力图、未来日期统一灰色块、统计栏最小 32 列保护、统计弹窗背景隔离和旧启动记录读取修复、紧凑连续色块日历、局部对齐的按钮与图例、月份刻度、12 周／全年切换、悬停详情与精简图例，以及无数量/时间硬截断的完整统计扫描、后台进度、明确的根目录文件标签，以及单行项目与可展开会话、最近用户消息修复、常驻返回总览按钮、提交热力图与改动热点，以及详情分区、可点击搜索和宿主断线恢复、按实际栏宽排版的统计卡片与目录扫描优化、响应式项目/详情/概况三栏、Markdown 工作上下文、可审阅启动队列、真实单 Agent 终端组合，并保留侧栏、图片、编辑、终端浮层与中英文界面；Agent 底部新增按任务隔离的引用/修改文件表格，受管 Hook 具有明确的 DevTabs 名称；修复 Codex `/D:/...` 文件引用识别及底部文件面板外边框，刷新/折叠按钮保留边框间距；文件改动弹窗居中自适应、使用表格并同步鼠标坐标，底部提示移入内容行、边框同步 Agent 焦点/提醒颜色；构建哈希与检查记录在同目录 `build.json`。当前 IPC 使用 v6 并按构建自动隔离宿主，避免新版连接到仍在运行的旧宿主；`--version` 可查看构建标识。旧版运行中的窗口和会话由旧版正常退出，新版不接管。详见 [宿主构建隔离](docs/31-Host-Build-Isolation.md)。
 
 若同时运行旧版，重新编译不会更新已经打开的界面；同一构建的总览也可能激活已运行的前端。测试当前渲染时，明确指定程序路径并加 `--new-instance`，在新的界面打开 `tests/fixtures/markdown-reading.md`：
 
 ```powershell
-& "D:\100_Projects\110_Daily\new-project\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe" --project "D:\100_Projects\110_Daily\new-project" --agent codex --layout split --new-instance
+& ".\target\debug\devtabs.exe" --project "D:\100_Projects\110_Daily\new-project" --agent codex --layout split --new-instance
 ```
 
 可用 `Get-CimInstance Win32_Process -Filter "Name = 'devtabs.exe'" | Select-Object ProcessId, ExecutablePath, CommandLine` 核对实际运行路径。0.4.0 的本地源码渲染器已支持 `rust,no_run` 元数据、有限 Mermaid/公式、任务框和引用续行；0.3.2 的旧预览不能用于判断这些能力。针对这份完整样本，`cargo test --test markdown_viewport reading_fixture -- --test-threads=1` 覆盖实际 Sidebar 的 LF/CRLF、明暗主题、代码颜色、图形、公式及与完整渲染逐行一致性。
 
 ```powershell
 # 首次设置默认 Agent 和项目根目录，可添加多个根
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe config agent codex
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe config root 'D:\100_Projects\110_Daily'
+.\target\debug\devtabs.exe config agent codex
+.\target\debug\devtabs.exe config root 'D:\100_Projects\110_Daily'
 
 # 项目总览
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe
+.\target\debug\devtabs.exe
 
 # 只创建 Agent，一个 PTY；保留文件树与预览
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe --project 'D:\Projects\Demo' --composition agent-only
+.\target\debug\devtabs.exe --project 'D:\Projects\Demo' --composition agent-only
 
 # 默认 Float：Agent 主界面 + 界面内终端浮层
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe --project 'D:\Projects\Demo' --agent claude --debug-command 'cargo run'
+.\target\debug\devtabs.exe --project 'D:\Projects\Demo' --agent claude --debug-command 'cargo run'
 
 # 左右内嵌分屏 / Windows Terminal 两个标签页
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe --project 'D:\Projects\Demo' --layout split
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe --project 'D:\Projects\Demo' --layout tabs
+.\target\debug\devtabs.exe --project 'D:\Projects\Demo' --layout split
+.\target\debug\devtabs.exe --project 'D:\Projects\Demo' --layout tabs
 
 # 原生历史选择器 / 显式另开实例 / 双 shell 诊断
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe --agent codex --resume
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe --new-instance
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe --agent shell --layout split
+.\target\debug\devtabs.exe --agent codex --resume
+.\target\debug\devtabs.exe --new-instance
+.\target\debug\devtabs.exe --agent shell --layout split
 ```
 
 同一项目已经运行时，启动参数不会替换原会话；需要另一组进程时使用 `--new-instance`。标签页布局使用 DevTabs 命名的 WT 窗口，避免按标签序号或“最近窗口”定位。总览 Enter 优先激活可定位的现有工作区；否则打开视图并接管原会话，旧视图退出，不重启 shell。
 
 ## 总览操作
 
-快捷键统一重构与管理菜单的待实施方案见 [快捷键重构设计](docs/52-Shortcut-Refactor-Design.md)，涵盖 F3 / Ctrl+F3 双绑定、自定义快捷键、作用域及冲突处理；不代表当前版本已经实现。
+快捷键由统一命令注册表管理，可在设置的“快捷键”分类修改、录制、测试、处理内部冲突及导入/导出。F3 / Ctrl+F3 默认并存，提示优先显示 Ctrl+F3；以下列出默认键位，修改后的提示以当前有效绑定为准。设计与事件到达边界见 [快捷键设计](docs/52-Shortcut-Refactor-Design.md)。
 
 直接运行 exe 进入总览。宽度达到 160 列默认项目/详情/概况三栏，104–159 列优先项目/详情，60–103 列通过 F10/F8 显式打开详情/概况弹窗。拖动分隔线调整栏宽，各栏独立滚动。
 
 - 点击搜索框或按 `/` 聚焦并即时筛选，Enter / Esc 返回项目列表；F6 切换筛选，选中标签以填充背景标识。
 - Enter 打开当前项目；Space 或编号勾选，Ctrl+Enter 只执行勾选队列。点击底部摘要审阅、调序和删除，Alt+↑↓ 调序，Delete 移除，Ctrl+Z 撤销。
-- ←→ 临时切换 Agent；Alt+Enter 调整本次启动，Ctrl+S 暂存入队；F4 保存默认设置，两者相互独立。会话历史 F9 只暂存选择，直接输入搜索，Alt+P 原生选择、Alt+N 新会话；项目箭头或 Alt+←→ 收起／展开会话子行。
-- F3 编辑下一步便签，E 展开详情；改动文件单击选中后 Enter 只读查看，Esc 返回。Alt+拖动选择详情/概况文字，Ctrl+C 显式复制；无选区时复制项目路径。
+- ←→ 临时切换 Agent；Alt+Enter 调整本次启动，Ctrl+S 暂存入队；F4 打开统一设置并定位当前项目，Ctrl+S 保存全部分类草稿；两者相互独立。会话历史 F9 只暂存选择，直接输入搜索，Alt+P 原生选择、Alt+N 新会话；项目箭头或 Alt+←→ 收起／展开会话子行。
+- Ctrl+F3 / F3 编辑下一步便签，E 展开详情；改动文件单击选中后 Enter 只读查看，Esc 返回。Alt+拖动选择详情/概况文字，Ctrl+C 显式复制；无选区时复制项目路径。
 - 命令面板的“加入全部待恢复”只追加队列，审阅后 Ctrl+Enter 执行；CLI `--restore` 仍直接恢复。F1 完整帮助，Ctrl+P 命令面板，Ctrl+L 语言，Ctrl+T 主题。
 
 `--composition agent-only` 创建一个终端；`agent-debug` 创建两个；`custom` 创建 Agent、Debug 和配置的全部额外命名终端。切换组合不会删除额外终端配置，视觉布局由 `--layout` 独立决定。
@@ -68,7 +70,7 @@ Windows Rust 项目工作区：原生 Codex / Claude Code 与 PowerShell Debug �
 
 ## 操作
 
-管理命令先按 **Ctrl+G** 打开命令菜单，松开，再按字母或点击执行；Esc 取消。其他输入交给当前原生程序。
+管理命令先按 **Ctrl+G** 打开命令菜单，松开，再按字母或点击执行；Esc 取消。普通终端默认只占此精确前缀，Ctrl+P/F3 直接交给原生程序；连续按两次 Ctrl+G 向终端发送原 Ctrl+G。Ctrl+G → `,` 打开设置，Ctrl+G → `*` 直达快捷键管理，菜单也有鼠标入口。外部程序截获的事件可能到不了 DevTabs，Ctrl+Fn 也不保证系统全局可用。
 
 每个停靠 Agent 下方默认显示 7 行文件面板：左侧引用文件、右侧本轮修改，单击分别进入预览或历史差异。两表独立滚动，拖动顶边调整高度；右上角折叠/重试，Ctrl+G → `.` 收起/展开。数据在可信轮结束事件后后台增量更新，任务之间独立。详见 [Agent 底部文件面板](docs/50-Agent-File-Panel.md)。
 
@@ -123,7 +125,7 @@ Markdown 默认阅读模式，m/M 切源码；阅读隐藏标题标记与代码�
 
 Windows Terminal 图片预览已接入 Sixel/Half-block、独立图片标签、后台解码与有界缓存、Markdown 可视区裁剪及性能统计；操作及真机验收见 [终端图片预览设计](docs/21-Terminal-Image-Preview-Design.md) 与 [实现验证](docs/22-Terminal-Image-Preview-Verification.md)。
 
-预览内 B 添加带备注书签，Ctrl+B 打开项目书签列表；Enter/单击跳转，E 修改备注，Delete 删除，R 刷新。书签后台原子保存至数据目录的 bookmarks.json。I 打开文件信息，查看大小、编码、换行、UTC 修改时间和截断状态，C 复制；Esc 关闭。实现、边界与验收命令见 [预览操作与持久书签](docs/20-Preview-Controls.md)。图片为只读预览，O 使用系统应用打开原文件。
+预览内 B 添加带备注书签，Ctrl+B 打开项目书签列表；Enter/单击跳转，E 修改备注，Delete 删除，R 刷新。书签和总览便签共同保存在数据目录的 user-data.json，后台按内容身份合并并原子保存。I 打开文件信息，查看大小、编码、换行、UTC 修改时间和截断状态，C 复制；Esc 关闭。实现、边界与验收命令见 [预览操作与持久书签](docs/20-Preview-Controls.md)。图片为只读预览，O 使用系统应用打开原文件。
 
 从树拖一个文件到 Agent **内容区**，或选中文件后 Ctrl+G I，插入 `"绝对路径" `，不发送 Enter。Debug、边框、编辑器及 Shell 诊断会话不能作为目标。实际验证 Codex/Claude 的提示词编辑页；历史选择器、信任页面和模型工作中保持 Agent 原生行为，不保证输入框识别。成功提示仅表示输入链路接受，不表示模型已读取文件。
 
@@ -156,9 +158,13 @@ devtabs shutdown  # 仅允许没有工作区时关闭宿主
 
 ## 配置与安装
 
-配置保存在 `%APPDATA%\DevTabs\config.toml`，不会写入项目目录。`--data-dir` 或 `DEVTABS_HOME` 可隔离配置、宿主和共享小窗。格式与额外命名会话示例见 [实现设计](docs/03-Workspace-Implementation.md)。
+偏好唯一生效文件为 `%APPDATA%\DevTabs\config.toml`，不会自动读取或回写仓库中的 `.devtabs.toml`。`--data-dir` 或 `DEVTABS_HOME` 可隔离配置、宿主和共享小窗。新格式和完整字段契约见 [统一配置设计](docs/53-Unified-Configuration-Design.md)。
 
-设置入口盘点、单一 TOML 配置、用户内容/运行状态划分及升级前后测试计划见 [设置与统一配置设计](docs/53-Unified-Configuration-Design.md)。方案允许开发期破坏性重构，不要求旧格式兼容或迁移，尚未实施。
+总览 F4 在没有项目时也可进入全局设置；有项目时定位该原项目。一次设置窗口共用草稿，Ctrl+S 原子保存全部分类；子编辑“完成”只改草稿，Esc 取消子编辑，关闭脏窗口时选择保存、放弃或继续。项目缺失字段继承全局，`false`、`[]` 和允许的空字符串是显式覆盖；恢复继承删除覆盖。就地排序/分栏和文件视图调整只影响当前视图，持久默认在设置中修改。
+
+数据目录按所有者分开：`config.toml` 保存偏好、项目覆盖、完整预设及快捷键差异；`user-data.json` 保存便签/书签；`ui-state.json` 保存最近打开、折叠及已确认浮层矩形；`runtime/` 保存任务业务状态；`cache/` 保存可重建缓存。`config.previous.toml` 是保存前副本，不是第二个生效来源。清缓存/恢复偏好不会清除用户内容或任务。
+
+本轮有意更改格式，无旧格式读取、迁移器或双写。保留手写注释和未知字段；字段错误隔离，语法错误保留原文并提供修复入口；保存冲突与 I/O 失败保留草稿。预设冻结启动值而非当前任务/会话 ID，应用仅入队，显式启动才创建会话。
 
 ```powershell
 devtabs config add 'D:\Projects\Manual'
@@ -169,10 +175,10 @@ devtabs config debug 'D:\Projects\Demo' 'cargo watch -x run'
 devtabs config edit
 
 # 当前用户安装到 %LOCALAPPDATA%\Programs\DevTabs，并添加用户 PATH
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe install
+.\target\debug\devtabs.exe install
 
 # 关闭新版工作区后，从另一份 exe 卸载；保留用户配置
-.\artifacts\DevTabs-0.4.0-file-review-layout\devtabs.exe uninstall
+.\target\debug\devtabs.exe uninstall
 ```
 
 安装/卸载支持 `--directory` 指定目录、`--no-path` 跳过 PATH 修改。PATH 更新保留其他条目及 `%USERPROFILE%` 等变量；新终端获得新 PATH，已打开的 shell 保持原环境。不会修改 Profile 或 WT 配置。更新前先关闭安装目录内运行的 DevTabs。

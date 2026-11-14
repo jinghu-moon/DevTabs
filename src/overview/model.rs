@@ -438,6 +438,8 @@ pub fn toggle_selection(selected: &mut Vec<PathBuf>, path: PathBuf) {
 #[derive(Clone, Debug)]
 pub struct QueueEntry {
     pub path: PathBuf,
+    /// Each preset row owns its complete snapshot, even at the same path.
+    pub frozen: Option<Options>,
     pub restore: Option<Options>,
     pub connect: Option<Options>,
 }
@@ -455,25 +457,33 @@ impl Queue {
     }
     pub fn contains(&self, path: &Path) -> bool {
         self.0.iter().any(|e| {
-            e.restore.is_none() && e.connect.is_none() && config::key(&e.path) == config::key(path)
+            e.frozen.is_none()
+                && e.restore.is_none()
+                && e.connect.is_none()
+                && config::key(&e.path) == config::key(path)
         })
     }
     pub fn push(&mut self, path: PathBuf) {
         if !self.contains(&path) {
             self.0.push(QueueEntry {
                 path,
+                frozen: None,
                 restore: None,
                 connect: None,
             });
         }
     }
     pub fn retain(&mut self, mut keep: impl FnMut(&PathBuf) -> bool) {
-        self.0
-            .retain(|e| e.restore.is_some() || e.connect.is_some() || keep(&e.path));
+        self.0.retain(|e| {
+            e.frozen.is_some() || e.restore.is_some() || e.connect.is_some() || keep(&e.path)
+        });
     }
     pub fn toggle(&mut self, path: PathBuf) {
         if let Some(i) = self.0.iter().position(|e| {
-            e.restore.is_none() && e.connect.is_none() && config::key(&e.path) == config::key(&path)
+            e.frozen.is_none()
+                && e.restore.is_none()
+                && e.connect.is_none()
+                && config::key(&e.path) == config::key(&path)
         }) {
             self.0.remove(i);
         } else {
@@ -488,6 +498,7 @@ impl Queue {
         }) {
             self.0.push(QueueEntry {
                 path: options.project.clone(),
+                frozen: None,
                 restore: Some(options),
                 connect: None,
             });
@@ -503,10 +514,24 @@ impl Queue {
         } else {
             self.0.push(QueueEntry {
                 path: options.project.clone(),
+                frozen: None,
                 restore: None,
                 connect: Some(options),
             });
         }
+    }
+    pub fn preset(items: impl IntoIterator<Item = Options>) -> Self {
+        Self(
+            items
+                .into_iter()
+                .map(|o| QueueEntry {
+                    path: o.project.clone(),
+                    frozen: Some(o),
+                    restore: None,
+                    connect: None,
+                })
+                .collect(),
+        )
     }
 }
 impl FromIterator<PathBuf> for Queue {

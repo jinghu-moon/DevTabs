@@ -66,6 +66,10 @@ fn pane(
     }
 }
 pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
+    if let Some(settings) = &mut app.settings_ui {
+        settings.draw(frame);
+        return;
+    }
     if let Some(viewer) = app.dashboard.viewer.as_mut() {
         frame.render_widget(Block::default().style(style()), frame.area());
         viewer.update_layout(frame.area(), false);
@@ -254,21 +258,103 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                 }
             }
 
+            Dialog::PresetPolicy {
+                name,
+                items,
+                selected,
+            } => {
+                let rect = popup(frame, 90, 14);
+                pane(
+                    frame,
+                    tr_policy("预设会话策略", "Preset conversation policy"),
+                    vec![
+                        Line::from(name.clone()),
+                        Line::from(format!(
+                            "{} · {}",
+                            items.iter().filter(|o| o.resume_id.is_some()).count(),
+                            tr_policy(
+                                "具体会话 ID 仅用于本次启动。选择以后使用的策略：",
+                                "Concrete IDs are invocation-only. Choose a future policy:"
+                            )
+                        )),
+                    ],
+                    rect,
+                    0,
+                );
+                let y = rect.bottom().saturating_sub(5).max(rect.y + 1);
+                let choices = [
+                    tr_policy("续接最近", "Resume latest"),
+                    tr_policy("每次新建", "Start fresh"),
+                    tr_policy("打开会话选择器", "Open conversation picker"),
+                ];
+                for (i, label) in choices.iter().enumerate() {
+                    if y + i as u16 >= rect.bottom().saturating_sub(1) {
+                        break;
+                    }
+                    frame.render_widget(
+                        Paragraph::new(format!(
+                            "{} {}",
+                            if i == *selected { "●" } else { "○" },
+                            label
+                        )),
+                        Rect::new(rect.x + 2, y + i as u16, rect.width.saturating_sub(4), 1),
+                    );
+                }
+                app.dialog_list = Some((
+                    Rect::new(
+                        rect.x + 1,
+                        y,
+                        rect.width.saturating_sub(2),
+                        3.min(rect.bottom().saturating_sub(y + 1)),
+                    ),
+                    0,
+                ));
+            }
             Dialog::Help => {
                 let rect = popup(frame, 100, 24);
                 pane(
                     frame,
                     t("parity.help"),
-                    vec![
-                        Line::from(t("footer")),
-                        Line::from(t("footer2")),
-                        Line::from(t("footer3")),
-                        Line::from(t("parity.help_extra")),
-                        Line::from(t("overview.help_navigation")),
-                        Line::from(t("settings_hint")),
-                        Line::from(t("history_hint")),
-                        Line::from(t("parity.help_limits")),
-                    ],
+                    app.shortcuts
+                        .commands
+                        .iter()
+                        .filter(|c| {
+                            matches!(
+                                c.id,
+                                "overview.help"
+                                    | "overview.note.edit"
+                                    | "overview.project.settings"
+                                    | "overview.refresh"
+                                    | "overview.launch"
+                                    | "overview.options"
+                                    | "overview.queue.toggle"
+                                    | "overview.palette"
+                                    | "overview.presets"
+                                    | "overview.search"
+                                    | "overview.project.expand"
+                                    | "overview.project.collapse"
+                            )
+                        })
+                        .map(|c| {
+                            Line::from(format!(
+                                "{}  {}",
+                                app.shortcuts.preferred(
+                                    c.id,
+                                    if c.context.starts_with("overview.") {
+                                        c.context
+                                    } else {
+                                        "overview"
+                                    }
+                                ),
+                                crate::shortcuts::command_label(c.id)
+                            ))
+                        })
+                        .chain([
+                            Line::from("↑↓/PgUp/PgDn/Home/End · Tab/Shift+Tab"),
+                            Line::from(t("shortcuts")),
+                            Line::from(t("parity.help_limits")),
+                        ])
+                        .collect(),
                     rect,
                     0,
                 );
@@ -328,68 +414,6 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
                     rect,
                     0,
                 )
-            }
-            Dialog::Settings {
-                project,
-                field,
-                debug,
-                arguments,
-                ..
-            } => {
-                let rect = popup(frame, 100, 22);
-                let total = 7 + project.sessions.len() * 3;
-                let mut lines = vec![
-                    Line::from(t("settings_hint")),
-                    info_line(
-                        format!("Alt+M · {}", t("overview.composition")),
-                        project.terminal_composition().label(),
-                    ),
-                    Line::from(""),
-                ];
-                for i in 0..total {
-                    let label = match i {
-                        0 => t("agent").into_owned(),
-                        1 => t("layout").into_owned(),
-                        2 => t("debug").into_owned(),
-                        3 => t("parity.title").into_owned(),
-                        4 => t("parity.color").into_owned(),
-                        5 => t("parity.arguments").into_owned(),
-                        6 => t("parity.continue_latest").into_owned(),
-                        _ => format!(
-                            "{} {} · {}",
-                            t("sessions"),
-                            (i - 7) / 3 + 1,
-                            t(match (i - 7) % 3 {
-                                0 => "name",
-                                1 => "command",
-                                _ => "directory",
-                            })
-                        ),
-                    };
-                    lines.push(Line::from(Span::styled(
-                        format!(
-                            "{} {label}: {}",
-                            if i == *field { "▶" } else { " " },
-                            if i == 5 {
-                                arguments.clone()
-                            } else {
-                                settings_value(project, debug, i)
-                            }
-                        ),
-                        if i == *field {
-                            Style::new().fg(palette().accent)
-                        } else {
-                            Style::new()
-                        },
-                    )));
-                }
-                pane(
-                    frame,
-                    t("settings"),
-                    lines,
-                    rect,
-                    field.saturating_sub(rect.height.saturating_sub(6).max(1) as usize) as u16,
-                );
             }
             Dialog::Options {
                 options,
@@ -923,7 +947,12 @@ pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>>
         .detail_actions
         .push((lines.len(), DetailAction::Note));
     lines.push(section(
-        format!("{}  [Ctrl+F3]", t("overview.next_step")),
+        format!(
+            "{}  [{}]",
+            t("overview.next_step"),
+            app.shortcuts
+                .preferred("overview.note.edit", "overview.projects")
+        ),
         width,
     ));
     lines.extend(if project.note.is_empty() {
@@ -940,7 +969,15 @@ pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>>
     app.dashboard
         .detail_actions
         .push((lines.len(), DetailAction::Options));
-    lines.push(section(format!("{}  [Alt+Enter]", t("options")), width));
+    lines.push(section(
+        format!(
+            "{}  [{}]",
+            t("options"),
+            app.shortcuts
+                .preferred("overview.options", app.dashboard_context())
+        ),
+        width,
+    ));
     lines.push(Line::from(Span::styled(
         opening(&options),
         Style::new().fg(palette().accent),
@@ -1046,9 +1083,11 @@ pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>>
             .push((lines.len(), DetailAction::History));
         lines.push(section(
             format!(
-                "{} · {} [F9]",
+                "{} · {} [{}]",
                 t("overview.sessions"),
-                history.sessions.len()
+                history.sessions.len(),
+                app.shortcuts
+                    .preferred("overview.history", app.dashboard_context())
             ),
             width,
         ));
@@ -1168,7 +1207,12 @@ pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>>
         .detail_actions
         .push((lines.len(), DetailAction::History));
     lines.push(section(
-        format!("{}  [F9]", t("overview.conversation")),
+        format!(
+            "{}  [{}]",
+            t("overview.conversation"),
+            app.shortcuts
+                .preferred("overview.history", app.dashboard_context())
+        ),
         width,
     ));
     let offset = lines.len();
@@ -1515,5 +1559,13 @@ mod tests {
                 }
             });
         }
+    }
+}
+
+fn tr_policy(zh: &str, en: &str) -> String {
+    if crate::i18n::language() == crate::i18n::Language::ZhCn {
+        zh.into()
+    } else {
+        en.into()
     }
 }

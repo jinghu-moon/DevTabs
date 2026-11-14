@@ -113,6 +113,69 @@ fn overlaps(a: &str, b: &str) -> bool {
 pub fn rebase(base: &Value, draft: &Value, latest: &Value) -> Result<Value> {
     merge(Some(base), Some(draft), Some(latest), "")?.context("Cannot delete configuration root")
 }
+/// Explicit conflict resolution: replay only my changes over the latest source.
+/// This is invoked only after the user chooses to retain/re-add their edit.
+pub fn reapply(base: &Value, draft: &Value, latest: &Value) -> Result<Value> {
+    fn replay(
+        b: Option<&Value>,
+        d: Option<&Value>,
+        l: Option<&Value>,
+        path: &str,
+    ) -> Result<Option<Value>> {
+        if b == d {
+            return Ok(l.cloned());
+        }
+        // Choosing Keep mine explicitly re-creates a removed parent/entity,
+        // including its unchanged required identity and snapshot fields.
+        if b.is_some() && d.is_some() && l.is_none() {
+            return Ok(d.cloned());
+        }
+        if let (Some(Value::Table(b)), Some(Value::Table(d))) = (b, d) {
+            let empty = toml::Table::new();
+            let l = l.and_then(Value::as_table).unwrap_or(&empty);
+            let mut out = l.clone();
+            for key in b.keys().chain(d.keys()).collect::<BTreeSet<_>>() {
+                match replay(b.get(key), d.get(key), l.get(key), &join(path, key))? {
+                    Some(v) => {
+                        out.insert(key.clone(), v);
+                    }
+                    None => {
+                        out.remove(key);
+                    }
+                }
+            }
+            return Ok(Some(Value::Table(out)));
+        }
+        if matches!(path, "project" | "preset" | "shortcuts.bindings")
+            && let (Some(d), Some(l)) = (as_array(d), as_array(l))
+        {
+            let empty = vec![];
+            let b = keyed(as_array(b).unwrap_or(&empty), path)?;
+            let d = keyed(d, path)?;
+            let l = keyed(l, path)?;
+            let mut out = vec![];
+            let mut order = d.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>();
+            for (k, _) in &l {
+                if !order.contains(k) {
+                    order.push(k.clone());
+                }
+            }
+            for id in order {
+                if let Some(v) = replay(
+                    find(&b, &id),
+                    find(&d, &id),
+                    find(&l, &id),
+                    &entity_path(path, &id),
+                )? {
+                    out.push(v);
+                }
+            }
+            return Ok(Some(Value::Array(out)));
+        }
+        Ok(d.cloned())
+    }
+    replay(Some(base), Some(draft), Some(latest), "")?.context("Cannot delete root")
+}
 fn join(path: &str, key: &str) -> String {
     if path.is_empty() {
         key.into()
@@ -806,5 +869,84 @@ mod tests {
         );
         assert!(store.save(&saved, &draft).is_err());
         assert_eq!(fs::read(store.path()).unwrap(), original);
+    }
+    #[test]
+    fn rename_reorder_and_parent_deletion_require_explicit_conflict_resolution() {
+        let base = tree(
+            "schema=1\npreset=[{name='a',entries=[1]},{name='b',entries=[2]},{name='c',entries=[3]}]",
+        );
+        let renamed = tree(
+            "schema=1\npreset=[{name='renamed',entries=[1]},{name='b',entries=[2]},{name='c',entries=[3]}]",
+        );
+        let editing = tree(
+            "schema=1\npreset=[{name='a',entries=[9]},{name='b',entries=[2]},{name='c',entries=[3]}]",
+        );
+        assert!(rebase(&base, &editing, &renamed).is_err());
+        let explicit = reapply(&base, &editing, &renamed).unwrap();
+        assert_eq!(
+            explicit["preset"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|v| v.get("name").and_then(Value::as_str) == Some("a"))
+                .unwrap()["entries"][0]
+                .as_integer(),
+            Some(9)
+        );
+        assert_eq!(
+            explicit["preset"].as_array().unwrap().len(),
+            4,
+            "re-adding a removed identity is explicit"
+        );
+        let left = tree(
+            "schema=1\npreset=[{name='b',entries=[2]},{name='a',entries=[1]},{name='c',entries=[3]}]",
+        );
+        let right = tree(
+            "schema=1\npreset=[{name='a',entries=[1]},{name='c',entries=[3]},{name='b',entries=[2]}]",
+        );
+        assert!(rebase(&base, &left, &right).is_err());
+        let root = tree("schema=1\n[launch]\nagent='codex'\nshell='pwsh'");
+        let mine = tree("schema=1\n[launch]\nagent='claude'\nshell='pwsh'");
+        assert!(rebase(&root, &mine, &tree("schema=1")).is_err());
+        assert_eq!(
+            reapply(&root, &mine, &tree("schema=1")).unwrap()["launch"]["agent"].as_str(),
+            Some("claude")
+        );
+    }
+    #[test]
+    fn concurrent_disjoint_saves_merge_under_a_deterministic_barrier() {
+        let f = Fixture::new();
+        f.write("schema=1");
+        let base = f.store().read().unwrap();
+        let ready = std::sync::Arc::new(std::sync::Barrier::new(3));
+        std::thread::scope(|scope| {
+            let one = ready.clone();
+            let a = f.0.clone();
+            let b1 = base.clone();
+            let first = scope.spawn(move || {
+                one.wait();
+                SettingsStore::new(a)
+                    .save(&b1, &tree("schema=1\n[appearance]\ntheme='light'"))
+                    .unwrap();
+            });
+            let two = ready.clone();
+            let b = f.0.clone();
+            let b2 = base.clone();
+            let second = scope.spawn(move || {
+                two.wait();
+                SettingsStore::new(b)
+                    .save(&b2, &tree("schema=1\n[terminal]\nhistory_lines=42"))
+                    .unwrap();
+            });
+            ready.wait();
+            first.join().unwrap();
+            second.join().unwrap();
+        });
+        let saved = f.store().read().unwrap();
+        assert_eq!(saved.effective.terminal.history_lines, Some(42));
+        assert_eq!(
+            saved.effective.appearance.theme,
+            Some(crate::appearance::Theme::Light)
+        );
     }
 }

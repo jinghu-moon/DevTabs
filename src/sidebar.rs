@@ -350,6 +350,7 @@ struct TextDocument {
     editor: Option<crate::editor::Editor>,
 }
 pub struct Document {
+    image_protocol: Option<crate::settings::model::ImageProtocol>,
     content: Content,
     view: features::DocumentView,
     reader: reading::DocumentReading,
@@ -384,6 +385,7 @@ pub struct Document {
 impl Document {
     fn new(path: PathBuf, id: u64) -> Self {
         Self {
+            image_protocol: None,
             content: if preview::image::candidate(&path) {
                 Content::Image(Default::default())
             } else {
@@ -501,6 +503,8 @@ pub struct Sidebar {
     pub read_only: bool,
     explorer: explorer::Explorer,
     preview_defaults: crate::settings::model::Preview,
+    future_image_protocol: Option<crate::settings::model::ImageProtocol>,
+    detected_display: crate::preview::image::Display,
     image_worker: preview::image::Worker,
     image_display: preview::image::Display,
     pub images_occluded: bool,
@@ -563,6 +567,17 @@ struct TreeViewport {
     buffer: ratatui::buffer::Buffer,
 }
 impl Sidebar {
+    pub fn image_status(&self) -> String {
+        format!(
+            "Current renderer: {}; cell={}x{}; measured={}; auto={}. Preference changes apply to new documents; support is not implied.",
+            self.image_display.label(),
+            self.image_display.cell.width,
+            self.image_display.cell.height,
+            !self.image_display.estimated,
+            self.image_display.automatic
+        )
+    }
+
     pub(crate) fn tree_hit(&self, point: (u16, u16)) -> Option<&[Key]> {
         self.tree_view
             .as_ref()
@@ -709,6 +724,8 @@ impl Sidebar {
             shortcuts: crate::shortcuts::Index::current(),
             explorer: explorer::Explorer::new(root.clone()),
             preview_defaults: Default::default(),
+            future_image_protocol: None,
+            detected_display: Default::default(),
             read_only: false,
             image_worker: Default::default(),
             image_display: Default::default(),
@@ -893,6 +910,7 @@ impl Sidebar {
         self.register_tab(&path);
         if let Some(index) = self.tools.parked.iter().position(|d| d.path == path) {
             self.document = Some(self.tools.parked.remove(index));
+            self.configure_images(self.detected_display);
             self.preview_visible = true;
             self.focus = Focus::Preview;
             self.refresh_document()?;
@@ -901,8 +919,10 @@ impl Sidebar {
         self.source_focus = self.focus;
         let mut document = Document::new(path, self.serial);
         document.view.wrap = self.preview_defaults.wrap.unwrap_or(false);
+        document.image_protocol = self.future_image_protocol;
         document.defaults_pending = !self.explorer.defaults_ready;
         self.document = Some(document);
+        self.configure_images(self.detected_display);
         self.restore_reading();
         self.preview_visible = true;
         if focus {
@@ -1695,11 +1715,45 @@ impl Sidebar {
                 (crate::i18n::t("legacy_41"), Command::Close),
             ]);
         }
+        let items = items
+            .into_iter()
+            .map(|(label, command)| {
+                let binding = self.command_binding(command);
+                if binding.is_empty() {
+                    (label, command)
+                } else {
+                    (format!("{label} [{binding}]").into(), command)
+                }
+            })
+            .collect();
         self.menu = Some(Menu {
             items,
             selected: 0,
             target,
         });
+    }
+    fn command_binding(&self, command: Command) -> String {
+        let context = self.shortcut_context();
+        if matches!(command, Command::PreviewSelected) && context == "tree" {
+            return "Enter".into(); // Native tree activation, audited as control navigation.
+        }
+        let id = match (context, command) {
+            ("editor", Command::Save) => "editor.save",
+            ("editor", Command::Undo) => "editor.undo",
+            ("editor", Command::Redo) => "editor.redo",
+            ("editor", Command::CopyContent) => "editor.copy",
+            ("editor", Command::Cut) => "editor.cut",
+            ("editor", Command::Paste) => "editor.paste",
+            ("editor", Command::Find) => "editor.search",
+            (_, Command::ImageRefresh) => "preview.refresh",
+            (_, Command::More) => match context {
+                "tree" => "tree.menu",
+                "editor" => "editor.menu",
+                _ => "preview.menu",
+            },
+            _ => command.id(),
+        };
+        self.shortcuts.preferred(id, context)
     }
     fn command(&mut self, command: Command, target: PathBuf) -> Result<Action> {
         self.execute_at(command.id(), target)
@@ -3121,21 +3175,76 @@ impl Sidebar {
             return self.files.watch_error.clone();
         }
         match self.focus {
-            Focus::Tree => crate::i18n::format("tree_status", &[("path", self.files
-                .selected_path()
-                .unwrap_or_else(|| self.files.root.clone())
-                .display().to_string())]),
+            Focus::Tree => crate::i18n::format(
+                "tree_status",
+                &[
+                    (
+                        "path",
+                        self.files
+                            .selected_path()
+                            .unwrap_or_else(|| self.files.root.clone())
+                            .display()
+                            .to_string(),
+                    ),
+                    ("search", self.shortcuts.preferred("tree.search", "tree")),
+                    ("menu", self.shortcuts.preferred("tree.menu", "tree")),
+                ],
+            ),
             Focus::Preview => self.document.as_ref().map_or(String::new(), |d| {
-                if let Some(i)=d.image(){return format!("{} · 0 Fit · 1 100% · +/- Zoom · Arrows Pan · P Quality · I Info · F2 More{}",d.path.display(),i.fallback.as_ref().map_or(String::new(),|reason|format!(" · {reason}")));}
-                crate::i18n::format("preview_status", &[("progress", d.progress()), ("path", d.path.display().to_string())])
+                if let Some(i) = d.image() {
+                    return crate::i18n::format(
+                        "image_status",
+                        &[
+                            ("path", d.path.display().to_string()),
+                            ("fit", self.command_binding(Command::ImageFit)),
+                            ("actual", self.command_binding(Command::ImageActual)),
+                            ("zoom_in", self.command_binding(Command::ImageZoomIn)),
+                            ("zoom_out", self.command_binding(Command::ImageZoomOut)),
+                            ("quality", self.command_binding(Command::ImageProfile)),
+                            ("info", self.command_binding(Command::Info)),
+                            ("menu", self.command_binding(Command::More)),
+                            (
+                                "fallback",
+                                i.fallback
+                                    .as_ref()
+                                    .map_or(String::new(), |reason| format!(" · {reason}")),
+                            ),
+                        ],
+                    );
+                }
+                crate::i18n::format(
+                    "preview_status",
+                    &[
+                        ("progress", d.progress()),
+                        ("path", d.path.display().to_string()),
+                        ("search", self.command_binding(Command::Search)),
+                        ("mode", self.command_binding(Command::Mode)),
+                        ("outline", self.command_binding(Command::Outline)),
+                        ("back", self.command_binding(Command::Back)),
+                        ("forward", self.command_binding(Command::Forward)),
+                        ("bookmark", self.command_binding(Command::Bookmark)),
+                        ("info", self.command_binding(Command::Info)),
+                        ("menu", self.command_binding(Command::More)),
+                    ],
+                )
             }),
-            Focus::Editor => self
-                .document
-                .as_ref()
-                .and_then(|d| d.editor())
-                .map_or(String::new(), |e| {
-                    crate::i18n::format("editor_status", &[("path", e.loaded.path.display().to_string()), ("status", e.status.clone())])
-                }),
+            Focus::Editor => {
+                self.document
+                    .as_ref()
+                    .and_then(|d| d.editor())
+                    .map_or(String::new(), |e| {
+                        crate::i18n::format(
+                            "editor_status",
+                            &[
+                                ("path", e.loaded.path.display().to_string()),
+                                ("status", e.status.clone()),
+                                ("save", self.command_binding(Command::Save)),
+                                ("search", self.command_binding(Command::Find)),
+                                ("menu", self.command_binding(Command::More)),
+                            ],
+                        )
+                    })
+            }
             _ => String::new(),
         }
     }
@@ -3248,6 +3357,80 @@ pub fn char_at_cell(line: &str, cell: usize) -> usize {
 mod performance_tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
+    #[test]
+    fn menus_and_status_use_effective_bindings_and_hide_disabled_defaults_in_both_languages() {
+        use crate::settings::model::{Binding, Sequence, Shortcuts};
+        let edit = |id: &str, context: &str, remove: &str, add: &str| Binding {
+            command: id.into(),
+            context: context.into(),
+            remove: vec![Sequence::Chord(remove.into())],
+            add: vec![Sequence::Chord(add.into())],
+            disabled: false,
+            preferred: Some(Sequence::Chord(add.into())),
+            notes: Default::default(),
+        };
+        let mut bindings = vec![
+            edit("panel.quick_open", "tree", "Ctrl+P", "Ctrl+J"),
+            edit("panel.rename", "tree", "F4", "Ctrl+R"),
+            edit("tree.search", "tree", "/", "Ctrl+Y"),
+            edit("editor.save", "editor", "Ctrl+S", "Ctrl+Alt+S"),
+            edit("panel.image_fit", "preview.image", "0", "Ctrl+I"),
+        ];
+        bindings.push(Binding {
+            command: "tree.menu".into(),
+            context: "tree".into(),
+            add: vec![],
+            remove: vec![],
+            disabled: true,
+            preferred: None,
+            notes: Default::default(),
+        });
+        let index = crate::shortcuts::Index::build(&Shortcuts {
+            prefix: None,
+            bindings,
+        })
+        .unwrap();
+        for language in [crate::i18n::Language::EnUs, crate::i18n::Language::ZhCn] {
+            crate::i18n::with_language(language, || {
+                let root = PathBuf::from("D:/fixture");
+                let mut s = Sidebar::new(root.clone());
+                s.shortcuts = index.clone();
+                s.focus = Focus::Tree;
+                s.files.state.select(vec![Key::Entry(root.join("a.rs"))]);
+                s.menu();
+                for (command, expected, old) in [
+                    (Command::QuickOpen, "Ctrl+J", "Ctrl+P"),
+                    (Command::Rename, "Ctrl+R", "F4"),
+                ] {
+                    let label = &s
+                        .menu
+                        .as_ref()
+                        .unwrap()
+                        .items
+                        .iter()
+                        .find(|(_, c)| c.id() == command.id())
+                        .unwrap()
+                        .0;
+                    assert!(label.contains(expected), "{label}");
+                    assert!(!label.contains(old), "{label}");
+                }
+                let status = s.status();
+                assert!(status.contains("Ctrl+Y"), "{status}");
+                assert!(
+                    !status.contains("F2"),
+                    "disabled bindings are not advertised"
+                );
+                s.focus = Focus::Editor;
+                assert_eq!(s.command_binding(Command::Save), "Ctrl+Alt+S");
+                let mut image = Document::new(root.join("image.png"), 1);
+                image.content = Content::Image(Default::default());
+                s.document = Some(image);
+                s.focus = Focus::Preview;
+                assert!(s.status().contains("Ctrl+I"));
+                assert!(!s.status().contains("0 Fit"));
+            });
+        }
+    }
     fn draw(s: &mut Sidebar, width: u16) -> Buffer {
         s.update_layout(Rect::new(0, 0, width, 30), false);
         let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
@@ -3579,5 +3762,54 @@ mod performance_tests {
                 (37, 6500)
             );
         }
+    }
+    #[test]
+    fn refreshed_defaults_preserve_the_live_editor_and_apply_to_new_documents() {
+        let root =
+            std::env::temp_dir().join(format!("DevTabs-future-defaults-{}", uuid::Uuid::new_v4()));
+        let mut s = Sidebar::new(root.clone());
+        let mut d = Document::new(root.join("current.md"), 1);
+        d.editing = true;
+        d.view.wrap = false;
+        d.scroll = [(12, 3), (4, 2)];
+        s.document = Some(d);
+        s.configure_images(crate::preview::image::Display::explicit(
+            crate::preview::image::ProtocolChoice::Sixel,
+            Some(crate::preview::image::CellSize {
+                width: 8,
+                height: 16,
+            }),
+        ));
+        let original = s.sidebar_preferences().clone();
+        s.refresh_defaults();
+        s.accept_defaults(crate::explorer::ViewDefaults {
+            sidebar: crate::explorer::Preferences {
+                width: 70,
+                ..Default::default()
+            },
+            hidden: true,
+            ignored: true,
+            preview: crate::settings::model::Preview {
+                wrap: Some(true),
+                markdown_mode: Some(crate::settings::model::MarkdownMode::Source),
+                image_protocol: Some(crate::settings::model::ImageProtocol::Halfblock),
+            },
+        });
+        let d = s.document.as_ref().unwrap();
+        assert!(d.editing);
+        assert!(!d.view.wrap);
+        assert_eq!(d.scroll, [(12, 3), (4, 2)]);
+        assert_eq!(*s.sidebar_preferences(), original);
+        assert_eq!(
+            s.image_display.protocol,
+            crate::preview::image::ProtocolChoice::Sixel
+        );
+        s.document = None;
+        s.open(root.join("next.md"), true).unwrap();
+        assert!(s.document.as_ref().unwrap().view.wrap);
+        assert_eq!(
+            s.image_display.protocol,
+            crate::preview::image::ProtocolChoice::Halfblock
+        );
     }
 }

@@ -48,6 +48,10 @@ impl Chord {
             modifiers |= modifier;
             rest = tail;
         }
+        ensure!(
+            !rest.is_empty(),
+            "Modifier-only system/input-method chords are unsupported; include a main key"
+        );
         let lower = rest.to_ascii_lowercase();
         let code = match lower.as_str() {
             "enter" => KeyCode::Enter,
@@ -346,6 +350,10 @@ pub struct Index {
 }
 fn reachable(declared: &str, actual: &str) -> bool {
     declared == actual
+        || (declared == "app"
+            && (actual == "overview"
+                || actual.starts_with("overview.")
+                || reachable("workspace", actual)))
         || (declared == "overview" && actual.starts_with("overview."))
         || (declared == "panel"
             && (matches!(actual, "tree" | "editor" | "preview") || actual.starts_with("preview.")))
@@ -380,6 +388,35 @@ fn conflict(a: &str, b: &str) -> bool {
         ]
         .iter()
         .any(|c| reachable(a, c) && reachable(b, c))
+}
+pub fn contexts_overlap(a: &str, b: &str) -> bool {
+    conflict(a, b)
+}
+pub fn allowed_contexts(declared: &'static str) -> Vec<&'static str> {
+    let mut out = vec![declared];
+    for context in [
+        "overview",
+        "overview.projects",
+        "overview.tasks",
+        "overview.statistics",
+        "overview.detail",
+        "overview.queue",
+        "workspace",
+        "terminal.input",
+        "panel",
+        "tree",
+        "editor",
+        "preview",
+        "preview.text",
+        "preview.markdown",
+        "preview.image",
+        "preview.diff",
+    ] {
+        if context != declared && reachable(declared, context) {
+            out.push(context);
+        }
+    }
+    out
 }
 impl Index {
     pub fn build(settings: &crate::settings::model::Shortcuts) -> Result<Self> {
@@ -470,33 +507,42 @@ impl Index {
                 if shared.is_empty() {
                     continue;
                 }
-                let explicit = |b: &Binding| {
-                    settings
-                        .bindings
-                        .iter()
-                        .any(|e| e.command == b.command && e.context == b.context)
-                };
-                match (explicit(&bindings[i]), explicit(&bindings[j])) {
-                    (true, false) => {
-                        bindings[j].keys.retain(|s| !shared.contains(s));
-                        diagnostics.push(format!(
-                            "Default {} suppressed by {}",
-                            bindings[j].command, bindings[i].command
-                        ));
+                for key in shared {
+                    let explicit = |b: &Binding| {
+                        settings.bindings.iter().any(|e| {
+                            e.command == b.command
+                                && e.context == b.context
+                                && e.add
+                                    .iter()
+                                    .any(|s| Sequence::parse(s, prefix).is_ok_and(|s| s == key))
+                        })
+                    };
+                    match (explicit(&bindings[i]), explicit(&bindings[j])) {
+                        (true, false) => {
+                            bindings[j].keys.retain(|s| s != &key);
+                            diagnostics.push(format!(
+                                "Default {} suppressed by {} on {}",
+                                bindings[j].command,
+                                bindings[i].command,
+                                key.display()
+                            ));
+                        }
+                        (false, true) => {
+                            bindings[i].keys.retain(|s| s != &key);
+                            diagnostics.push(format!(
+                                "Default {} suppressed by {} on {}",
+                                bindings[i].command,
+                                bindings[j].command,
+                                key.display()
+                            ));
+                        }
+                        _ => bail!(
+                            "Internal conflict: {} / {} on {}",
+                            bindings[i].command,
+                            bindings[j].command,
+                            key.display()
+                        ),
                     }
-                    (false, true) => {
-                        bindings[i].keys.retain(|s| !shared.contains(s));
-                        diagnostics.push(format!(
-                            "Default {} suppressed by {}",
-                            bindings[i].command, bindings[j].command
-                        ));
-                    }
-                    _ => bail!(
-                        "Internal conflict: {} / {} on {}",
-                        bindings[i].command,
-                        bindings[j].command,
-                        shared[0].display()
-                    ),
                 }
             }
         }
@@ -545,6 +591,7 @@ impl Index {
     }
     pub fn preferred(&self, id: &str, context: &str) -> String {
         self.binding(id, context)
+            .filter(|b| !b.disabled)
             .and_then(|b| {
                 b.preferred
                     .as_ref()
@@ -684,6 +731,7 @@ pub fn workspace_menu_command(key: char) -> Option<&'static str> {
         'y' => Some("terminal.selection.copy"),
         'q' => Some("workspace.quit"),
         ',' => Some("settings.workspace.open"),
+        '*' => Some("shortcuts.open"),
         _ => None,
     }
 }
@@ -709,6 +757,50 @@ fn catalog(prefix: Chord) -> Vec<Command> {
             repeat,
         });
     };
+    for (id, context, keys) in [
+        ("overview.activate", "overview.projects", vec!["Enter"]),
+        ("overview.quit", "overview", vec!["Esc"]),
+        ("overview.search", "overview", vec!["/"]),
+        ("overview.queue.toggle", "overview.projects", vec!["Space"]),
+        ("overview.queue.open", "overview.queue", vec!["Enter"]),
+        ("overview.queue.delete", "overview.queue", vec!["Delete"]),
+        ("overview.queue.undo", "overview", vec!["Ctrl+Z"]),
+        ("overview.agent.next", "overview.projects", vec!["Right"]),
+        ("overview.agent.previous", "overview.projects", vec!["Left"]),
+        (
+            "overview.project.expand",
+            "overview.projects",
+            vec!["Alt+Right"],
+        ),
+        (
+            "overview.project.collapse",
+            "overview.projects",
+            vec!["Alt+Left"],
+        ),
+        (
+            "overview.statistics.period",
+            "overview.statistics",
+            vec!["Y", "Shift+Y"],
+        ),
+        (
+            "overview.statistics.expand",
+            "overview.statistics",
+            vec!["Z", "Shift+Z"],
+        ),
+        (
+            "overview.detail.expand",
+            "overview.detail",
+            vec!["E", "Shift+E"],
+        ),
+        ("overview.detail.activate", "overview.detail", vec!["Enter"]),
+        (
+            "overview.statistics.activate",
+            "overview.statistics",
+            vec!["Enter"],
+        ),
+    ] {
+        add(id, context, &keys, false);
+    }
     for (id, key) in [
         ("overview.help", "F1"),
         ("overview.favorite", "F2"),
@@ -923,5 +1015,160 @@ fn catalog(prefix: Chord) -> Vec<Command> {
         preferred: 0,
         repeat: false,
     });
+    out.push(Command {
+        id: "shortcuts.open",
+        context: "app",
+        label: "Manage shortcuts",
+        defaults: vec![],
+        preferred: 0,
+        repeat: false,
+    });
     out
+}
+
+pub fn command_label(id: &str) -> String {
+    if crate::i18n::language() != crate::i18n::Language::ZhCn {
+        return id.replace('.', " / ").replace('_', " ");
+    }
+    id.split('.')
+        .map(|word| match word {
+            "app" => "应用",
+            "overview" => "总览",
+            "activate" => "打开项目",
+            "axis" => "排列方向",
+            "back" => "后退",
+            "close_others" => "关闭其他标签",
+            "close_right" => "关闭右侧标签",
+            "collapse" => "收起",
+            "compact" => "紧凑目录",
+            "compare" => "源码对照",
+            "copy_absolute" => "复制绝对路径",
+            "copy_content" => "复制内容",
+            "copy_relative" => "复制相对路径",
+            "copy_selection" => "复制选区",
+            "copy_source" => "复制源码",
+            "delete" => "删除",
+            "detail" => "详情",
+            "diff" => "文件差异",
+            "end_edit" => "结束编辑",
+            "expand" => "展开",
+            "external" => "使用外部应用打开",
+            "follow" => "跟随当前文件",
+            "forward" => "前进",
+            "goto" => "跳转位置",
+            "hidden" => "隐藏文件",
+            "icons" => "文件图标",
+            "ignored" => "忽略文件",
+            "image" => "图片",
+            "image_actual" => "图片原始大小",
+            "image_fit" => "适应图片",
+            "image_profile" => "图片质量",
+            "image_protocol" => "图片协议",
+            "image_refresh" => "刷新图片",
+            "image_zoom_in" => "放大图片",
+            "image_zoom_out" => "缩小图片",
+            "info" => "文件信息",
+            "input" => "输入区",
+            "locate" => "定位文件",
+            "markdown" => "Markdown",
+            "maximize" => "最大化",
+            "modified" => "仅修改文件",
+            "more" => "更多操作",
+            "new_directory" => "新建目录",
+            "new_file" => "新建文件",
+            "next_tab" => "下一标签",
+            "outline" => "标题大纲",
+            "path" => "路径",
+            "period" => "统计周期",
+            "preview_selected" => "预览选中文件",
+            "previous_tab" => "上一标签",
+            "projects" => "项目列表",
+            "queue" => "启动队列",
+            "quick_open" => "快速打开",
+            "release" => "释放目录缓存",
+            "rename" => "重命名",
+            "reveal" => "在资源管理器中显示",
+            "search" => "搜索",
+            "tasks" => "任务列表",
+            "text" => "文本",
+            "trash" => "移入回收站",
+            "workspace" => "工作区",
+            "terminal" => "终端",
+            "panel" => "文件面板",
+            "editor" => "编辑器",
+            "preview" => "预览",
+            "tree" => "文件树",
+            "settings" => "设置",
+            "shortcuts" => "快捷键",
+            "note" => "便签",
+            "edit" => "编辑",
+            "help" => "帮助",
+            "favorite" => "收藏",
+            "refresh" => "刷新",
+            "filter" => "筛选",
+            "sort" => "排序",
+            "statistics" => "统计",
+            "history" => "会话历史",
+            "details" => "详情",
+            "launch" => "启动",
+            "options" => "本次选项",
+            "new_project" => "新建项目",
+            "presets" => "启动预设",
+            "preset" => "预设",
+            "project" => "项目",
+            "root" => "根目录",
+            "add" => "添加",
+            "exclude" => "排除",
+            "save" => "保存",
+            "language" => "语言",
+            "theme" => "主题",
+            "next" => "下一个",
+            "previous" => "上一个",
+            "copy_path" => "复制路径",
+            "palette" => "命令面板",
+            "select_all" => "全选",
+            "attention" => "需处理",
+            "files" => "文件",
+            "toggle" => "切换",
+            "zoom" => "放大",
+            "menu" => "菜单",
+            "task" => "任务",
+            "new" => "新建",
+            "review" => "审阅",
+            "resources" => "资源",
+            "pin" => "固定",
+            "replace" => "替换",
+            "agent" => "Agent",
+            "debug" => "Debug",
+            "focus" => "聚焦",
+            "insert" => "插入路径",
+            "restart" => "重启",
+            "fresh" => "新会话",
+            "layout" => "布局",
+            "detach" => "脱离",
+            "popup" => "浮层",
+            "move" => "移动",
+            "session" => "会话",
+            "interrupt" => "中断",
+            "force" => "强制停止",
+            "selection" => "选区",
+            "copy" => "复制",
+            "quit" => "退出",
+            "open" => "打开",
+            "send_prefix" => "发送前缀原键",
+            "match" => "搜索匹配",
+            "find" => "查找",
+            "undo" => "撤销",
+            "redo" => "重做",
+            "cut" => "剪切",
+            "paste" => "粘贴",
+            "close" => "关闭",
+            "wrap" => "自动换行",
+            "mode" => "模式",
+            "bookmark" => "书签",
+            "bookmarks" => "书签列表",
+            _ => word,
+        })
+        .collect::<Vec<_>>()
+        .join(" · ")
 }

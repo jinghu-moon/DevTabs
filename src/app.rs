@@ -44,6 +44,7 @@ pub struct SelectionView {
 }
 
 pub struct App {
+    pub(crate) settings_ui: Option<crate::settings::ui::SettingsUi>,
     pub(crate) parallel: parallel::State,
     pub options: Options,
     pub sessions: Vec<Client>,
@@ -121,6 +122,7 @@ impl App {
             })
             .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
         let mut app = Self {
+            settings_ui: None,
             parallel: parallel::State {
                 view_leases: Some(view_leases),
                 tasks: info.tasks,
@@ -310,6 +312,7 @@ impl App {
         let active = self.sidebar_active();
         if let Some(sidebar) = &mut self.sidebar {
             sidebar.images_occluded = self.mode != Mode::Normal
+                || self.settings_ui.is_some()
                 || self.terminal_menu.is_some()
                 || self.parallel.dialog.is_some()
                 || self.parallel.review.open
@@ -766,7 +769,8 @@ impl App {
             .map_or("terminal.input", |s| s.shortcut_context())
     }
     fn input_context(&self) -> u64 {
-        (self.parallel.review.open as u64)
+        ((self.settings_ui.is_some() as u64) << 12)
+            | (self.parallel.review.open as u64)
             | ((self.parallel.dialog.is_some() as u64) << 1)
             | ((self.terminal_menu.is_some() as u64) << 2)
             | ((self.mode as u64) << 3)
@@ -787,6 +791,9 @@ impl App {
         let context = self.input_context();
         let raw = native.as_deref().and_then(RawKey::parse);
         if let Some(raw) = &raw {
+            if let Some(ui) = &mut self.settings_ui {
+                ui.observe_raw(raw);
+            }
             match self.key_ledger.existing(raw, context) {
                 Existing::Consume => return,
                 Existing::Forward { target, wire } => {
@@ -855,6 +862,24 @@ impl App {
             return;
         }
         match id {
+            "shortcuts.open" => {
+                self.execute_command("settings.workspace.open");
+                if let Some(ui) = &mut self.settings_ui {
+                    ui.shortcuts_page();
+                }
+            }
+            "settings.workspace.open" => {
+                self.balance_keys();
+                self.settings_ui = Some(crate::settings::ui::SettingsUi::open(Some(
+                    self.sessions[self.focus].info.task.initial_cwd.clone(),
+                )));
+                if let Some(ui) = &mut self.settings_ui {
+                    ui.can_queue = false;
+                    if let Some(sidebar) = &self.sidebar {
+                        ui.image_status = sidebar.image_status();
+                    }
+                }
+            }
             "workspace.files.toggle" => self.toggle_file_panel(),
             "workspace.zoom" => self.toggle_zoom(),
             "workspace.terminal.menu" => self.terminal_menu = Some(self.focus),
@@ -1025,6 +1050,17 @@ impl App {
         }
     }
     fn route_key(&mut self, key: KeyEvent, native: Option<Vec<u8>>, repeat: usize) {
+        if let Some(ui) = &mut self.settings_ui {
+            match ui.key(key) {
+                Ok(crate::settings::ui::Outcome::Closed) => {
+                    self.settings_ui = None;
+                    self.shortcuts = crate::shortcuts::Index::current();
+                }
+                Err(e) => ui.error = Some(format!("{e:#}")),
+                _ => {}
+            }
+            return;
+        }
         if self.parallel.review.open {
             self.review_key(key);
             return;
@@ -1307,6 +1343,17 @@ impl App {
         }
     }
     fn mouse(&mut self, event: MouseEvent) {
+        if let Some(ui) = &mut self.settings_ui {
+            match ui.mouse(event) {
+                Ok(crate::settings::ui::Outcome::Closed) => {
+                    self.settings_ui = None;
+                    self.shortcuts = crate::shortcuts::Index::current();
+                }
+                Err(e) => ui.error = Some(format!("{e:#}")),
+                _ => {}
+            }
+            return;
+        }
         if self.file_dragging() && self.files_mouse(event) {
             return;
         }
@@ -1472,6 +1519,9 @@ impl App {
         let was_index = self.focus;
         let event = input.event;
         match event {
+            Event::Paste(text) if self.settings_ui.is_some() => {
+                self.settings_ui.as_mut().unwrap().paste(&text);
+            }
             Event::Paste(text) if self.parallel.dialog.is_some() => self.task_paste(&text),
             Event::Key(key) => self.key(key, input.win32, input.repeat),
             Event::Mouse(mouse) if self.mode != Mode::Confirm => self.mouse(mouse),
@@ -1517,10 +1567,18 @@ impl App {
             }
             Event::FocusGained | Event::FocusLost => {
                 if event == Event::FocusGained {
+                    if let Some(ui) = &mut self.settings_ui {
+                        ui.reload();
+                    }
                     self.key_ledger.focus();
                     self.shortcuts = crate::shortcuts::Index::current();
+                    for s in self.parallel.sidebars.values_mut() {
+                        s.shortcuts = self.shortcuts.clone();
+                        s.refresh_defaults();
+                    }
                     if let Some(s) = &mut self.sidebar {
                         s.shortcuts = self.shortcuts.clone();
+                        s.refresh_defaults();
                         if let Some(e) = s.document.as_mut().and_then(|d| d.editor_mut()) {
                             e.shortcuts = self.shortcuts.clone();
                         }
@@ -1616,6 +1674,36 @@ pub fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
     let mut changed = true;
     let mut finished = None;
     loop {
+        if let Some(ui) = &mut app.settings_ui
+            && let Some(result) = ui.tick()
+        {
+            if matches!(result, crate::settings::ui::Outcome::Closed) {
+                app.settings_ui = None;
+            }
+            app.shortcuts = crate::shortcuts::Index::current();
+            for s in app.parallel.sidebars.values_mut() {
+                s.shortcuts = app.shortcuts.clone();
+                if matches!(
+                    result,
+                    crate::settings::ui::Outcome::Saved | crate::settings::ui::Outcome::Closed
+                ) {
+                    s.refresh_defaults();
+                }
+            }
+            if let Some(sidebar) = &mut app.sidebar {
+                sidebar.shortcuts = app.shortcuts.clone();
+                if matches!(
+                    result,
+                    crate::settings::ui::Outcome::Saved | crate::settings::ui::Outcome::Closed
+                ) {
+                    sidebar.refresh_defaults();
+                }
+                if let Some(editor) = sidebar.document.as_mut().and_then(|d| d.editor_mut()) {
+                    editor.shortcuts = app.shortcuts.clone();
+                }
+            }
+            changed = true;
+        }
         changed |= app.task_tick();
         changed |= app.review_tick();
         changed |= app.files_tick();

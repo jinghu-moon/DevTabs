@@ -155,6 +155,14 @@ impl Drop for ConfigLock {
 }
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     fs::create_dir_all(path.parent().context("Missing parent directory")?)?;
+    // Rust's filesystem APIs support long Windows paths, while the raw Win32
+    // replacement call needs the extended absolute path explicitly. Resolve
+    // the existing parent because the destination need not exist yet.
+    #[cfg(windows)]
+    let resolved = fs::canonicalize(path.parent().context("Missing parent directory")?)?
+        .join(path.file_name().context("Missing file name")?);
+    #[cfg(windows)]
+    let path = resolved.as_path();
     let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
     {
         use std::io::Write;
@@ -191,8 +199,9 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
             )
         } == 0
         {
+            let error = std::io::Error::last_os_error();
             let _ = fs::remove_file(&temporary);
-            return Err(std::io::Error::last_os_error()).context("Replace configuration");
+            return Err(error).context("Replace configuration");
         }
     }
     #[cfg(not(windows))]
@@ -209,6 +218,39 @@ pub fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(windows)]
+    fn atomic_replace_supports_long_paths_and_preserves_the_original_win32_error() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = std::env::temp_dir().join(format!("DevTabs-atomic-{}", uuid::Uuid::new_v4()));
+        let parent = root.join("a".repeat(100)).join("b".repeat(100));
+        let file = parent.join("preferences.toml");
+        assert!(file.as_os_str().len() > 260);
+        atomic_write(&file, b"first").unwrap();
+        atomic_write(&file, b"second").unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"second");
+        let locked = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(3)
+            .open(&file)
+            .unwrap();
+        let error = atomic_write(&file, b"rejected").unwrap_err();
+        let original = error.downcast_ref::<std::io::Error>().unwrap();
+        assert!(
+            matches!(original.raw_os_error(), Some(5 | 32)),
+            "the locked destination's access/sharing error must survive cleanup: {original}"
+        );
+        assert_eq!(fs::read(&file).unwrap(), b"second");
+        assert_eq!(
+            fs::read_dir(&parent).unwrap().count(),
+            1,
+            "failed temporary file is cleaned up"
+        );
+        drop(locked);
+        atomic_write(&file, b"retry").unwrap();
+        assert_eq!(fs::read(&file).unwrap(), b"retry");
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn shared_config_lock_depends_only_on_data_directory() {
         let a = lock_name(Path::new("D:/DevTabs/data"));

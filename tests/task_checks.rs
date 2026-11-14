@@ -4,6 +4,70 @@ mod support;
 use devtabs::checks::Spec;
 use std::fs;
 #[test]
+fn revision_hash_reads_nested_untracked_files_and_ignores_ignored_tree_badges() {
+    let f = support::Fixture::new();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&f.0)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "--quiet"]);
+    fs::write(f.0.join(".gitignore"), "ignored/\n").unwrap();
+    fs::write(f.0.join("tracked"), "original").unwrap();
+    git(&["add", "."]);
+    git(&[
+        "-c",
+        "user.name=fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "--quiet",
+        "-m",
+        "baseline",
+    ]);
+    let hash = || devtabs::checks::fingerprint(&f.0).unwrap();
+    let clean = hash();
+    fs::create_dir_all(f.0.join("ignored/nested")).unwrap();
+    fs::write(f.0.join("ignored/nested/file"), "ignored").unwrap();
+    assert_eq!(
+        hash(),
+        clean,
+        "ignored file-tree directory badges are not revision files"
+    );
+    fs::create_dir_all(f.0.join("new/nested")).unwrap();
+    let untracked = f.0.join("new/nested/file");
+    fs::write(&untracked, "one").unwrap();
+    let first = hash();
+    assert_ne!(first, clean);
+    fs::write(&untracked, "two").unwrap();
+    let second = hash();
+    assert_ne!(second, first, "nested untracked content is hashed");
+    fs::rename(f.0.join("tracked"), f.0.join("renamed")).unwrap();
+    git(&["add", "tracked", "renamed"]);
+    let renamed = hash();
+    assert_ne!(
+        renamed, second,
+        "staged rename and removed path are represented"
+    );
+    fs::write(f.0.join("renamed"), "worktree edit").unwrap();
+    assert_ne!(
+        hash(),
+        renamed,
+        "unstaged edit over the index is represented"
+    );
+}
+
+#[test]
 fn checks_run_in_explicit_cwd_and_mark_a_mutating_check_stale_without_using_agent_input() {
     let f = support::Fixture::new();
     fs::write(f.0.join("a.txt"), "before").unwrap();

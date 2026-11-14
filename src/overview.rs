@@ -48,6 +48,7 @@ enum Command {
     Group,
     Launch,
     SavePreset,
+    Shortcuts,
     Presets,
     SelectAll,
     NewProject,
@@ -91,6 +92,7 @@ impl Command {
             Self::Add => Some("overview.project.add"),
             Self::Exclude => Some("overview.project.exclude"),
             Self::SavePreset => Some("overview.preset.save"),
+            Self::Shortcuts => Some("shortcuts.open"),
             Self::CopyPath => Some("overview.copy_path"),
             Self::SelectAll => Some("overview.select_all"),
             Self::Language(_) => Some("overview.language.next"),
@@ -122,13 +124,6 @@ enum Dialog {
         selected: usize,
     },
     Input(Input, String),
-    Settings {
-        path: PathBuf,
-        project: Project,
-        field: usize,
-        debug: String,
-        arguments: String,
-    },
     Options {
         options: Options,
         new_tab: bool,
@@ -158,8 +153,14 @@ enum Dialog {
         selected: usize,
     },
     Diagnostics,
+    PresetPolicy {
+        name: String,
+        items: Vec<Options>,
+        selected: usize,
+    },
 }
 pub struct Overview {
+    settings_ui: Option<crate::settings::ui::SettingsUi>,
     shortcuts: crate::shortcuts::Index,
     shortcut_router: crate::shortcuts::Router,
     config: Config,
@@ -169,6 +170,7 @@ pub struct Overview {
     profiles: BTreeMap<String, Project>,
     profile_errors: BTreeMap<String, String>,
     staged: BTreeMap<String, Options>,
+    editing_queue: Option<usize>,
     changed_defaults: BTreeSet<String>,
     recovery: crate::recovery::Journal,
     filter_hits: Vec<(Rect, model::Filter)>,
@@ -223,6 +225,7 @@ impl Overview {
         let show_detail = config.overview.detail.unwrap_or(true);
         let show_stats = config.overview.statistics.unwrap_or(true);
         Self {
+            settings_ui: None,
             shortcuts: crate::shortcuts::Index::load(
                 &config
                     .source
@@ -240,6 +243,7 @@ impl Overview {
             profiles: BTreeMap::new(),
             profile_errors: BTreeMap::new(),
             staged: BTreeMap::new(),
+            editing_queue: None,
             changed_defaults: BTreeSet::new(),
             recovery: Default::default(),
             filter_hits: vec![],
@@ -612,6 +616,13 @@ impl Overview {
             .staged
             .get(&config::key(path))
             .cloned()
+            .or_else(|| {
+                self.marked
+                    .0
+                    .iter()
+                    .find(|e| config::key(&e.path) == config::key(path))
+                    .and_then(|e| e.frozen.clone())
+            })
             .unwrap_or_else(|| self.launch_spec(path).options());
         if let Some(Row::Session(p, agent, id)) = self.rows.get(self.selected)
             && config::key(p) == config::key(path)
@@ -717,6 +728,7 @@ impl Overview {
                 e.restore
                     .clone()
                     .or_else(|| e.connect.clone())
+                    .or_else(|| e.frozen.clone())
                     .unwrap_or_else(|| self.options_for(&e.path))
             })
             .collect()
@@ -1244,7 +1256,7 @@ impl Overview {
             ("overview.native", "", Command::NativePicker, available),
             ("favorite", "F2", Command::Favorite, available),
             ("edit_note", "Ctrl+F3", Command::Note, available),
-            ("settings", "F4", Command::Settings, available),
+            ("settings", "F4", Command::Settings, true),
             (
                 "history",
                 "F9",
@@ -1283,6 +1295,7 @@ impl Overview {
                         .any(|i| matches!(i.state, LaunchState::Failed(_))),
             ),
             ("parity.help", "F1", Command::Help, true),
+            ("shortcuts", "", Command::Shortcuts, true),
             (
                 "parity.select_all",
                 "Ctrl+Shift+A",
@@ -1456,6 +1469,9 @@ impl Overview {
                         return Ok(Outcome::Current(Box::new(options)));
                     }
                     if matches!(command, Command::Options) {
+                        self.editing_queue = self.marked.0.iter().position(|e| {
+                            e.frozen.is_some() && config::key(&e.path) == config::key(&p)
+                        });
                         self.dialog = Some(Dialog::Options {
                             options,
                             new_tab: true,
@@ -1635,24 +1651,13 @@ impl Overview {
                     self.dialog = Some(Dialog::Input(Input::Note(p, value.clone()), value))
                 }
             }
+            Command::Shortcuts => {
+                let mut ui = crate::settings::ui::SettingsUi::open(None);
+                ui.shortcuts_page();
+                self.settings_ui = Some(ui);
+            }
             Command::Settings => {
-                if let Some(path) = path {
-                    let project = self
-                        .profiles
-                        .get(&config::key(&path))
-                        .or_else(|| self.config.projects.get(&config::key(&path)))
-                        .cloned()
-                        .unwrap_or_default();
-                    let debug = project.debug_command.clone().unwrap_or_default();
-                    let arguments = serde_json::to_string(&project.agent_args)?;
-                    self.dialog = Some(Dialog::Settings {
-                        path,
-                        arguments,
-                        project,
-                        field: 0,
-                        debug,
-                    })
-                }
+                self.settings_ui = Some(crate::settings::ui::SettingsUi::open(path));
             }
             Command::History => {
                 if let Some(p) = path {
@@ -1742,11 +1747,7 @@ impl Overview {
             }
             Command::Preset(name) => {
                 let items = self.config.presets.get(&name).cloned().unwrap_or_default();
-                self.marked = items.iter().map(|s| s.project.clone()).collect();
-                self.staged = items
-                    .iter()
-                    .map(|s| (config::key(&s.project), s.options()))
-                    .collect();
+                self.marked = model::Queue::preset(items.iter().map(LaunchSpec::options));
                 self.config.overview.collapsed.clear();
                 self.query.clear();
                 self.rebuild();
@@ -1828,7 +1829,7 @@ impl Overview {
         let result = self.key_inner(w, key);
         if result.is_ok()
             && self.edit_serial > before
-            && let Some(form @ (Dialog::Input(..) | Dialog::Settings { .. })) = original.clone()
+            && let Some(form @ (Dialog::Input(..) | Dialog::PresetPolicy { .. })) = original.clone()
         {
             self.pending_forms.insert(self.edit_serial, form);
         }
@@ -1839,6 +1840,16 @@ impl Overview {
     }
     fn key_inner(&mut self, w: &Workers, key: KeyEvent) -> Result<Outcome> {
         self.dirty = true;
+        if let Some(ui) = &mut self.settings_ui {
+            match ui.key(key) {
+                Ok(crate::settings::ui::Outcome::Closed) => {
+                    self.settings_ui = None;
+                }
+                Err(e) => ui.error = Some(format!("{e:#}")),
+                _ => {}
+            }
+            return Ok(Outcome::Stay);
+        }
         if let Some(outcome) = self.dashboard_key(w, key)? {
             return Ok(outcome);
         }
@@ -1957,8 +1968,43 @@ impl Overview {
                         _ => {}
                     }
                 }
+                Dialog::PresetPolicy {
+                    name,
+                    items,
+                    selected,
+                } => match key.code {
+                    KeyCode::Up => *selected = selected.saturating_sub(1),
+                    KeyCode::Down => *selected = (*selected + 1).min(2),
+                    KeyCode::Enter => {
+                        for o in items.iter_mut().filter(|o| o.resume_id.is_some()) {
+                            o.resume_id = None;
+                            o.continue_latest = *selected == 0;
+                            o.fresh = *selected == 1;
+                            o.resume = *selected == 2;
+                        }
+                        self.edit(
+                            w,
+                            Edit::Preset(
+                                name.clone(),
+                                items.iter().map(LaunchSpec::from_options).collect(),
+                            ),
+                        )?;
+                        keep = false;
+                    }
+                    _ => {}
+                },
                 Dialog::Input(kind, value) => match key.code {
                     KeyCode::Enter => {
+                        if matches!(kind, Input::Preset)
+                            && self.queue_options().iter().any(|o| o.resume_id.is_some())
+                        {
+                            self.dialog = Some(Dialog::PresetPolicy {
+                                name: value.clone(),
+                                items: self.queue_options(),
+                                selected: 0,
+                            });
+                            return Ok(Outcome::Stay);
+                        }
                         let edit = match kind {
                             Input::NewProject(root) => {
                                 Edit::NewProject(root.clone(), value.clone())
@@ -1985,106 +2031,6 @@ impl Overview {
                             && value.len() < 32768 =>
                     {
                         value.push(c)
-                    }
-                    _ => {}
-                },
-                Dialog::Settings {
-                    path,
-                    project,
-                    field,
-                    debug,
-                    arguments,
-                } => match key.code {
-                    KeyCode::Tab | KeyCode::Down => {
-                        *field = (*field + 1) % (7 + project.sessions.len() * 3)
-                    }
-                    KeyCode::BackTab | KeyCode::Up => {
-                        *field = (*field + 6 + project.sessions.len() * 3)
-                            % (7 + project.sessions.len() * 3)
-                    }
-                    KeyCode::Left | KeyCode::Right if *field == 6 => {
-                        project.resume_latest = match project.resume_latest {
-                            None => Some(true),
-                            Some(true) => Some(false),
-                            Some(false) => None,
-                        };
-                    }
-                    KeyCode::Left | KeyCode::Right if *field < 2 => {
-                        if *field == 0 {
-                            project.agent = match project.agent {
-                                None => Some(Agent::Codex),
-                                Some(Agent::Codex) => Some(Agent::Claude),
-                                Some(Agent::Claude) => Some(Agent::Shell),
-                                _ => None,
-                            }
-                        } else {
-                            project.layout = match project.layout {
-                                None => Some(Layout::Float),
-                                Some(Layout::Float) => Some(Layout::Split),
-                                Some(Layout::Split) => Some(Layout::Tabs),
-                                _ => None,
-                            }
-                        }
-                    }
-                    KeyCode::Char('m' | 'M') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        project.composition = Some(project.terminal_composition().next());
-                    }
-                    KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::ALT) => {
-                        anyhow::ensure!(project.sessions.len() < 16, "{}", t("input_long"));
-                        project.composition = Some(crate::launch::Composition::Custom);
-                        project.sessions.push(crate::config::SessionConfig {
-                            name: format!("Session {}", project.sessions.len() + 1),
-                            command: None,
-                            directory: None,
-                        });
-                        *field = 7 + (project.sessions.len() - 1) * 3;
-                    }
-                    KeyCode::Char('d')
-                        if key.modifiers.contains(KeyModifiers::CONTROL) && *field >= 7 =>
-                    {
-                        project.sessions.remove((*field - 7) / 3);
-                        *field = (*field).min(6 + project.sessions.len() * 3);
-                    }
-                    KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        project.debug_command = (!debug.trim().is_empty()).then(|| debug.clone());
-                        project.agent_args = serde_json::from_str(arguments)
-                            .map_err(|e| anyhow::anyhow!("{}: {e}", t("parity.arguments")))?;
-                        model::validate_settings(project)?;
-                        self.edit(w, Edit::Settings(path.clone(), project.clone()))?;
-                        keep = false;
-                    }
-                    KeyCode::Backspace if *field >= 2 => {
-                        let mut value = if *field == 5 {
-                            arguments.clone()
-                        } else {
-                            settings_value(project, debug, *field)
-                        };
-                        value.pop();
-                        if *field == 5 {
-                            *arguments = value;
-                        } else {
-                            set_settings_value(project, debug, *field, value);
-                        }
-                    }
-                    KeyCode::Char(c)
-                        if *field >= 2
-                            && !key
-                                .modifiers
-                                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        let mut value = if *field == 5 {
-                            arguments.clone()
-                        } else {
-                            settings_value(project, debug, *field)
-                        };
-                        if value.len() + c.len_utf8() <= 32768 {
-                            value.push(c);
-                            if *field == 5 {
-                                *arguments = value;
-                            } else {
-                                set_settings_value(project, debug, *field, value);
-                            }
-                        }
                     }
                     _ => {}
                 },
@@ -2151,10 +2097,18 @@ impl Overview {
                         options.resume_id = None;
                     }
                     KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        self.staged
-                            .insert(config::key(&options.project), options.clone());
-                        if !self.marked.contains(&options.project) {
-                            self.marked.push(options.project.clone());
+                        if let Some(i) = self.editing_queue.take().filter(|i| {
+                            self.marked.0.get(*i).is_some_and(|e| {
+                                config::key(&e.path) == config::key(&options.project)
+                            })
+                        }) {
+                            self.marked.0[i].frozen = Some(options.clone());
+                        } else {
+                            self.staged
+                                .insert(config::key(&options.project), options.clone());
+                            if !self.marked.contains(&options.project) {
+                                self.marked.push(options.project.clone());
+                            }
                         }
                         self.message = t("parity.options_staged").into_owned();
                         keep = false;
@@ -2340,6 +2294,17 @@ impl Overview {
                 Dialog::Queue { selected } => {
                     *selected = (*selected).min(self.marked.len().saturating_sub(1));
                     match key.code {
+                        KeyCode::Enter if key.modifiers == KeyModifiers::NONE => {
+                            if let Some(options) = self.queue_options().get(*selected).cloned() {
+                                self.editing_queue = Some(*selected);
+                                self.dialog = Some(Dialog::Options {
+                                    options,
+                                    new_tab: true,
+                                    editing: None,
+                                });
+                                keep = false;
+                            }
+                        }
                         KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
                             self.start(w, self.queue_options())?;
                             keep = false;
@@ -2396,11 +2361,6 @@ impl Overview {
             }
             return Ok(Outcome::Stay);
         }
-        if let crate::shortcuts::Resolution::Execute(id) =
-            self.shortcut_router.route(&self.shortcuts, "overview", key)
-        {
-            return self.execute_shortcut(w, id);
-        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let command = match key.code {
             KeyCode::Esc if !self.query.is_empty() => {
@@ -2412,19 +2372,6 @@ impl Overview {
                 self.dashboard.overlay = None;
                 w.ticket();
                 self.detail_pending = false;
-                None
-            }
-            KeyCode::Esc => Some(Command::Quit),
-            KeyCode::Enter => {
-                if matches!(self.rows.get(self.selected), Some(Row::Group(_))) {
-                    Some(Command::Group)
-                } else {
-                    Some(Command::Open)
-                }
-            }
-            KeyCode::Left | KeyCode::Right => Some(Command::Group),
-            KeyCode::Char(' ') if !ctrl => {
-                self.toggle_selected_queue();
                 None
             }
             KeyCode::Up => {
@@ -2480,12 +2427,16 @@ impl Overview {
         }
     }
     fn execute_shortcut(&mut self, w: &Workers, id: &str) -> Result<Outcome> {
+        if let Some(outcome) = self.dashboard_command(w, id)? {
+            return Ok(outcome);
+        }
         let command = match id {
             "overview.attention" => Command::Attention,
             "overview.help" => Command::Help,
             "overview.select_all" => Command::SelectAll,
             "overview.new_project" => Command::NewProject,
             "overview.presets" => Command::Presets,
+            "shortcuts.open" => Command::Shortcuts,
             "overview.favorite" => Command::Favorite,
             "overview.note.edit" => Command::Note,
             "overview.project.settings" => Command::Settings,
@@ -2534,6 +2485,16 @@ impl Overview {
     }
     fn mouse(&mut self, w: &Workers, mouse: crossterm::event::MouseEvent) -> Result<Outcome> {
         self.dirty = true;
+        if let Some(ui) = &mut self.settings_ui {
+            match ui.mouse(mouse) {
+                Ok(crate::settings::ui::Outcome::Closed) => {
+                    self.settings_ui = None;
+                }
+                Err(e) => ui.error = Some(format!("{e:#}")),
+                _ => {}
+            }
+            return Ok(Outcome::Stay);
+        }
         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
             && let Some(text) = self.code_copy_at((mouse.column, mouse.row).into())
         {
@@ -2587,6 +2548,7 @@ impl Overview {
                         Some(Dialog::Palette { selected, .. })
                         | Some(Dialog::Instances { selected, .. })
                         | Some(Dialog::Presets { selected }) => *selected = entry,
+                        Some(Dialog::PresetPolicy { selected, .. }) => *selected = entry.min(2),
                         Some(Dialog::History {
                             selected, scroll, ..
                         }) => {
@@ -2600,6 +2562,7 @@ impl Overview {
                         Some(Dialog::Palette { .. })
                             | Some(Dialog::Presets { .. })
                             | Some(Dialog::Instances { .. })
+                            | Some(Dialog::PresetPolicy { .. })
                     ) {
                         return self.key(w, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
                     }
@@ -2618,49 +2581,30 @@ impl Overview {
         Ok(Outcome::Stay)
     }
     fn paste(&mut self, text: &str) {
+        if let Some(ui) = &mut self.settings_ui {
+            ui.paste(text);
+            return;
+        }
         let clean = text.chars().filter(|c| !c.is_control()).collect::<String>();
-        if let Some(Dialog::Settings {
-            field,
-            project,
-            debug,
-            arguments,
-            ..
-        }) = &mut self.dialog
-        {
-            if *field >= 2 {
-                let mut value = if *field == 5 {
-                    arguments.clone()
-                } else {
-                    settings_value(project, debug, *field)
-                };
-                append_bounded(&mut value, &clean, 32768);
-                if *field == 5 {
-                    *arguments = value;
-                } else {
-                    set_settings_value(project, debug, *field, value);
-                }
+        let value = match self.dialog.as_mut() {
+            Some(Dialog::Input(_, s)) => Some(s),
+            Some(Dialog::Palette { query, .. }) => Some(query),
+            Some(Dialog::History {
+                selected, scroll, ..
+            }) => {
+                *selected = 0;
+                *scroll = 0;
+                Some(&mut self.dashboard.history_query)
             }
-        } else {
-            let value = match self.dialog.as_mut() {
-                Some(Dialog::Input(_, s)) => Some(s),
-                Some(Dialog::Palette { query, .. }) => Some(query),
-                Some(Dialog::History {
-                    selected, scroll, ..
-                }) => {
-                    *selected = 0;
-                    *scroll = 0;
-                    Some(&mut self.dashboard.history_query)
-                }
-                Some(Dialog::Options {
-                    editing: Some((_, value)),
-                    ..
-                }) => Some(value),
-                None => Some(&mut self.query),
-                _ => None,
-            };
-            if let Some(value) = value {
-                append_bounded(value, &clean, 32768);
-            }
+            Some(Dialog::Options {
+                editing: Some((_, value)),
+                ..
+            }) => Some(value),
+            None => Some(&mut self.query),
+            _ => None,
+        };
+        if let Some(value) = value {
+            append_bounded(value, &clean, 32768);
         }
         self.rebuild();
     }
@@ -2686,40 +2630,6 @@ fn append_bounded(value: &mut String, text: &str, limit: usize) {
             break;
         }
         value.push(c)
-    }
-}
-fn settings_value(project: &Project, debug: &str, field: usize) -> String {
-    match field {
-        0 => project
-            .agent
-            .map(|a| format!("{a:?}"))
-            .unwrap_or_else(|| t("inherit").into_owned()),
-        1 => project
-            .layout
-            .map(|l| format!("{l:?}"))
-            .unwrap_or_else(|| t("inherit").into_owned()),
-        2 => debug.into(),
-        3 => project.title.clone().unwrap_or_default(),
-        4 => project.color.clone().unwrap_or_default(),
-        5 => serde_json::to_string(&project.agent_args).unwrap_or_default(),
-        6 => t(match project.resume_latest {
-            None => "inherit",
-            Some(true) => "yes",
-            Some(false) => "no",
-        })
-        .into_owned(),
-        _ => {
-            let session = &project.sessions[(field - 7) / 3];
-            match (field - 7) % 3 {
-                0 => session.name.clone(),
-                1 => session.command.clone().unwrap_or_default(),
-                _ => session
-                    .directory
-                    .as_ref()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_default(),
-            }
-        }
     }
 }
 fn draft_value(o: &Options, field: usize) -> String {
@@ -2764,22 +2674,6 @@ fn set_draft_value(o: &mut Options, field: usize, value: String) -> Result<()> {
         ..Default::default()
     })
 }
-fn set_settings_value(project: &mut Project, debug: &mut String, field: usize, value: String) {
-    if field == 2 {
-        *debug = value
-    } else if field == 3 {
-        project.title = (!value.is_empty()).then_some(value);
-    } else if field == 4 {
-        project.color = (!value.is_empty()).then_some(value);
-    } else if field >= 7 {
-        let session = &mut project.sessions[(field - 7) / 3];
-        match (field - 7) % 3 {
-            0 => session.name = value,
-            1 => session.command = (!value.is_empty()).then_some(value),
-            _ => session.directory = (!value.is_empty()).then(|| PathBuf::from(value)),
-        }
-    }
-}
 fn next_layout(layout: Layout) -> Layout {
     match layout {
         Layout::Float => Layout::Split,
@@ -2808,7 +2702,12 @@ pub fn run_from(
     terminal: &mut DefaultTerminal,
     origin: Option<Options>,
 ) -> Result<Option<Options>> {
-    let mut app = Overview::new(Config::load()?);
+    let config = Config::load();
+    let repair = config.is_err();
+    let mut app = Overview::new(config.unwrap_or_default());
+    if repair {
+        app.settings_ui = Some(crate::settings::ui::SettingsUi::open(None));
+    }
     if let Some(mut origin) = origin {
         app.return_target = origin.navigation.as_deref().cloned();
         origin.navigation = None;
@@ -2827,6 +2726,35 @@ pub fn run_from(
     let mut last_input = None::<Instant>;
     let mut notice = (String::new(), Instant::now());
     loop {
+        if let Some(items) = app
+            .settings_ui
+            .as_mut()
+            .and_then(|ui| ui.queued_preset.take())
+        {
+            app.marked = model::Queue::preset(items);
+            app.message = t("parity.preset_applied").into_owned();
+        }
+        if let Some(ui) = &mut app.settings_ui
+            && let Some(result) = ui.tick()
+        {
+            if matches!(
+                result,
+                crate::settings::ui::Outcome::Saved | crate::settings::ui::Outcome::Closed
+            ) {
+                if let Ok(config) = Config::load() {
+                    app.show_stats = config.overview.statistics.unwrap_or(true);
+                    app.show_detail = config.overview.detail.unwrap_or(true);
+                    app.config = config;
+                    app.shortcuts = crate::shortcuts::Index::current();
+                    app.rebuild();
+                    let _ = app.discover(&w);
+                }
+            }
+            if matches!(result, crate::settings::ui::Outcome::Closed) {
+                app.settings_ui = None;
+            }
+            app.dirty = true;
+        }
         if notice.0 != app.message {
             notice = (app.message.clone(), Instant::now());
         } else if !app.message.is_empty() && notice.1.elapsed() > Duration::from_secs(6) {
@@ -2870,10 +2798,30 @@ pub fn run_from(
         }
         if let Some(input) = events.read(Duration::from_millis(33))? {
             last_input = Some(Instant::now());
+            if let Some(raw) = input
+                .win32
+                .as_deref()
+                .and_then(crate::shortcuts::ledger::RawKey::parse)
+                && let Some(ui) = &mut app.settings_ui
+            {
+                ui.observe_raw(&raw);
+                app.dirty = true;
+            }
             let outcome = match input.event {
                 Event::Key(key) if key.kind != KeyEventKind::Release => app.key(&w, key),
                 Event::Paste(text) => {
                     app.paste(&text);
+                    Ok(Outcome::Stay)
+                }
+                Event::FocusGained => {
+                    if let Some(ui) = &mut app.settings_ui {
+                        ui.reload();
+                    } else if let Ok(config) = Config::load() {
+                        app.config = config;
+                        app.shortcuts = crate::shortcuts::Index::current();
+                        app.rebuild();
+                    }
+                    app.dirty = true;
                     Ok(Outcome::Stay)
                 }
                 Event::Resize(..) | Event::FocusLost => {

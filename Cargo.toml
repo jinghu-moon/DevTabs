@@ -68,3 +68,5 @@ ratatui-image = { path = "vendor/ratatui-image" }
 
 [dev-dependencies]
 icy_sixel_candidate = { version = "0.7.0", package = "icy_sixel" }
+syn = { version = "2", features = ["full", "visit"] }
+proc-macro2 = { version = "1", features = ["span-locations"] }

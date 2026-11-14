@@ -818,6 +818,7 @@ pub(super) mod tests {
             })
             .collect();
         App {
+            settings_ui: None,
             parallel: Default::default(),
             options: Options::parse_for_view(),
             sessions,
@@ -1418,5 +1419,73 @@ pub(super) mod tests {
         app.update_sidebar_layout();
         assert!(app.zoom.is_none());
         assert!(app.sidebar.as_ref().unwrap().geometry.agent.is_some());
+    }
+    #[test]
+    fn settings_capture_paste_keys_mouse_and_release_without_terminal_side_effects() {
+        let mut app = app();
+        let root =
+            std::env::temp_dir().join(format!("DevTabs-settings-route-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut ui = crate::settings::ui::SettingsUi::at_root(root.clone(), None);
+        let p = vec![
+            crate::settings::draft::Part::Key("launch".into()),
+            crate::settings::draft::Part::Key("debug_command".into()),
+        ];
+        ui.focus_path(&p).unwrap();
+        ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        app.settings_ui = Some(ui);
+        let focus = app.focus;
+        app.event(crate::events::Input {
+            event: Event::Paste("中文 pasted command".into()),
+            win32: None,
+            repeat: 1,
+        })
+        .unwrap();
+        app.key(
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+            None,
+            1,
+        );
+        assert_eq!(
+            crate::settings::draft::get(
+                &app.settings_ui
+                    .as_ref()
+                    .unwrap()
+                    .draft
+                    .as_ref()
+                    .unwrap()
+                    .tree,
+                &p
+            )
+            .and_then(toml::Value::as_str),
+            Some("中文 pasted command")
+        );
+        let raw = b"\x1b[114;61;0;1;8;1_".to_vec();
+        app.key(
+            KeyEvent::new(KeyCode::F(3), KeyModifiers::CONTROL),
+            Some(raw),
+            1,
+        );
+        app.settings_ui.as_mut().unwrap().shortcuts_page();
+        app.key(
+            KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+            None,
+            1,
+        );
+        app.key(
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE),
+            None,
+            1,
+        );
+        let mut release = KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE);
+        release.kind = KeyEventKind::Release;
+        app.key(release, Some(b"\x1b[114;61;0;0;0;1_".to_vec()), 1);
+        assert!(app.forwarded.is_none());
+        assert_eq!(app.focus, focus);
+        assert!(app.parallel.dialog.is_none());
+        assert!(app.settings_ui.is_some());
+        assert!(!root.join("config.toml").exists());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

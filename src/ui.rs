@@ -58,6 +58,10 @@ pub fn clear_popup(frame: &mut Frame, rect: Rect) {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let _perf = crate::perf::span(crate::perf::Metric::Ui);
     app.clear_terminal_hits();
+    if let Some(settings) = &mut app.settings_ui {
+        settings.draw(frame);
+        return;
+    }
     let area = frame.area();
     frame.render_widget(Block::default().style(crate::appearance::style()), area);
     let rects = app.rects();

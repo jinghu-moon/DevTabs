@@ -51,7 +51,10 @@ pub struct Palette {
     pub error: Color,
 }
 pub fn palette() -> Palette {
-    match theme() {
+    palette_for(theme())
+}
+pub fn palette_for(theme: Theme) -> Palette {
+    match theme {
         Theme::Terminal => Palette {
             fg: Color::Reset,
             bg: Color::Reset,

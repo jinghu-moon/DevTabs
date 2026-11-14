@@ -245,3 +245,68 @@ fn plans_freeze_prepare_and_new_plans_capture_current_definitions() {
         },
     );
 }
+
+#[test]
+fn discovery_scans_only_direct_children_and_excludes_exact_project_identities() {
+    let f = Fixture::new();
+    let root = f.0.join("root");
+    let kept = root.join("kept");
+    let excluded = root.join("excluded");
+    let added_child = excluded.join("explicit child");
+    let nested = kept.join("not automatically discovered");
+    let external = f.0.join("external");
+    for p in [&added_child, &nested, &external] {
+        fs::create_dir_all(p).unwrap();
+    }
+    fs::write(root.join("not-a-directory"), "").unwrap();
+    let config = devtabs::config::Config {
+        roots: vec![root.clone(), root.clone(), f.0.join("unreachable")],
+        added: vec![kept.clone(), added_child.clone(), external.clone()],
+        excluded: vec![excluded.clone()],
+        ..Default::default()
+    };
+    let found = config.scan();
+    let identities = found
+        .iter()
+        .map(|p| devtabs::config::key(p))
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(found.len(), 3, "overlapping roots/added are deduplicated");
+    assert_eq!(
+        identities,
+        [&kept, &added_child, &external]
+            .into_iter()
+            .map(|p| devtabs::config::key(p))
+            .collect()
+    );
+    assert!(!found.contains(&nested), "root discovery never recurses");
+    assert!(!found.contains(&excluded));
+    assert!(
+        found.contains(&added_child),
+        "excluding a project does not exclude its explicitly added descendants"
+    );
+}
+
+#[test]
+fn frozen_prepare_capacity_failure_precedes_resource_and_command_side_effects() {
+    let root = Fixture::new();
+    let mut options = devtabs::launch::Options::parse_for_view();
+    options.project = root.0.clone();
+    let mut catalog = devtabs::tasks::Catalog::default();
+    catalog
+        .resources
+        .insert("filler".into(), "x".repeat(8 * 1024 * 1024 - 20000));
+    let before = serde_json::to_vec(&catalog).unwrap();
+    let spec = devtabs::checks::Spec {
+        argv: vec!["not-executed".into(), "x".repeat(8192)],
+        cwd: ".".into(),
+        env: Default::default(),
+        timeout_ms: 1,
+    };
+    let error = catalog
+        .main_task_with_prepare(&options, vec![spec; 4])
+        .unwrap_err();
+    assert!(error.to_string().contains("8 MiB"));
+    assert_eq!(serde_json::to_vec(&catalog).unwrap(), before);
+    assert!(!root.0.join("tasks.json").exists());
+    assert!(root.0.read_dir().unwrap().next().is_none());
+}

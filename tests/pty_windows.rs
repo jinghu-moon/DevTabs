@@ -970,3 +970,124 @@ fn native_claude_keyboard_insert_preserves_existing_prompt_without_enter() {
     )
     .unwrap();
 }
+
+#[test]
+fn unified_settings_in_real_terminal_save_defaults_and_return_without_input_leaks() {
+    let work = Workspace::new("settings-ui");
+    let args = vec![
+        "--layout".into(),
+        "split".into(),
+        "--agent".into(),
+        "shell".into(),
+        "--no-profile".into(),
+        "--project".into(),
+        work.0.display().to_string(),
+    ];
+    let outer = spawn(&work, 0, Path::new(env!("CARGO_BIN_EXE_devtabs")), &args);
+    let screen = || outer.state().terminal.screen().contents();
+    until("settings fixture shells", Duration::from_secs(20), || {
+        screen().matches("PS ").count() >= 2
+    });
+    press(&outer, KeyCode::Char('g'), KeyModifiers::CONTROL);
+    press(&outer, KeyCode::Char(','), KeyModifiers::NONE);
+    settings_screen_wait(&outer, "settings centre", 10, |text| {
+        text.contains("Save Ctrl+S")
+    });
+    press(&outer, KeyCode::Char('/'), KeyModifiers::NONE);
+    paste_console(&outer, "history");
+    press(&outer, KeyCode::Enter, KeyModifiers::NONE);
+    until("history field selected", Duration::from_secs(10), || {
+        screen().contains("History lines")
+    });
+    press(&outer, KeyCode::Enter, KeyModifiers::NONE);
+    press(&outer, KeyCode::End, KeyModifiers::NONE);
+    for _ in 0..4 {
+        press(&outer, KeyCode::Backspace, KeyModifiers::NONE);
+    }
+    paste_console(&outer, "42");
+    press(&outer, KeyCode::Char('s'), KeyModifiers::CONTROL);
+    until("settings committed", Duration::from_secs(10), || {
+        fs::read_to_string(work.file("data/config.toml"))
+            .is_ok_and(|s| s.contains("history_lines = 42"))
+    });
+    let source = fs::read_to_string(work.file("data/config.toml")).unwrap();
+    assert!(
+        !source.contains("project ="),
+        "merely browsing current project must not persist it"
+    );
+    press(&outer, KeyCode::Esc, KeyModifiers::NONE);
+    until("shells restored", Duration::from_secs(10), || {
+        !screen().contains("Save Ctrl+S") && screen().matches("PS ").count() >= 2
+    });
+    let result = work.file("after-settings.txt");
+    command(
+        &outer,
+        &format!("[IO.File]::WriteAllText({}, 'alive')", quote(&result)),
+    );
+    assert_eq!(wait_file(&result), "alive");
+    assert_eq!(
+        fs::read_to_string(work.file("data/config.toml")).unwrap(),
+        source
+    );
+    outer.send(b"\x07x".to_vec()).unwrap();
+    until(
+        "settings frontend detached",
+        Duration::from_secs(10),
+        || !outer.running(),
+    );
+}
+#[test]
+fn unified_settings_f4_is_reachable_in_an_empty_real_overview() {
+    let work = Workspace::new("settings-empty");
+    fs::create_dir_all(work.file("data")).unwrap();
+    fs::write(
+        work.file("data/config.toml"),
+        "schema=1\n[general]\nlanguage='en-us'\n",
+    )
+    .unwrap();
+    let code = format!(
+        "$env:DEVTABS_HOME={}; & {}",
+        quote(&work.file("data")),
+        quote(&work.file("devtabs.exe"))
+    );
+    let outer = shell(&work, 0, &code, false);
+    let screen = || outer.state().terminal.screen().contents();
+    settings_screen_wait(&outer, "empty overview", 20, |text| {
+        text.contains("DevTabs")
+    });
+    press(&outer, KeyCode::F(4), KeyModifiers::NONE);
+    settings_screen_wait(&outer, "global settings without project", 10, |text| {
+        text.contains("Save Ctrl+S") && text.contains("General")
+    });
+    let before = fs::read(work.file("data/config.toml")).unwrap();
+    press(&outer, KeyCode::Esc, KeyModifiers::NONE);
+    until("overview restored", Duration::from_secs(10), || {
+        !screen().contains("Save Ctrl+S")
+    });
+    assert_eq!(fs::read(work.file("data/config.toml")).unwrap(), before);
+    press(&outer, KeyCode::Esc, KeyModifiers::NONE);
+    until("empty overview exits", Duration::from_secs(10), || {
+        !outer.running()
+    });
+}
+
+fn settings_screen_wait(
+    session: &Session,
+    label: &str,
+    seconds: u64,
+    check: impl Fn(&str) -> bool,
+) {
+    let start = Instant::now();
+    loop {
+        let text = session.state().terminal.screen().contents();
+        if check(&text) {
+            return;
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(seconds),
+            "{label}: {:?}\n{text}",
+            session.state().status
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+}

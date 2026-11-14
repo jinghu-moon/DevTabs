@@ -1,5 +1,28 @@
 use super::*;
 use crossterm::event::{MouseEvent, MouseEventKind};
+
+fn unified_form(source: &str) -> crate::settings::ui::SettingsUi {
+    let root = std::env::temp_dir().join(format!("DevTabs-settings-form-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("config.toml"), source).unwrap();
+    crate::settings::ui::SettingsUi::at_root(root, Some("D:/fixture/project".into()))
+}
+fn settings_path(keys: &[&str]) -> crate::settings::draft::Path {
+    use crate::settings::draft::Part;
+    let mut path = vec![Part::Key("project".into()), Part::Index(0)];
+    path.extend(keys.iter().map(|k| Part::Key((*k).into())));
+    path
+}
+fn settle_settings(ui: &mut crate::settings::ui::SettingsUi) {
+    let until = std::time::Instant::now();
+    loop {
+        if ui.tick().is_some() {
+            break;
+        }
+        assert!(until.elapsed() < std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
 #[test]
 fn task_rows_are_distinct_from_history_and_preserve_selection_after_reordering() {
     let mut app = overview();
@@ -172,28 +195,57 @@ fn sessions_preserve_explicit_default_composition_and_cycle_without_losing_entri
         });
     assert_eq!(app.options_for(&path).composition, Composition::AgentDebug);
     app.command(&t.worker, Command::Settings).unwrap();
-    assert!(
-        matches!(&app.dialog, Some(Dialog::Settings { project, .. }) if project.terminal_composition() == Composition::AgentDebug)
+    assert!(app.settings_ui.is_some());
+    let mut ui = unified_form(
+        "schema=1\n[[project]]\npath='D:/fixture/project'\n[project.launch]\nsessions=[{name='Docs'}]\n",
     );
-    app.key(
-        &t.worker,
-        KeyEvent::new(KeyCode::Char('m'), KeyModifiers::ALT),
-    )
-    .unwrap();
-    assert!(
-        matches!(&app.dialog, Some(Dialog::Settings { project, .. }) if project.composition == Some(Composition::Custom) && project.sessions.len() == 1)
+    assert_eq!(
+        ui.draft
+            .as_ref()
+            .unwrap()
+            .base
+            .effective
+            .resolve(
+                std::path::Path::new("D:/fixture/project"),
+                &Default::default()
+            )
+            .snapshot
+            .launch
+            .composition,
+        Composition::AgentDebug
     );
-    app.key(
-        &t.worker,
-        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
-    )
-    .unwrap();
-    assert!(
-        matches!(&app.dialog, Some(Dialog::Settings { project, .. }) if project.composition == Some(Composition::Custom) && project.sessions.len() == 2)
+    ui.focus_path(&settings_path(&["launch", "composition"]))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    ui.focus_path(&settings_path(&["launch", "sessions"]))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE))
+        .unwrap();
+    let tree = &ui.draft.as_ref().unwrap().tree;
+    assert_eq!(
+        tree["project"][0]["launch"]["composition"].as_str(),
+        Some("custom")
+    );
+    assert_eq!(
+        tree["project"][0]["launch"]["sessions"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
     );
     assert!(t.edits.try_recv().is_err());
     assert!(t.launches.try_recv().is_err());
 }
+
 #[test]
 fn detail_stats_and_queue_focus_preserve_global_launch_shortcuts() {
     for focus in [
@@ -1047,65 +1099,85 @@ fn settings_fields_add_remove_and_validation_keep_input() {
     let t = worker::isolated();
     let mut app = overview();
     app.command(&t.worker, Command::Settings).unwrap();
-    app.key(
-        &t.worker,
-        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
-    )
-    .unwrap();
-    assert!(
-        matches!(&app.dialog,Some(Dialog::Settings{project,field:7,..}) if project.sessions.len()==1)
+    assert!(app.settings_ui.is_some());
+    let mut ui = unified_form("schema=1\n[[project]]\npath='D:/fixture/project'\n");
+    ui.focus_path(&settings_path(&["launch", "sessions"]))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Insert, KeyModifiers::NONE))
+        .unwrap();
+    let sessions = settings_path(&["launch", "sessions"]);
+    assert_eq!(
+        crate::settings::draft::get(&ui.draft.as_ref().unwrap().tree, &sessions)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
-    app.key(
-        &t.worker,
-        KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
-    )
-    .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE))
+        .unwrap();
     assert!(
-        matches!(&app.dialog,Some(Dialog::Settings{project,field:6,..}) if project.sessions.is_empty())
+        crate::settings::draft::get(&ui.draft.as_ref().unwrap().tree, &sessions)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .is_empty()
     );
-    if let Some(Dialog::Settings { project, .. }) = &mut app.dialog {
-        project.sessions.push(crate::config::SessionConfig {
-            name: String::new(),
-            directory: None,
-            command: Some("keep; 中文".into()),
-        })
-    }
-    assert!(
-        app.key(
-            &t.worker,
-            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)
-        )
-        .is_err()
-    );
-    assert!(
-        matches!(&app.dialog,Some(Dialog::Settings{project,..}) if project.sessions[0].command.as_deref()==Some("keep; 中文"))
-    );
+    let value: toml::Value = toml::from_str("sessions=[{name='',command='keep; 中文'}]").unwrap();
+    ui.set_field(&sessions, Some(value["sessions"].clone()))
+        .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    settle_settings(&mut ui);
+    assert!(ui.error.is_some());
+    assert_eq!(crate::settings::draft::get(&ui.draft.as_ref().unwrap().tree,&sessions).unwrap()[0]["command"].as_str(),Some("keep; 中文"));
+    assert!(ui.dirty());
     assert!(t.edits.try_recv().is_err());
 }
+
 #[test]
 fn failed_persistence_restores_form_with_all_entered_values() {
     let t = worker::isolated();
     let mut app = overview();
     app.command(&t.worker, Command::Settings).unwrap();
-    if let Some(Dialog::Settings { debug, .. }) = &mut app.dialog {
-        *debug = "echo 'keep me'".into()
-    }
-    app.key(
-        &t.worker,
-        KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+    let mut ui = unified_form("schema=1\n[[project]]\npath='D:/fixture/project'\n");
+    ui.set_field(
+        &settings_path(&["launch", "debug_command"]),
+        Some("echo 'keep me'".into()),
     )
     .unwrap();
-    assert!(app.dialog.is_none());
-    let Action::Edit(id, _) = t.edits.try_recv().unwrap() else {
-        panic!("expected save")
-    };
-    t.replies
-        .send(Reply::Config(id, Err("disk full".into())))
+    let tree = ui.draft.as_ref().unwrap().tree.clone();
+    // An invalid latest source forces a real save failure without replacing user bytes.
+    let root = std::env::temp_dir().join(format!("DevTabs-failed-save-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("config.toml"), "schema=1").unwrap();
+    let mut failed = crate::settings::ui::SettingsUi::at_root(root.clone(), None);
+    failed.draft.as_mut().unwrap().tree = tree;
+    std::fs::write(root.join("config.toml"), "[broken").unwrap();
+    failed
+        .key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
         .unwrap();
-    app.poll(&t.worker).unwrap();
-    assert!(matches!(&app.dialog,Some(Dialog::Settings{debug,..}) if debug=="echo 'keep me'"));
+    settle_settings(&mut failed);
+    assert!(failed.error.is_some());
+    assert_eq!(
+        failed.draft.as_ref().unwrap().tree["project"][0]["launch"]["debug_command"].as_str(),
+        Some("echo 'keep me'")
+    );
+    assert!(failed.dirty());
+    assert_eq!(
+        std::fs::read_to_string(root.join("config.toml")).unwrap(),
+        "[broken"
+    );
     assert_eq!(app.pending_edits, 0);
+    assert!(t.edits.try_recv().is_err());
 }
+
 #[test]
 fn statistics_progress_keeps_request_pending_and_canceled_scan_restarts_on_return() {
     let t = worker::isolated();
@@ -1258,7 +1330,7 @@ fn command_palette_searches_both_languages_and_reports_unavailable_actions() {
         assert!(
             app.entries()
                 .iter()
-                .any(|e| matches!(e.command, Command::Settings) && !e.enabled)
+                .any(|e| matches!(e.command, Command::Settings) && e.enabled)
         );
     });
 }
@@ -1334,13 +1406,6 @@ fn chinese_popups_mouse_geometry_and_escape_do_not_reach_underlying_list() {
                 Input::Note(PathBuf::from("a"), String::new()),
                 "下一步".into(),
             ),
-            Dialog::Settings {
-                path: "a".into(),
-                project: Project::default(),
-                field: 2,
-                debug: "echo 1".into(),
-                arguments: "[]".into(),
-            },
             Dialog::Options {
                 options: LaunchSpec::from_config(PathBuf::from("a").as_path(), &app.config)
                     .options(),
@@ -1371,6 +1436,119 @@ fn chinese_popups_mouse_geometry_and_escape_do_not_reach_underlying_list() {
     });
 }
 
+#[test]
+fn saving_concrete_conversations_requires_explicit_policy_and_retains_failed_form() {
+    for choice in 0..3 {
+        for mouse in [false, true] {
+            let t = worker::isolated();
+            let mut app = overview();
+            let mut specific = Options::parse_for_view();
+            specific.project = "a".into();
+            specific.resume_id = Some("invocation-only-id".into());
+            specific.history = 42;
+            specific.agent_args = vec!["中文 参数".into(), String::new()];
+            let mut fresh = specific.clone();
+            fresh.resume_id = None;
+            fresh.fresh = true;
+            fresh.continue_latest = false;
+            app.marked = model::Queue::preset([specific, fresh]);
+            app.command(&t.worker, Command::SavePreset).unwrap();
+            app.paste("daily");
+            app.key(&t.worker, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .unwrap();
+            assert!(matches!(app.dialog, Some(Dialog::PresetPolicy { .. })));
+            assert!(t.edits.try_recv().is_err());
+            if mouse {
+                draw(&mut app, 120, 32);
+                let (area, offset) = app.dialog_list.unwrap();
+                assert_eq!(offset, 0);
+                assert_eq!(area.height, 3);
+                app.mouse(
+                    &t.worker,
+                    mouse_at(
+                        MouseEventKind::Down(MouseButton::Left),
+                        area.x + 1,
+                        area.y + choice,
+                    ),
+                )
+                .unwrap();
+            } else {
+                for _ in 0..choice {
+                    app.key(&t.worker, KeyEvent::new(KeyCode::Down, KeyModifiers::NONE))
+                        .unwrap();
+                }
+                app.key(&t.worker, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                    .unwrap();
+            }
+            let Action::Edit(id, Edit::Preset(name, specs)) = t.edits.try_recv().unwrap() else {
+                panic!("preset edit")
+            };
+            assert_eq!(name, "daily");
+            assert_eq!(specs.len(), 2);
+            let converted = specs[0].options();
+            assert!(converted.resume_id.is_none());
+            assert_eq!(
+                (converted.continue_latest, converted.fresh, converted.resume),
+                (choice == 0, choice == 1, choice == 2)
+            );
+            assert_eq!(converted.history, 42);
+            assert_eq!(converted.agent_args, ["中文 参数", ""]);
+            assert!(
+                specs[1].options().fresh,
+                "unrelated entries keep their own policy"
+            );
+            assert!(
+                t.launches.try_recv().is_err(),
+                "saving never launches a process"
+            );
+            t.replies
+                .send(Reply::Config(id, Err("injected save failure".into())))
+                .unwrap();
+            app.poll(&t.worker).unwrap();
+            assert!(
+                matches!(app.dialog, Some(Dialog::PresetPolicy { .. })),
+                "failed save restores the policy form"
+            );
+            app.key(&t.worker, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .unwrap();
+            assert!(app.dialog.is_none());
+            assert!(t.edits.try_recv().is_err());
+        }
+    }
+}
+#[test]
+fn preset_mouse_selection_beyond_third_item_is_not_clamped_by_policy_dialog() {
+    let t = worker::isolated();
+    let mut app = overview();
+    for i in 0..6 {
+        let mut options = Options::parse_for_view();
+        options.project = format!("project-{i}").into();
+        app.config.presets.insert(
+            format!("preset-{i}"),
+            vec![LaunchSpec::from_options(&options)],
+        );
+    }
+    app.dialog = Some(Dialog::Presets { selected: 0 });
+    draw(&mut app, 120, 32);
+    let (area, offset) = app.dialog_list.unwrap();
+    assert_eq!(offset, 0);
+    assert!(area.height > 4);
+    app.mouse(
+        &t.worker,
+        mouse_at(
+            MouseEventKind::Down(MouseButton::Left),
+            area.x + 1,
+            area.y + 4,
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        app.marked.iter().cloned().collect::<Vec<_>>(),
+        vec![PathBuf::from("project-4")]
+    );
+    assert!(app.dialog.is_none());
+    assert!(t.launches.try_recv().is_err());
+}
 #[test]
 fn preset_apply_stages_all_options_without_launch_and_options_can_be_adjusted() {
     let t = worker::isolated();
@@ -1450,22 +1628,26 @@ fn malformed_arguments_and_project_profile_block_launch_without_losing_forms() {
     let t = worker::isolated();
     let mut app = overview();
     app.command(&t.worker, Command::Settings).unwrap();
-    if let Some(Dialog::Settings { arguments, .. }) = &mut app.dialog {
-        *arguments = "[bad JSON".into();
-    }
-    assert!(
-        app.key(
-            &t.worker,
-            KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)
-        )
-        .is_err()
+    let mut ui = unified_form("schema=1\n[[project]]\npath='D:/fixture/project'\n");
+    // Structured arguments replace the old JSON textbox. A malformed type still blocks the whole save and remains recoverable.
+    ui.set_field(
+        &settings_path(&["launch", "agent_args"]),
+        Some("[bad TOML array".into()),
+    )
+    .unwrap();
+    ui.key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL))
+        .unwrap();
+    settle_settings(&mut ui);
+    assert!(ui.error.is_some());
+    assert_eq!(
+        ui.draft.as_ref().unwrap().tree["project"][0]["launch"]["agent_args"].as_str(),
+        Some("[bad TOML array")
     );
-    assert!(matches!(&app.dialog,Some(Dialog::Settings{arguments,..}) if arguments=="[bad JSON"));
     assert!(t.edits.try_recv().is_err());
-    app.dialog = None;
+    app.settings_ui = None;
     let path = app.path().unwrap();
     app.profile_errors
-        .insert(config::key(&path), "invalid profile".into());
+        .insert(config::key(&path), "invalid project settings".into());
     assert!(app.command(&t.worker, Command::Open).is_err());
     assert!(t.launches.try_recv().is_err());
 }

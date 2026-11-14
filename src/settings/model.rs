@@ -671,7 +671,8 @@ debug_command=""
     }
     #[test]
     fn example_is_valid_and_optional_titles_do_not_inherit_into_snapshots() {
-        let doc = include_str!("../../docs/53-Unified-Configuration-Design.md");
+        let doc =
+            include_str!("../../docs/53-Unified-Configuration-Design.md").replace("\r\n", "\n");
         let fence = char::from(96).to_string().repeat(3);
         let example = doc
             .split(&format!("{fence}toml\n"))

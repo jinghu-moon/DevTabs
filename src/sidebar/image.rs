@@ -187,6 +187,19 @@ impl Document {
 }
 impl Sidebar {
     pub fn configure_images(&mut self, display: Display) {
+        self.detected_display = display;
+        let display = match self.document.as_ref().and_then(|d| d.image_protocol) {
+            None => display,
+            Some(crate::settings::model::ImageProtocol::Auto) if display.automatic => display,
+            Some(choice) => {
+                let mut configured =
+                    Display::explicit(choice.into(), (!display.estimated).then_some(display.cell));
+                if choice == crate::settings::model::ImageProtocol::Auto {
+                    configured.automatic = true;
+                }
+                configured
+            }
+        };
         if self.image_display != display {
             self.image_display = display;
             self.invalidate_image(false);
