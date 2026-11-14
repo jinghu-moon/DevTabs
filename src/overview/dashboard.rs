@@ -400,7 +400,6 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
     let top_height = 2;
     let top = Rect::new(area.x, area.y, area.width, top_height);
     draw_search(frame, app, top);
-    let mut x = area.x + 1;
     let filters = [
         model::Filter::All,
         model::Filter::Running,
@@ -428,6 +427,13 @@ pub(super) fn draw(frame: &mut Frame, app: &mut Overview) {
             format!(" {} {count} ", filter.label())
         })
         .collect();
+    let filters_width = labels.iter().map(|s| s.width()).sum::<usize>() + labels.len() - 1;
+    let mut x = area.x
+        + if filters_width <= area.width.saturating_sub(2) as usize {
+            (area.width - filters_width as u16) / 2
+        } else {
+            1
+        };
     let active = filters
         .iter()
         .position(|f| *f == app.config.overview.filter)
@@ -792,14 +798,61 @@ fn agent_name(agent: Agent) -> &'static str {
         Agent::Shell => "Shell",
     }
 }
+fn project_warning(
+    app: &Overview,
+    key: &str,
+) -> Option<(std::borrow::Cow<'static, str>, ratatui::style::Color)> {
+    if app.profile_errors.contains_key(key)
+        || app.batch.items.iter().any(|item| {
+            config::key(&item.options.project) == key
+                && matches!(item.state, LaunchState::Failed(_))
+        })
+    {
+        Some((t("failed"), palette().error))
+    } else if app
+        .git
+        .get(key)
+        .is_some_and(|g| g.as_ref().is_ok_and(|g| g.conflicts > 0))
+    {
+        Some((t("overview.conflict"), palette().error))
+    } else if !app.workspaces.contains_key(key) && !app.host_error.is_empty() {
+        Some((t("overview.state_unknown"), palette().muted))
+    } else {
+        None
+    }
+}
+fn project_changes(git: Option<&model::GitSummary>, digits: usize) -> String {
+    let core_width = digits + 1;
+    let core = match git {
+        Some(g) if g.changed > 0 => format!("+{}", g.changed),
+        Some(_) => String::new(),
+        None => "—".into(),
+    };
+    format!(
+        "{}{} {}{}",
+        " ".repeat(core_width.saturating_sub(core.width())),
+        core,
+        if git.is_some_and(|g| g.ahead > 0) {
+            "↑"
+        } else {
+            " "
+        },
+        if git.is_some_and(|g| g.behind > 0) {
+            "↓"
+        } else {
+            " "
+        },
+    )
+}
 fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
+    let title = format!(
+        " {} {} ",
+        t(if app.scanning { "scan" } else { "projects" }),
+        app.projects.len()
+    );
     frame.render_widget(
         Block::bordered()
-            .title(format!(
-                " {} {} ",
-                t(if app.scanning { "scan" } else { "projects" }),
-                app.projects.len()
-            ))
+            .title(title.clone())
             .border_style(Style::new().fg(if app.dashboard.focus == Focus::Projects {
                 palette().accent
             } else {
@@ -807,18 +860,61 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
             })),
         rect,
     );
-    let mut inner = rect.inner(Margin::new(1, 1));
-    if inner.height > 1 {
-        let add = Rect::new(inner.x, inner.bottom() - 1, inner.width, 1);
-        let label = format!("[＋ {}]", t("add"));
+    let inner = rect.inner(Margin::new(1, 1));
+    let label = format!(" ＋ {} ", t("overview.add_project"));
+    let width = label.width() as u16;
+    if title.width() + label.width() + 4 <= rect.width as usize {
+        let add = Rect::new(rect.right() - width - 2, rect.y, width, 1);
         frame.render_widget(
-            Paragraph::new(label).style(Style::new().fg(palette().accent).bg(palette().selected)),
+            Paragraph::new(label).style(style().fg(palette().accent)),
             add,
         );
         app.dashboard.add_hit = Some(add);
-        inner.height -= 1;
     }
     app.list_area = inner;
+    let digits = app
+        .git
+        .values()
+        .filter_map(|g| g.as_ref().ok())
+        .map(|g| g.changed.to_string().len())
+        .max()
+        .unwrap_or(1);
+    let changes_width = project_changes(None, digits).width();
+    let state_width = app
+        .projects
+        .iter()
+        .filter_map(|p| project_warning(app, &config::key(p)))
+        .map(|(label, _)| label.width())
+        .max()
+        .unwrap_or(0);
+    let available = (inner.width as usize)
+        .saturating_sub(8 + 1 + changes_width + if state_width > 0 { state_width + 1 } else { 0 });
+    let branch_width = if available >= 30
+        && app.git.values().any(|g| {
+            g.as_ref().is_ok_and(|g| {
+                !g.branch.is_empty() && !matches!(g.branch.as_str(), "main" | "master")
+            })
+        }) {
+        (available / 3).clamp(10, 18)
+    } else {
+        0
+    };
+    let name_width = available.saturating_sub(if branch_width > 0 {
+        branch_width + 1
+    } else {
+        0
+    });
+    let focused_group = if app.dashboard.focus == Focus::Projects {
+        app.rows.iter().take(app.selected + 1).rev().find_map(|r| {
+            if let Row::Group(g) = r {
+                Some(*g)
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
     let height = |_: &Row| 1u16;
     let mut offset = app.list.offset().min(app.rows.len().saturating_sub(1));
     if !app.dashboard.list_detached {
@@ -853,9 +949,9 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                     Paragraph::new(format!(
                         " {} {}  {count}",
                         if app.config.overview.collapsed.contains(g) {
-                            "▸"
+                            "▶"
                         } else {
-                            "▾"
+                            "▼"
                         },
                         model::group_label(*g)
                     ))
@@ -867,8 +963,14 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                     let w = label.width() as u16;
                     if w + model::group_label(*g).width() as u16 + 10 < inner.width {
                         let r = Rect::new(inner.right() - w, y, w, 1);
+                        let active = focused_group == Some(*g)
+                            || app.dashboard.hover.is_some_and(|(index, _)| index == i);
                         frame.render_widget(
-                            Paragraph::new(label).style(Style::new().fg(palette().accent)),
+                            Paragraph::new(label).style(if active {
+                                base.fg(palette().accent).bold()
+                            } else {
+                                base.fg(palette().muted)
+                            }),
                             r,
                         );
                         app.dashboard.pending_hit = Some(r);
@@ -891,58 +993,11 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                     .and_then(|p| p.color.as_deref())
                     .and_then(|c| c.parse().ok())
                     .unwrap_or_else(|| super::view::stable_color(&key));
-                let number = app
-                    .marked
-                    .iter()
-                    .position(|p| config::key(p) == key)
-                    .map(|n| format!("{:>2}", n + 1))
-                    .unwrap_or_else(|| " □".into());
+                let marked = app.marked.iter().any(|p| config::key(p) == key);
+                let number = if marked { " ☑" } else { " □" };
                 let git = app.git.get(&key).and_then(|g| g.as_ref().ok());
-                let failed = app.profile_errors.contains_key(&key)
-                    || app.batch.items.iter().any(|i| {
-                        config::key(&i.options.project) == key
-                            && matches!(i.state, LaunchState::Failed(_))
-                    });
-                let (state, state_color) = if failed {
-                    (t("failed"), palette().error)
-                } else if git.is_some_and(|g| g.conflicts > 0) {
-                    (t("overview.conflict"), palette().error)
-                } else if app.workspaces.contains_key(&key) {
-                    (t("running"), ratatui::style::Color::Green)
-                } else if !app.host_error.is_empty() {
-                    (t("overview.state_unknown"), palette().muted)
-                } else if app.config.overview.pending.contains(&key) {
-                    (t("parity.pending"), ratatui::style::Color::Yellow)
-                } else if app
-                    .config
-                    .projects
-                    .get(&key)
-                    .is_some_and(|p| p.last_opened > 0)
-                {
-                    (t("overview.stopped"), palette().muted)
-                } else {
-                    (t("overview.not_started"), palette().muted)
-                };
-                let change = git.map_or_else(
-                    || "—".into(),
-                    |g| {
-                        if g.changed == 0 {
-                            t("overview.clean").into_owned()
-                        } else {
-                            format!(
-                                "{} {}{}{}",
-                                g.changed,
-                                t("overview.changes"),
-                                if g.ahead > 0 { " ↑" } else { "" },
-                                if g.behind > 0 { " ↓" } else { "" }
-                            )
-                        }
-                    },
-                );
-                let state_width = state.width().max(8);
-                let changes_width = change.width().clamp(6, 14);
-                let content_width =
-                    (inner.width as usize).saturating_sub(9 + state_width + changes_width);
+                let warning = project_warning(app, &key);
+                let change = project_changes(git, digits);
                 let branch = git.map_or("", |g| {
                     if matches!(g.branch.as_str(), "main" | "master") {
                         ""
@@ -950,12 +1005,6 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                         &g.branch
                     }
                 });
-                let branch_width = if !branch.is_empty() && content_width >= 32 {
-                    14
-                } else {
-                    0
-                };
-                let name_width = content_width.saturating_sub(branch_width);
                 let agent = app.staged.get(&key).map_or_else(
                     || {
                         profile
@@ -966,10 +1015,14 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                     |o| o.agent,
                 );
                 let history = app.dashboard.contexts.get(&context_key(path, agent));
-                let has_children = history.is_some_and(|h| !h.sessions.is_empty());
-                let expanded = app.dashboard.expanded_projects.contains(&key);
+                let has_children = history.is_some_and(|h| !h.sessions.is_empty())
+                    || app.workspaces.get(&key).is_some_and(|work| {
+                        work.iter().any(|w| w.tasks.iter().any(|t| !t.archived))
+                    });
+                let expanded =
+                    app.dashboard.expanded_projects.contains(&key) || !app.query.is_empty();
                 let arrow = if has_children {
-                    if expanded { "▾" } else { "▸" }
+                    if expanded { "▼" } else { "▶" }
                 } else {
                     " "
                 };
@@ -983,7 +1036,14 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                         if selected { "▎" } else { " " },
                         Style::new().fg(palette().accent),
                     ),
-                    Span::raw(format!("{number} {arrow}")),
+                    Span::styled(
+                        format!("{number} {arrow} "),
+                        Style::new().fg(if marked {
+                            palette().accent
+                        } else {
+                            palette().muted
+                        }),
+                    ),
                     Span::styled("■ ", Style::new().fg(color)),
                     Span::styled(
                         fit(
@@ -1004,28 +1064,30 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                             Style::new().fg(palette().fg)
                         },
                     ),
-                    Span::styled(
-                        format!(" {}", fit(&state, state_width)),
-                        Style::new().fg(state_color),
-                    ),
-                    Span::styled(
-                        format!(" {}", fit(&change, changes_width)),
-                        Style::new().fg(if git.is_some_and(|g| g.changed > 0) {
-                            ratatui::style::Color::Yellow
-                        } else {
-                            palette().muted
-                        }),
-                    ),
                 ];
                 if branch_width > 0 {
-                    spans.insert(
-                        4,
-                        Span::styled(
-                            fit(&format!(" {branch}"), branch_width),
-                            Style::new().fg(palette().accent),
-                        ),
-                    );
+                    spans.push(Span::styled(
+                        format!(" {}", fit(branch, branch_width)),
+                        Style::new().fg(palette().muted),
+                    ));
                 }
+                if state_width > 0 {
+                    let (state, color) = warning.unwrap_or_else(|| ("".into(), palette().muted));
+                    spans.push(Span::styled(
+                        format!(" {}", fit(&state, state_width)),
+                        Style::new().fg(color),
+                    ));
+                }
+                spans.push(Span::styled(
+                    format!(" {change}"),
+                    Style::new().fg(if git.is_some_and(|g| g.changed > 0) {
+                        ratatui::style::Color::Green
+                    } else if git.is_some_and(|g| g.ahead > 0 || g.behind > 0) {
+                        ratatui::style::Color::Yellow
+                    } else {
+                        palette().muted
+                    }),
+                ));
                 if !app.query.is_empty() {
                     let mut needle = app.query.chars().flat_map(char::to_lowercase).peekable();
                     let normal = spans[3].style;
@@ -1087,13 +1149,7 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                     );
                     frame.render_widget(
                         Paragraph::new(fit(
-                            &format!(
-                                "    {} {} · {} · {}",
-                                if selected { "▸" } else { "↳" },
-                                task.name,
-                                task.branch,
-                                state
-                            ),
+                            &format!("      ↳ {} · {} · {}", task.name, task.branch, state),
                             inner.width as usize,
                         ))
                         .style(base.fg(palette().accent)),
@@ -1114,17 +1170,18 @@ fn draw_projects(frame: &mut Frame, app: &mut Overview, rect: Rect) {
                         &c.prompt
                     }
                 });
-                let label = format!(
-                    "    {} {} · {}",
-                    if selected { "▸" } else { "↳" },
-                    agent_name(*agent),
-                    label
-                );
+                let label = format!("      ↳ {} · {}", agent_name(*agent), label);
                 frame.render_widget(
                     Paragraph::new(fit(&label, inner.width as usize)).style(base.fg(palette().fg)),
                     hit,
                 );
             }
+        }
+        if selected {
+            frame.render_widget(
+                Paragraph::new("▎").style(base.fg(palette().accent)),
+                Rect::new(inner.x, y, 1, 1),
+            );
         }
         y += h;
     }
@@ -1866,7 +1923,8 @@ impl Overview {
                     self.dashboard.pressed = Some((index, mouse.column, mouse.row));
                     self.dashboard.pressed_path = self.path();
                     self.dashboard.press_dragged = false;
-                    let badge = mouse.column < self.list_area.x + 4;
+                    let badge = matches!(self.rows[index], Row::Project(_))
+                        && (self.list_area.x + 1..self.list_area.x + 3).contains(&mouse.column);
                     if badge
                         || mouse.kind == MouseEventKind::Down(MouseButton::Middle)
                         || mouse.modifiers.contains(KeyModifiers::CONTROL)

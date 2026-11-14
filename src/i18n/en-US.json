@@ -492,6 +492,7 @@
   "overview.viewer_hint": "Read-only preview · Esc return to projects",
   "overview.draft_fields": "Ctrl+D Debug · Ctrl+A arguments · Ctrl+E extra terminals · Alt+N add; while editing: Tab next field · Enter accept · Ctrl+Delete remove terminal · Esc cancel",
   "overview.add_pending": "Add all",
+  "overview.add_project": "Add project",
   "overview.search_hint": "Search projects…",
   "overview.role_ai": "AI",
   "overview.host_retry": "Host disconnected; reconnecting · Click for diagnostics",

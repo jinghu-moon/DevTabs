@@ -346,29 +346,7 @@ impl Workers {
                     if tx.send(Reply::Paths(ticket, paths.clone())).is_err() {
                         break;
                     }
-                    for p in &paths {
-                        if stop.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed) != ticket
-                        {
-                            break;
-                        }
-                        let result = stats::git(p).map_err(|e| format!("{e:#}"));
-                        if tx.send(Reply::Git(ticket, config::key(p), result)).is_err() {
-                            return;
-                        }
-                        if matches!(
-                            c.overview.sort,
-                            super::model::Sort::Size | super::model::Sort::Activity
-                        ) && cancel.load(Ordering::Relaxed) == ticket
-                        {
-                            let result = stats::cached(p, &cancel, ticket);
-                            if tx
-                                .send(Reply::Ranked(ticket, config::key(p), result))
-                                .is_err()
-                            {
-                                return;
-                            }
-                        }
-                    }
+                    // Recency determines project groups; do not queue it behind Git.
                     let mut usage = BTreeMap::new();
                     for agent in [crate::launch::Agent::Codex, crate::launch::Agent::Claude] {
                         let index =
@@ -383,8 +361,55 @@ impl Workers {
                         }
                     }
                     if cancel.load(Ordering::Relaxed) == ticket {
-                        let _ = tx.send(Reply::Usage(ticket, usage));
+                        if tx.send(Reply::Usage(ticket, usage)).is_err() {
+                            return;
+                        }
                     }
+                    // Bound concurrent Git processes while publishing each result
+                    // immediately. A slow repository must not hold up every row.
+                    let next = std::sync::atomic::AtomicUsize::new(0);
+                    std::thread::scope(|scope| {
+                        let next = &next;
+                        for _ in 0..paths.len().min(4) {
+                            let paths = &paths;
+                            let tx = &tx;
+                            let stop = &stop;
+                            let cancel = &cancel;
+                            let c = &c;
+                            scope.spawn(move || {
+                                loop {
+                                    if stop.load(Ordering::Relaxed)
+                                        || cancel.load(Ordering::Relaxed) != ticket
+                                    {
+                                        break;
+                                    }
+                                    let Some(p) = paths.get(next.fetch_add(1, Ordering::Relaxed))
+                                    else {
+                                        break;
+                                    };
+                                    let result = stats::git(p).map_err(|e| format!("{e:#}"));
+                                    if tx.send(Reply::Git(ticket, config::key(p), result)).is_err()
+                                    {
+                                        break;
+                                    }
+                                    if matches!(
+                                        c.overview.sort,
+                                        super::model::Sort::Size | super::model::Sort::Activity
+                                    ) && !stop.load(Ordering::Relaxed)
+                                        && cancel.load(Ordering::Relaxed) == ticket
+                                    {
+                                        let result = stats::cached(p, cancel, ticket);
+                                        if tx
+                                            .send(Reply::Ranked(ticket, config::key(p), result))
+                                            .is_err()
+                                        {
+                                            break;
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                    });
                 }
             });
         }

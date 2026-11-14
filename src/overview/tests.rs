@@ -1645,6 +1645,11 @@ fn header_keeps_long_unicode_query_cursor_and_active_filter_visible() {
                     for (r, _) in &app.filter_hits {
                         assert!(r.right() <= width);
                     }
+                    if app.filter_hits.len() == 8 {
+                        let left = app.filter_hits.first().unwrap().0.x;
+                        let right = width - app.filter_hits.last().unwrap().0.right();
+                        assert!(left.abs_diff(right) <= 1, "filter group stays centered");
+                    }
                     let field = (rect.x..rect.right())
                         .map(|x| terminal.backend().buffer()[(x, rect.y)].symbol())
                         .collect::<String>();
@@ -1770,7 +1775,7 @@ fn single_line_projects_have_truthful_status_add_button_and_explicit_session_exp
     let buffer = draw(&mut app, 140, 36);
     assert!(app.dashboard.row_hits.iter().all(|(r, _)| r.height == 1));
     let rect = app.dashboard.add_hit.unwrap();
-    assert!(rect.y > app.list_area.y);
+    assert_eq!(rect.y + 1, app.list_area.y);
     let project = app
         .rows
         .iter()
@@ -1786,7 +1791,7 @@ fn single_line_projects_have_truthful_status_add_button_and_explicit_session_exp
         .map(|x| buffer[(x, hit.y)].symbol())
         .collect::<String>();
     assert!(!text.contains("Codex"));
-    assert!(text.contains(crate::i18n::t("parity.pending").as_ref()));
+    assert!(!text.contains(crate::i18n::t("parity.pending").as_ref()));
     assert!(!app.rows.iter().any(|r| matches!(r, Row::Session(..))));
     let expand = app.dashboard.expand_hits[0].0;
     app.mouse(
@@ -1824,6 +1829,233 @@ fn single_line_projects_have_truthful_status_add_button_and_explicit_session_exp
     assert!(matches!(app.dialog, Some(Dialog::Input(Input::Add, _))));
     assert!(t.launches.try_recv().is_err());
 }
+#[test]
+fn project_list_keeps_names_branches_and_change_numbers_in_shared_columns() {
+    for language in [crate::i18n::Language::EnUs, crate::i18n::Language::ZhCn] {
+        crate::i18n::with_language(language, || {
+            for width in [60, 80, 140] {
+                let mut app = Overview::new(Config::default());
+                app.show_detail = false;
+                app.show_stats = false;
+                app.projects = ["new-project", "分支项目", "Clean"]
+                    .map(PathBuf::from)
+                    .to_vec();
+                app.config.overview.pending.insert("new-project".into());
+                for (path, branch, changed, ahead) in [
+                    ("new-project", "feature/a-very-long-branch-name", 5, 0),
+                    ("分支项目", "browser/another-long-branch-name", 326, 1),
+                    ("Clean", "main", 0, 1),
+                ] {
+                    app.git.insert(
+                        config::key(std::path::Path::new(path)),
+                        Ok(model::GitSummary {
+                            branch: branch.into(),
+                            changed,
+                            ahead,
+                            ..Default::default()
+                        }),
+                    );
+                }
+                app.dashboard.store_context(
+                    "new-project|Codex".into(),
+                    history::History {
+                        sessions: vec![history::Conversation {
+                            id: "history".into(),
+                            timestamp: String::new(),
+                            prompt: "History".into(),
+                            turns: vec![],
+                            file: "history.jsonl".into(),
+                        }],
+                        ..Default::default()
+                    },
+                );
+                app.rebuild();
+                app.selected = app.rows.iter().position(|r| matches!(r, Row::Project(p) if p == std::path::Path::new("new-project"))).unwrap();
+                let buffer = draw(&mut app, width, 24);
+                let add = app.dashboard.add_hit.unwrap();
+                assert_eq!(add.y + 1, app.list_area.y);
+                assert_ne!(
+                    buffer[(add.x, add.y)].bg,
+                    crate::appearance::palette().selected
+                );
+                let rows = app
+                    .dashboard
+                    .row_hits
+                    .iter()
+                    .filter_map(|(hit, index)| {
+                        if let Row::Project(path) = &app.rows[*index] {
+                            Some((*hit, path.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let mut digit_columns = Vec::new();
+                let mut branch_columns = Vec::new();
+                for (hit, path) in &rows {
+                    let text = (hit.x..hit.right())
+                        .map(|x| buffer[(x, hit.y)].symbol())
+                        .collect::<String>();
+                    assert!(!text.contains(t("parity.pending").as_ref()));
+                    assert!(!text.contains(t("overview.not_started").as_ref()));
+                    assert_eq!(
+                        buffer[(hit.x + 8, hit.y)].symbol(),
+                        path.to_string_lossy().chars().next().unwrap().to_string()
+                    );
+                    assert_eq!(buffer[(hit.x + 2, hit.y)].symbol(), "□");
+                    if path == std::path::Path::new("Clean") {
+                        let arrow = (hit.x..hit.right())
+                            .find(|x| buffer[(*x, hit.y)].symbol() == "↑")
+                            .unwrap();
+                        assert_eq!(buffer[(arrow, hit.y)].fg, ratatui::style::Color::Yellow);
+                        assert_eq!(buffer[(hit.x + 4, hit.y)].symbol(), " ");
+                    } else {
+                        let plus = (hit.x..hit.right())
+                            .find(|x| buffer[(*x, hit.y)].symbol() == "+")
+                            .unwrap();
+                        assert_eq!(buffer[(plus, hit.y)].fg, ratatui::style::Color::Green);
+                        assert!(
+                            text.contains(if path == std::path::Path::new("new-project") {
+                                "+5"
+                            } else {
+                                "+326"
+                            })
+                        );
+                        digit_columns.push(
+                            (hit.x..hit.right())
+                                .rev()
+                                .find(|x| {
+                                    buffer[(*x, hit.y)]
+                                        .symbol()
+                                        .chars()
+                                        .all(|c| c.is_ascii_digit())
+                                })
+                                .unwrap(),
+                        );
+                        let branch = if path == std::path::Path::new("new-project") {
+                            "f"
+                        } else {
+                            "b"
+                        };
+                        let x = (hit.x + 8..hit.right())
+                            .find(|x| buffer[(*x, hit.y)].symbol() == branch)
+                            .unwrap();
+                        assert_eq!(buffer[(x, hit.y)].fg, crate::appearance::palette().muted);
+                        branch_columns.push(x);
+                    }
+                }
+                assert_eq!(digit_columns[0], digit_columns[1]);
+                assert_eq!(branch_columns[0], branch_columns[1]);
+                let selected = rows
+                    .iter()
+                    .find(|(_, p)| p == std::path::Path::new("new-project"))
+                    .unwrap()
+                    .0;
+                assert_eq!(buffer[(selected.x, selected.y)].symbol(), "▎");
+                assert_eq!(
+                    buffer[(selected.x, selected.y)].fg,
+                    crate::appearance::palette().accent
+                );
+                assert_eq!(buffer[(selected.x + 4, selected.y)].symbol(), "▶");
+            }
+        });
+    }
+}
+
+#[test]
+fn project_list_separates_group_focus_checkboxes_expansion_and_warnings() {
+    let workers = worker::isolated();
+    let mut app = overview();
+    app.config.overview.pending.insert("a".into());
+    app.rebuild();
+    app.selected = app
+        .rows
+        .iter()
+        .position(|r| matches!(r, Row::Project(p) if p == std::path::Path::new("b")))
+        .unwrap();
+    let buffer = draw(&mut app, 80, 24);
+    let action = app.dashboard.pending_hit.unwrap();
+    assert_eq!(
+        buffer[(action.x, action.y)].fg,
+        crate::appearance::palette().muted
+    );
+    let group = app
+        .dashboard
+        .row_hits
+        .iter()
+        .find(|(_, i)| app.rows[*i] == Row::Group(4))
+        .unwrap()
+        .0;
+    app.mouse(
+        &workers.worker,
+        mouse_at(
+            MouseEventKind::Down(MouseButton::Left),
+            group.x + 1,
+            group.y,
+        ),
+    )
+    .unwrap();
+    assert!(app.config.overview.collapsed.contains(&4));
+    assert!(app.marked.is_empty());
+    let buffer = draw(&mut app, 80, 24);
+    let action = app.dashboard.pending_hit.unwrap();
+    assert_eq!(
+        buffer[(action.x, action.y)].fg,
+        crate::appearance::palette().accent
+    );
+    assert!(
+        buffer[(action.x, action.y)]
+            .modifier
+            .contains(ratatui::style::Modifier::BOLD)
+    );
+    app.config.overview.collapsed.clear();
+    app.profile_errors
+        .insert("a".into(), "invalid profile".into());
+    app.git.insert(
+        "b".into(),
+        Ok(model::GitSummary {
+            conflicts: 1,
+            ..Default::default()
+        }),
+    );
+    app.rebuild();
+    let buffer = draw(&mut app, 80, 24);
+    for (hit, index) in &app.dashboard.row_hits {
+        if let Row::Project(path) = &app.rows[*index] {
+            let warning = if path == std::path::Path::new("a") {
+                t("failed")
+            } else {
+                t("overview.conflict")
+            };
+            let text = (hit.x..hit.right())
+                .map(|x| buffer[(x, hit.y)].symbol())
+                .collect::<String>();
+            assert!(text.contains(warning.as_ref()));
+            let start = warning.chars().next().unwrap().to_string();
+            let x = (hit.x + 8..hit.right())
+                .find(|x| buffer[(*x, hit.y)].symbol() == start)
+                .unwrap();
+            assert_eq!(buffer[(x, hit.y)].fg, crate::appearance::palette().error);
+        }
+    }
+    let hit = app
+        .dashboard
+        .row_hits
+        .iter()
+        .find(|(_, i)| matches!(app.rows[*i], Row::Project(_)))
+        .unwrap()
+        .0;
+    app.mouse(
+        &workers.worker,
+        mouse_at(MouseEventKind::Down(MouseButton::Left), hit.x + 2, hit.y),
+    )
+    .unwrap();
+    let buffer = draw(&mut app, 80, 24);
+    assert_eq!(buffer[(hit.x + 2, hit.y)].symbol(), "☑");
+    assert_eq!(app.marked.len(), 1);
+    assert!(workers.launches.try_recv().is_err());
+}
+
 #[test]
 fn needs_attention_precedes_running_and_pending_without_duplicate_projects() {
     let mut app = overview();

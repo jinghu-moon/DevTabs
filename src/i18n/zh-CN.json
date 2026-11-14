@@ -492,6 +492,7 @@
   "overview.viewer_hint": "只读预览 · Esc 返回项目总览",
   "overview.draft_fields": "Ctrl+D Debug · Ctrl+A 参数 · Ctrl+E 额外终端 · Alt+N 添加；编辑时 Tab 下一项 · Enter 确认 · Ctrl+Delete 移除终端 · Esc 取消",
   "overview.add_pending": "加入全部",
+  "overview.add_project": "添加项目",
   "overview.search_hint": "搜索项目…",
   "overview.role_ai": "AI",
   "overview.host_retry": "宿主连接中断，正在重连 · 点击查看诊断",

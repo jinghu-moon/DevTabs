@@ -50,6 +50,8 @@ Windows Rust 项目工作区：原生 Codex / Claude Code 与 PowerShell Debug �
 
 ## 总览操作
 
+快捷键统一重构与管理菜单的待实施方案见 [快捷键重构设计](docs/52-Shortcut-Refactor-Design.md)，涵盖 F3 / Ctrl+F3 双绑定、自定义快捷键、作用域及冲突处理；不代表当前版本已经实现。
+
 直接运行 exe 进入总览。宽度达到 160 列默认项目/详情/概况三栏，104–159 列优先项目/详情，60–103 列通过 F10/F8 显式打开详情/概况弹窗。拖动分隔线调整栏宽，各栏独立滚动。
 
 - 点击搜索框或按 `/` 聚焦并即时筛选，Enter / Esc 返回项目列表；F6 切换筛选，选中标签以填充背景标识。
@@ -155,6 +157,8 @@ devtabs shutdown  # 仅允许没有工作区时关闭宿主
 ## 配置与安装
 
 配置保存在 `%APPDATA%\DevTabs\config.toml`，不会写入项目目录。`--data-dir` 或 `DEVTABS_HOME` 可隔离配置、宿主和共享小窗。格式与额外命名会话示例见 [实现设计](docs/03-Workspace-Implementation.md)。
+
+设置入口盘点、单一 TOML 配置、用户内容/运行状态划分及升级前后测试计划见 [设置与统一配置设计](docs/53-Unified-Configuration-Design.md)。方案允许开发期破坏性重构，不要求旧格式兼容或迁移，尚未实施。
 
 ```powershell
 devtabs config add 'D:\Projects\Manual'

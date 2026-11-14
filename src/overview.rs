@@ -251,6 +251,13 @@ impl Overview {
             .map(PathBuf::from)
     }
     fn rebuild(&mut self) {
+        let old_group = self.rows.get(self.selected).and_then(|row| {
+            if let Row::Group(group) = row {
+                Some(*group)
+            } else {
+                None
+            }
+        });
         let old = self.path();
         let old_task = self.rows.get(self.selected).and_then(|r| {
             if let Row::Task(_, w, t) = r {
@@ -436,6 +443,9 @@ impl Overview {
                             }
                         }
                 })
+            })
+            .or_else(|| {
+                old_group.and_then(|group| self.rows.iter().position(|r| *r == Row::Group(group)))
             })
             .or_else(|| self.rows.iter().position(|r| r.path().is_some()))
             .unwrap_or(0);
