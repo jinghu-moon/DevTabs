@@ -10,7 +10,7 @@ use std::{
     process::{Command, Stdio},
     time::{Duration, Instant},
 };
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Spec {
     pub argv: Vec<String>,
     pub cwd: PathBuf,

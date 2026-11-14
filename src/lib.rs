@@ -31,6 +31,7 @@ pub mod remote;
 pub mod rounds;
 pub mod selection;
 pub mod session;
+pub mod settings;
 pub mod sidebar;
 pub mod task_runtime;
 pub mod tasks;
