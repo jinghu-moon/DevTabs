@@ -110,6 +110,9 @@ fn overlaps(a: &str, b: &str) -> bool {
             a.starts_with(&format!("{b}{separator}")) || b.starts_with(&format!("{a}{separator}"))
         })
 }
+pub fn rebase(base: &Value, draft: &Value, latest: &Value) -> Result<Value> {
+    merge(Some(base), Some(draft), Some(latest), "")?.context("Cannot delete configuration root")
+}
 fn join(path: &str, key: &str) -> String {
     if path.is_empty() {
         key.into()
@@ -426,6 +429,22 @@ impl Snapshot {
                 });
                 continue;
             };
+            if section == "shortcuts" {
+                let result = value.clone().try_into::<model::Shortcuts>().and_then(|v| {
+                    crate::shortcuts::Index::build(&v)
+                        .map(|_| v)
+                        .map_err(serde::de::Error::custom)
+                });
+                match result {
+                    Ok(v) => effective.shortcuts = v,
+                    Err(e) => diagnostics.push(Diagnostic {
+                        path: "shortcuts".into(),
+                        message: e.to_string(),
+                        blocks: true,
+                    }),
+                }
+                continue;
+            }
             for (field, value) in fields {
                 let path = join(section, field);
                 if !known_fields(section).contains(&field.as_str()) {
@@ -753,5 +772,39 @@ mod tests {
         );
         assert!(s.save(&base, &draft).is_err());
         assert!(!s.path().exists());
+    }
+    #[test]
+    fn shortcut_dependency_failure_is_isolated_but_draft_is_atomic() {
+        let f = Fixture::new();
+        f.write("schema=1\n[shortcuts]\nprefix='bad key'\n");
+        let store = f.store();
+        let base = store.read().unwrap();
+        assert!(base.require("shortcuts").is_err());
+        let mut draft = base.tree.clone();
+        crate::settings::projection::set(
+            &mut draft,
+            &["appearance", "theme"],
+            Some("light".into()),
+        );
+        let saved = store.save(&base, &draft).unwrap();
+        assert_eq!(saved.tree["shortcuts"]["prefix"].as_str(), Some("bad key"));
+        let original = fs::read(store.path()).unwrap();
+        crate::settings::projection::set(
+            &mut draft,
+            &["shortcuts", "prefix"],
+            Some("Ctrl+G".into()),
+        );
+        crate::settings::projection::set(
+            &mut draft,
+            &["shortcuts", "bindings"],
+            Some(
+                vec![tree(
+                    "command='overview.note.edit'\ncontext='overview'\nadd=['Ctrl+G']\n",
+                )]
+                .into(),
+            ),
+        );
+        assert!(store.save(&saved, &draft).is_err());
+        assert_eq!(fs::read(store.path()).unwrap(), original);
     }
 }

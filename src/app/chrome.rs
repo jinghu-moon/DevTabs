@@ -143,11 +143,7 @@ impl App {
                 .into_iter()
                 .find(|(r, _)| r.contains((event.column, event.row).into()))
             {
-                self.key(
-                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
-                    None,
-                    1,
-                );
+                self.execute_legacy_menu(key);
             } else {
                 self.mode = Mode::Normal;
             }
@@ -208,11 +204,9 @@ pub(crate) fn overlay(frame: &mut Frame, app: &App) {
     for (rect, key) in command_rows(frame.area()) {
         let unavailable = key == 'd' && app.sessions.len() < 2;
         let label = COMMANDS.iter().find(|(k, _)| *k == key).unwrap().1;
-        let key = if key == 'F' {
-            "Shift+F".into()
-        } else {
-            key.to_string()
-        };
+        let key = crate::shortcuts::workspace_menu_command(key).map_or_else(String::new, |id| {
+            app.shortcuts.preferred(id, app.shortcut_context())
+        });
         let label = format!(
             "{key:>7}  {}",
             crate::i18n::t(&format!("chrome.command.{label}"))

@@ -70,10 +70,39 @@ enum Command {
     Preset(String),
     Quit,
 }
+impl Command {
+    fn shortcut_id(&self) -> Option<&'static str> {
+        match self {
+            Self::Help => Some("overview.help"),
+            Self::Favorite => Some("overview.favorite"),
+            Self::Note => Some("overview.note.edit"),
+            Self::Settings => Some("overview.project.settings"),
+            Self::Refresh => Some("overview.refresh"),
+            Self::Filter => Some("overview.filter"),
+            Self::Sort => Some("overview.sort"),
+            Self::Stats => Some("overview.statistics"),
+            Self::History => Some("overview.history"),
+            Self::Details => Some("overview.details"),
+            Self::Launch => Some("overview.launch"),
+            Self::Options => Some("overview.options"),
+            Self::NewProject => Some("overview.new_project"),
+            Self::Presets => Some("overview.presets"),
+            Self::Root => Some("overview.root.add"),
+            Self::Add => Some("overview.project.add"),
+            Self::Exclude => Some("overview.project.exclude"),
+            Self::SavePreset => Some("overview.preset.save"),
+            Self::CopyPath => Some("overview.copy_path"),
+            Self::SelectAll => Some("overview.select_all"),
+            Self::Language(_) => Some("overview.language.next"),
+            Self::Theme(_) => Some("overview.theme.next"),
+            _ => None,
+        }
+    }
+}
 struct Entry {
     label: String,
     keywords: String,
-    hint: &'static str,
+    hint: String,
     command: Command,
     enabled: bool,
 }
@@ -131,6 +160,8 @@ enum Dialog {
     Diagnostics,
 }
 pub struct Overview {
+    shortcuts: crate::shortcuts::Index,
+    shortcut_router: crate::shortcuts::Router,
     config: Config,
     dashboard: dashboard::Dashboard,
     filter_counts: BTreeMap<model::Filter, usize>,
@@ -192,6 +223,14 @@ impl Overview {
         let show_detail = config.overview.detail.unwrap_or(true);
         let show_stats = config.overview.statistics.unwrap_or(true);
         Self {
+            shortcuts: crate::shortcuts::Index::load(
+                &config
+                    .source
+                    .as_ref()
+                    .map(|s| s.effective.shortcuts.clone())
+                    .unwrap_or_default(),
+            ),
+            shortcut_router: Default::default(),
             return_target: None,
             return_applied: false,
             dashboard: dashboard::Dashboard::default(),
@@ -747,6 +786,12 @@ impl Overview {
                                 || c.excluded != self.config.excluded
                                 || c.overview.sort != self.config.overview.sort;
                             let pending = self.config.overview.pending.clone();
+                            self.shortcuts = crate::shortcuts::Index::load(
+                                &c.source
+                                    .as_ref()
+                                    .map(|s| s.effective.shortcuts.clone())
+                                    .unwrap_or_default(),
+                            );
                             self.config = c;
                             self.config.overview.pending = pending;
                             self.profiles.clear();
@@ -1198,7 +1243,7 @@ impl Overview {
             ("overview.latest", "", Command::LatestSession, available),
             ("overview.native", "", Command::NativePicker, available),
             ("favorite", "F2", Command::Favorite, available),
-            ("edit_note", "F3", Command::Note, available),
+            ("edit_note", "Ctrl+F3", Command::Note, available),
             ("settings", "F4", Command::Settings, available),
             (
                 "history",
@@ -1291,7 +1336,10 @@ impl Overview {
                     crate::i18n::in_language(crate::i18n::Language::EnUs, key),
                     crate::i18n::in_language(crate::i18n::Language::ZhCn, key)
                 ),
-                hint,
+                hint: command.shortcut_id().map_or_else(
+                    || hint.to_string(),
+                    |id| self.shortcuts.preferred(id, "overview"),
+                ),
                 command,
                 enabled,
             })
@@ -1300,7 +1348,7 @@ impl Overview {
             out.push(Entry {
                 label: format!("{}: {agent:?}", t("agent")),
                 keywords: format!("agent 工具 {agent:?}"),
-                hint: "←/→",
+                hint: "←/→".into(),
                 command: Command::DraftAgent(agent),
                 enabled: available,
             });
@@ -1313,7 +1361,7 @@ impl Overview {
             out.push(Entry {
                 label: format!("{}: {}", t("overview.composition"), composition.label()),
                 keywords: format!("composition 终端 组合 {:?}", composition),
-                hint: "",
+                hint: "".into(),
                 command: Command::DraftComposition(composition),
                 enabled: available,
             });
@@ -1331,7 +1379,7 @@ impl Overview {
             out.push(Entry {
                 label: format!("{}: {label}", t("language")),
                 keywords: "language 语言 locale 中文 English".into(),
-                hint: "",
+                hint: "".into(),
                 command: Command::Language(language),
                 enabled: true,
             })
@@ -1345,7 +1393,7 @@ impl Overview {
             out.push(Entry {
                 label: format!("{}: {}", t("theme"), theme.label()),
                 keywords: format!("theme 主题 {:?}", theme),
-                hint: "",
+                hint: "".into(),
                 command: Command::Theme(theme),
                 enabled: true,
             })
@@ -1354,7 +1402,7 @@ impl Overview {
             out.push(Entry {
                 label: format!("{}: {}", t("projects"), path.display()),
                 keywords: path.to_string_lossy().into_owned(),
-                hint: "Enter",
+                hint: "Enter".into(),
                 command: Command::Project(path.clone()),
                 enabled: true,
             })
@@ -1363,7 +1411,7 @@ impl Overview {
             out.push(Entry {
                 label: format!("{}: {name}", t("preset")),
                 keywords: format!("preset 预设 {name}"),
-                hint: "Enter",
+                hint: "Enter".into(),
                 command: Command::Preset(name.clone()),
                 enabled: !self.batch.busy(),
             })
@@ -2348,6 +2396,11 @@ impl Overview {
             }
             return Ok(Outcome::Stay);
         }
+        if let crate::shortcuts::Resolution::Execute(id) =
+            self.shortcut_router.route(&self.shortcuts, "overview", key)
+        {
+            return self.execute_shortcut(w, id);
+        }
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let command = match key.code {
             KeyCode::Esc if !self.query.is_empty() => {
@@ -2362,8 +2415,6 @@ impl Overview {
                 None
             }
             KeyCode::Esc => Some(Command::Quit),
-            KeyCode::Enter if ctrl => Some(Command::Launch),
-            KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => Some(Command::Options),
             KeyCode::Enter => {
                 if matches!(self.rows.get(self.selected), Some(Row::Group(_))) {
                     Some(Command::Group)
@@ -2372,37 +2423,6 @@ impl Overview {
                 }
             }
             KeyCode::Left | KeyCode::Right => Some(Command::Group),
-            KeyCode::Char('!') => Some(Command::Attention),
-            KeyCode::F(1) => Some(Command::Help),
-            KeyCode::Char('a' | 'A') if ctrl && key.modifiers.contains(KeyModifiers::SHIFT) => {
-                Some(Command::SelectAll)
-            }
-            KeyCode::Char('n') if ctrl => Some(Command::NewProject),
-            KeyCode::Char('b') if ctrl => Some(Command::Presets),
-            KeyCode::F(2) => Some(Command::Favorite),
-            KeyCode::F(3) => Some(Command::Note),
-            KeyCode::F(4) => Some(Command::Settings),
-            KeyCode::F(5) => Some(Command::Refresh),
-            KeyCode::F(6) => Some(Command::Filter),
-            KeyCode::F(7) => Some(Command::Sort),
-            KeyCode::F(8) => Some(Command::Stats),
-            KeyCode::F(9) => Some(Command::History),
-            KeyCode::F(10) => Some(Command::Details),
-            KeyCode::Char('r') if ctrl => Some(Command::Root),
-            KeyCode::Char('a') if ctrl => Some(Command::Add),
-            KeyCode::Char('e') if ctrl => Some(Command::Exclude),
-            KeyCode::Char('s') if ctrl => Some(Command::SavePreset),
-            KeyCode::Char('l') if ctrl => Some(Command::Language(self.config.language.next())),
-            KeyCode::Char('t') if ctrl => Some(Command::Theme(self.config.theme.next())),
-            KeyCode::Char('c') if ctrl => Some(Command::CopyPath),
-            KeyCode::Char('p') if ctrl => {
-                self.dialog = Some(Dialog::Palette {
-                    query: String::new(),
-                    selected: 0,
-                    original: crate::appearance::theme(),
-                });
-                None
-            }
             KeyCode::Char(' ') if !ctrl => {
                 self.toggle_selected_queue();
                 None
@@ -2458,6 +2478,44 @@ impl Overview {
         } else {
             Ok(Outcome::Stay)
         }
+    }
+    fn execute_shortcut(&mut self, w: &Workers, id: &str) -> Result<Outcome> {
+        let command = match id {
+            "overview.attention" => Command::Attention,
+            "overview.help" => Command::Help,
+            "overview.select_all" => Command::SelectAll,
+            "overview.new_project" => Command::NewProject,
+            "overview.presets" => Command::Presets,
+            "overview.favorite" => Command::Favorite,
+            "overview.note.edit" => Command::Note,
+            "overview.project.settings" => Command::Settings,
+            "overview.refresh" => Command::Refresh,
+            "overview.filter" => Command::Filter,
+            "overview.sort" => Command::Sort,
+            "overview.statistics" => Command::Stats,
+            "overview.history" => Command::History,
+            "overview.details" => Command::Details,
+            "overview.root.add" => Command::Root,
+            "overview.project.add" => Command::Add,
+            "overview.project.exclude" => Command::Exclude,
+            "overview.preset.save" => Command::SavePreset,
+            "overview.language.next" => Command::Language(self.config.language.next()),
+            "overview.theme.next" => Command::Theme(self.config.theme.next()),
+            "overview.copy_path" => Command::CopyPath,
+            "overview.launch" => Command::Launch,
+            "overview.options" => Command::Options,
+            "settings.open" => Command::Settings,
+            "overview.palette" => {
+                self.dialog = Some(Dialog::Palette {
+                    query: String::new(),
+                    selected: 0,
+                    original: crate::appearance::theme(),
+                });
+                return Ok(Outcome::Stay);
+            }
+            _ => return Ok(Outcome::Stay),
+        };
+        self.command(w, command)
     }
     fn code_copy_at(&self, point: ratatui::layout::Position) -> Option<std::sync::Arc<str>> {
         if self.dashboard.viewer.is_some()

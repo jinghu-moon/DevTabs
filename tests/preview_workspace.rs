@@ -207,7 +207,7 @@ fn source_code_wrapping_keeps_highlights_when_scrolling() {
             .as_ref()
             .is_some_and(|w| w.line(100).is_some())
     });
-    assert!(s.status().contains("Wrap"));
+    assert!(s.status().contains("Wrap"), "{}", s.status());
 }
 
 #[test]
@@ -669,7 +669,7 @@ fn toolbar_more_keeps_actions_and_filename_clear_at_narrow_widths() {
         assert!(!header.contains("[V]") && !header.contains("[W]") && !header.contains("[D]"));
     }
     menu_action(&mut s, "Toggle code wrapping [W]");
-    assert!(s.status().contains("Wrap"));
+    assert!(s.status().contains("Wrap"), "{}", s.status());
     s.menu();
     assert!(
         s.menu
@@ -1116,7 +1116,7 @@ fn more_and_tab_context_menus_support_mouse_selection() {
         MouseEventKind::Down(MouseButton::Left),
     );
     assert!(s.menu.is_none());
-    assert!(s.status().contains("Wrap"));
+    assert!(s.status().contains("Wrap"), "{}", s.status());
     let other = f.0.join("other.md");
     fs::write(&other, "# Other\n").unwrap();
     s.open(other.clone(), true).unwrap();
@@ -1159,4 +1159,27 @@ fn clean_active_tab_has_no_dirty_marker_and_progress_stays_on_preview_edge() {
     );
     assert!(header.contains("More") || header.contains("更多"));
     assert!(header.contains("other.md"));
+}
+
+#[test]
+fn modified_preview_shortcut_uses_registry_and_old_key_no_longer_executes() {
+    let f = Fixture::new();
+    let mut s = f.open("hello");
+    let p: devtabs::settings::model::Shortcuts = toml::from_str(
+        "[[bindings]]\ncommand='panel.wrap'\ncontext='preview'\nremove=['W']\nadd=['Ctrl+J']\n",
+    )
+    .unwrap();
+    s.shortcuts = devtabs::shortcuts::Index::build(&p).unwrap();
+    let initial = s.current_wrap().unwrap();
+    key(&mut s, KeyCode::Char('w'));
+    assert_eq!(s.current_wrap().unwrap(), initial);
+    s.key(KeyEvent::new(
+        KeyCode::Char('j'),
+        KeyModifiers::CONTROL | KeyModifiers::ALT,
+    ))
+    .unwrap();
+    assert_eq!(s.current_wrap().unwrap(), initial);
+    s.key(KeyEvent::new(KeyCode::Char('j'), KeyModifiers::CONTROL))
+        .unwrap();
+    assert_eq!(s.current_wrap().unwrap(), !initial);
 }

@@ -835,7 +835,10 @@ pub(super) mod tests {
             sidebar: None,
             path_receipt: None,
             last_target: Instant::now(),
-            consumed_keys: HashSet::new(),
+            shortcuts: crate::shortcuts::Index::load(&Default::default()),
+            shortcut_router: Default::default(),
+            key_ledger: Default::default(),
+            forwarded: None,
             size: Rect::new(0, 0, 100, 30),
             popup: None,
             popup_window: popup::Window::default(),
@@ -1226,11 +1229,11 @@ pub(super) mod tests {
                     .unwrap();
                     assert!(app.mode == Mode::Normal);
                     assert_eq!(app.terminal_menu, Some(0));
-                    assert!(app.consumed_keys.contains(&KeyCode::Char('w')));
+                    // Mouse executes a command directly and owns no keyboard press.
                     let mut release = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
                     release.kind = KeyEventKind::Release;
                     app.key(release, None, 1);
-                    assert!(!app.consumed_keys.contains(&KeyCode::Char('w')));
+                    assert_eq!(app.terminal_menu, Some(0));
                     app.mouse(MouseEvent {
                         kind: MouseEventKind::Up(MouseButton::Left),
                         column: r.x,

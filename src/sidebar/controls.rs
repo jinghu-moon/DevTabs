@@ -362,46 +362,6 @@ impl Sidebar {
         if self.modal() || self.focus != Focus::Preview {
             return Ok(false);
         }
-        if key.modifiers.contains(KeyModifiers::ALT) && key.code == KeyCode::Right {
-            self.reading_history(true)?;
-            return Ok(true);
-        }
-        if key.modifiers.contains(KeyModifiers::ALT) && matches!(key.code, KeyCode::Char('c' | 'C'))
-        {
-            if let Some(d) = &self.document {
-                files::copy(d.path.to_string_lossy().into_owned())?;
-                self.say(crate::i18n::t("preview.path_copied"), true);
-            }
-            return Ok(true);
-        }
-        if key.modifiers.contains(KeyModifiers::CONTROL)
-            && matches!(key.code, KeyCode::Char('b' | 'B'))
-        {
-            self.control_command(Command::Bookmarks)?;
-            return Ok(true);
-        }
-        if !key
-            .modifiers
-            .intersects(KeyModifiers::ALT | KeyModifiers::CONTROL)
-        {
-            let command = match key.code {
-                KeyCode::Char('b' | 'B') => Some(Command::Bookmark),
-                KeyCode::Char('i' | 'I') => Some(Command::Info),
-                _ => None,
-            };
-            if let Some(command) = command {
-                self.control_command(command)?;
-                return Ok(true);
-            }
-            if matches!(key.code, KeyCode::Char('n' | 'N'))
-                && self
-                    .document
-                    .as_ref()
-                    .is_some_and(|d| !d.view.search_targets.is_empty())
-            {
-                self.push_back();
-            }
-        }
         Ok(false)
     }
     pub(super) fn control_mouse(&mut self, event: MouseEvent) -> Result<bool> {

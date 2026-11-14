@@ -489,18 +489,6 @@ impl Sidebar {
                     KeyCode::PageUp | KeyCode::PageDown | KeyCode::Left | KeyCode::Right
                 )));
         }
-        let command = match key.code {
-            KeyCode::Char('0') => Some(Command::ImageFit),
-            KeyCode::Char('1') => Some(Command::ImageActual),
-            KeyCode::Char('+' | '=') => Some(Command::ImageZoomIn),
-            KeyCode::Char('-') => Some(Command::ImageZoomOut),
-            KeyCode::Char('p' | 'P') => Some(Command::ImageProfile),
-            _ => None,
-        };
-        if let Some(c) = command {
-            self.image_command(c);
-            return Ok(true);
-        }
         let cell = self.image_display.cell;
         let page = self.image_viewport().map_or(10, |r| r.height);
         let i = self
@@ -516,13 +504,6 @@ impl Sidebar {
             KeyCode::PageUp => i.pan(0.0, -f64::from(cell.height) * f64::from(page)),
             KeyCode::PageDown => i.pan(0.0, f64::from(cell.height) * f64::from(page)),
             KeyCode::Esc => self.close(),
-            KeyCode::Char('o' | 'O') => {
-                let path = self.document.as_ref().unwrap().path.clone();
-                self.open_external(path)?;
-            }
-            KeyCode::Char('z' | 'Z') => self.preview_command(Command::Maximize)?,
-            KeyCode::F(5) => self.invalidate_image(true),
-            KeyCode::F(2) => self.menu(),
             _ => {}
         }
         Ok(true)

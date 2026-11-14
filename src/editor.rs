@@ -22,6 +22,7 @@ const HISTORY_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_EDIT_BYTES: usize = 512 * 1024;
 
 pub struct Editor {
+    pub shortcuts: crate::shortcuts::Index,
     pub area: TextArea<'static>,
     pub loaded: Arc<Loaded>,
     pub revision: u64,
@@ -59,6 +60,7 @@ impl Editor {
         area.set_cursor_line_style(Style::new());
         area.set_cursor_style(Style::new().bg(Color::Cyan).fg(Color::Black));
         Ok(Self {
+            shortcuts: crate::shortcuts::Index::current(),
             area,
             loaded,
             revision: 1,
@@ -254,26 +256,11 @@ impl Editor {
             }
             return Ok(());
         }
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            match key.code {
-                KeyCode::Char('c') => return self.copy(),
-                KeyCode::Char('x') => return self.cut(),
-                KeyCode::Char('v') => {
-                    let text = arboard::Clipboard::new()?.get_text()?;
-                    return self.paste(&text);
-                }
-                KeyCode::Char('z') => return self.undo(),
-                KeyCode::Char('y') => return self.redo(),
-                KeyCode::Char('a') => {
-                    self.area.select_all();
-                    return Ok(());
-                }
-                KeyCode::Char('f') => {
-                    self.search_input = Some(String::new());
-                    return Ok(());
-                }
-                _ => {}
-            }
+        if let crate::shortcuts::Resolution::Execute(id) = self
+            .shortcuts
+            .resolve("editor", &[crate::shortcuts::Chord::event(key)])
+        {
+            return self.execute_command(id);
         }
         match key.code {
             KeyCode::Up
@@ -296,17 +283,38 @@ impl Editor {
             }
             KeyCode::Tab => self.indent(false),
             KeyCode::BackTab => self.indent(true),
-            KeyCode::F(3) => {
-                self.area.search_forward(false);
-                Ok(())
-            }
-            KeyCode::F(4) => {
-                self.area.search_back(false);
-                Ok(())
-            }
             _ => self.edit(|a| {
                 a.input_without_shortcuts(key);
             }),
+        }
+    }
+    pub fn execute_command(&mut self, id: &str) -> Result<()> {
+        match id {
+            "editor.copy" => self.copy(),
+            "editor.cut" => self.cut(),
+            "editor.paste" => {
+                let text = arboard::Clipboard::new()?.get_text()?;
+                self.paste(&text)
+            }
+            "editor.undo" => self.undo(),
+            "editor.redo" => self.redo(),
+            "editor.select_all" => {
+                self.area.select_all();
+                Ok(())
+            }
+            "editor.search" => {
+                self.search_input = Some(String::new());
+                Ok(())
+            }
+            "editor.match.next" => {
+                self.area.search_forward(false);
+                Ok(())
+            }
+            "editor.match.previous" => {
+                self.area.search_back(false);
+                Ok(())
+            }
+            _ => Ok(()),
         }
     }
     pub fn mouse(&mut self, event: MouseEvent, rect: Rect) {

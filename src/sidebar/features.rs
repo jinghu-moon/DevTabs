@@ -244,6 +244,7 @@ impl Sidebar {
                     }
                     d.invalidate_view();
                 }
+                self.say("Wrap changed", true);
             }
             Command::Compare => {
                 if let Some(d) = &mut self.document {
@@ -423,33 +424,6 @@ impl Sidebar {
             }
             self.update_query();
             return Ok(true);
-        }
-        if !self.modal() && self.focus == Focus::Preview {
-            let command = match key.code {
-                KeyCode::Char('z' | 'Z') => Some(Command::Maximize),
-                KeyCode::Char('w' | 'W') => Some(Command::Wrap),
-                KeyCode::Char('v' | 'V') => Some(Command::Compare),
-                KeyCode::Char('d' | 'D') => Some(Command::Diff),
-                KeyCode::Char('g' | 'G') => Some(Command::Goto),
-                KeyCode::PageDown if key.modifiers.contains(KeyModifiers::ALT) => {
-                    Some(Command::NextTab)
-                }
-                KeyCode::PageUp if key.modifiers.contains(KeyModifiers::ALT) => {
-                    Some(Command::PreviousTab)
-                }
-                _ => None,
-            };
-            if let Some(c) = command {
-                if key
-                    .modifiers
-                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-                    && !matches!(c, Command::NextTab | Command::PreviousTab)
-                {
-                    return Ok(false);
-                }
-                self.preview_command(c)?;
-                return Ok(true);
-            }
         }
         Ok(false)
     }

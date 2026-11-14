@@ -186,6 +186,131 @@ pub enum Command {
     Bookmarks,
     Info,
 }
+impl Command {
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::QuickOpen => "panel.quick_open",
+            Self::Follow => "panel.follow",
+            Self::Compact => "panel.compact",
+            Self::Modified => "panel.modified",
+            Self::NewFile => "panel.new_file",
+            Self::NewDirectory => "panel.new_directory",
+            Self::Rename => "panel.rename",
+            Self::Trash => "panel.trash",
+            Self::PreviewSelected => "panel.preview_selected",
+            Self::ImageFit => "panel.image_fit",
+            Self::ImageActual => "panel.image_actual",
+            Self::ImageZoomIn => "panel.image_zoom_in",
+            Self::ImageZoomOut => "panel.image_zoom_out",
+            Self::ImageProfile => "panel.image_profile",
+            Self::ImageProtocol => "panel.image_protocol",
+            Self::ImageRefresh => "panel.image_refresh",
+            Self::Maximize => "panel.maximize",
+            Self::Wrap => "panel.wrap",
+            Self::Compare => "panel.compare",
+            Self::Diff => "panel.diff",
+            Self::Goto => "panel.goto",
+            Self::Search => "panel.search",
+            Self::NextTab => "panel.next_tab",
+            Self::PreviousTab => "panel.previous_tab",
+            Self::Insert => "panel.insert",
+            Self::CopyAbsolute => "panel.copy_absolute",
+            Self::CopyRelative => "panel.copy_relative",
+            Self::Reveal => "panel.reveal",
+            Self::External => "panel.external",
+            Self::Collapse => "panel.collapse",
+            Self::Release => "panel.release",
+            Self::Icons => "panel.icons",
+            Self::Theme => "panel.theme",
+            Self::Language => "panel.language",
+            Self::Locate => "panel.locate",
+            Self::CopyContent => "panel.copy_content",
+            Self::CopySource => "panel.copy_source",
+            Self::Close => "panel.close",
+            Self::Edit => "panel.edit",
+            Self::Save => "panel.save",
+            Self::Undo => "panel.undo",
+            Self::Redo => "panel.redo",
+            Self::Cut => "panel.cut",
+            Self::Paste => "panel.paste",
+            Self::Find => "panel.find",
+            Self::Project => "panel.project",
+            Self::EndEdit => "panel.end_edit",
+            Self::Mode => "panel.mode",
+            Self::Outline => "panel.outline",
+            Self::Back => "panel.back",
+            Self::Forward => "panel.forward",
+            Self::More => "panel.more",
+            Self::CloseOthers => "panel.close_others",
+            Self::CloseRight => "panel.close_right",
+            Self::Bookmark => "panel.bookmark",
+            Self::Bookmarks => "panel.bookmarks",
+            Self::Info => "panel.info",
+        }
+    }
+    pub fn from_id(id: &str) -> Option<Self> {
+        Some(match id {
+            "panel.quick_open" => Self::QuickOpen,
+            "panel.follow" => Self::Follow,
+            "panel.compact" => Self::Compact,
+            "panel.modified" => Self::Modified,
+            "panel.new_file" => Self::NewFile,
+            "panel.new_directory" => Self::NewDirectory,
+            "panel.rename" => Self::Rename,
+            "panel.trash" => Self::Trash,
+            "panel.preview_selected" => Self::PreviewSelected,
+            "panel.image_fit" => Self::ImageFit,
+            "panel.image_actual" => Self::ImageActual,
+            "panel.image_zoom_in" => Self::ImageZoomIn,
+            "panel.image_zoom_out" => Self::ImageZoomOut,
+            "panel.image_profile" => Self::ImageProfile,
+            "panel.image_protocol" => Self::ImageProtocol,
+            "panel.image_refresh" => Self::ImageRefresh,
+            "panel.maximize" => Self::Maximize,
+            "panel.wrap" => Self::Wrap,
+            "panel.compare" => Self::Compare,
+            "panel.diff" => Self::Diff,
+            "panel.goto" => Self::Goto,
+            "panel.search" => Self::Search,
+            "panel.next_tab" => Self::NextTab,
+            "panel.previous_tab" => Self::PreviousTab,
+            "panel.insert" => Self::Insert,
+            "panel.copy_absolute" => Self::CopyAbsolute,
+            "panel.copy_relative" => Self::CopyRelative,
+            "panel.reveal" => Self::Reveal,
+            "panel.external" => Self::External,
+            "panel.collapse" => Self::Collapse,
+            "panel.release" => Self::Release,
+            "panel.icons" => Self::Icons,
+            "panel.theme" => Self::Theme,
+            "panel.language" => Self::Language,
+            "panel.locate" => Self::Locate,
+            "panel.copy_content" => Self::CopyContent,
+            "panel.copy_source" => Self::CopySource,
+            "panel.close" => Self::Close,
+            "panel.edit" => Self::Edit,
+            "panel.save" => Self::Save,
+            "panel.undo" => Self::Undo,
+            "panel.redo" => Self::Redo,
+            "panel.cut" => Self::Cut,
+            "panel.paste" => Self::Paste,
+            "panel.find" => Self::Find,
+            "panel.project" => Self::Project,
+            "panel.end_edit" => Self::EndEdit,
+            "panel.mode" => Self::Mode,
+            "panel.outline" => Self::Outline,
+            "panel.back" => Self::Back,
+            "panel.forward" => Self::Forward,
+            "panel.more" => Self::More,
+            "panel.close_others" => Self::CloseOthers,
+            "panel.close_right" => Self::CloseRight,
+            "panel.bookmark" => Self::Bookmark,
+            "panel.bookmarks" => Self::Bookmarks,
+            "panel.info" => Self::Info,
+            _ => return None,
+        })
+    }
+}
 #[derive(Debug)]
 pub enum Action {
     None,
@@ -371,6 +496,7 @@ impl Document {
 }
 
 pub struct Sidebar {
+    pub shortcuts: crate::shortcuts::Index,
     /// Shared preview can be embedded in a context that must never edit files.
     pub read_only: bool,
     explorer: explorer::Explorer,
@@ -453,7 +579,11 @@ impl Sidebar {
             .is_some_and(|e| e.dirty() || e.saving)
     }
     pub fn modal(&self) -> bool {
-        self.controls.panel.is_some()
+        self.document
+            .as_ref()
+            .and_then(|d| d.editor())
+            .is_some_and(|e| e.search_input.is_some())
+            || self.controls.panel.is_some()
             || self.tools.navigation.is_some()
             || self.tools.diff.is_some()
             || self.tools.diff_pending.is_some()
@@ -576,6 +706,7 @@ impl Sidebar {
         let mut files = Files::new(root.clone());
         files.light = crate::appearance::theme() == crate::appearance::Theme::Light;
         Self {
+            shortcuts: crate::shortcuts::Index::current(),
             explorer: explorer::Explorer::new(root.clone()),
             preview_defaults: Default::default(),
             read_only: false,
@@ -1571,6 +1702,15 @@ impl Sidebar {
         });
     }
     fn command(&mut self, command: Command, target: PathBuf) -> Result<Action> {
+        self.execute_at(command.id(), target)
+    }
+    fn execute_at(&mut self, id: &str, target: PathBuf) -> Result<Action> {
+        let Some(command) = Command::from_id(id) else {
+            return Ok(Action::None);
+        };
+        self.perform_command(command, target)
+    }
+    fn perform_command(&mut self, command: Command, target: PathBuf) -> Result<Action> {
         if let Some(action) = self.explorer_command(command, &target)? {
             return Ok(action);
         }
@@ -1850,9 +1990,103 @@ impl Sidebar {
         }
         Ok(())
     }
+    pub fn current_wrap(&self) -> Option<bool> {
+        self.document.as_ref().map(|d| d.view.wrap)
+    }
+    pub fn shortcut_context(&self) -> &'static str {
+        match self.focus {
+            Focus::Tree => "tree",
+            Focus::Editor => "editor",
+            Focus::Preview if self.document.as_ref().is_some_and(Document::is_image) => {
+                "preview.image"
+            }
+            Focus::Preview => "preview",
+            _ => "terminal.input",
+        }
+    }
+    pub fn execute_command(&mut self, id: &str) -> Result<Action> {
+        match id {
+            "tree.search" => {
+                self.start_query(true);
+                return Ok(Action::None);
+            }
+            "tree.hidden" => {
+                self.files.hidden = !self.files.hidden;
+                self.files.refresh(&self.io)?;
+                return Ok(Action::None);
+            }
+            "tree.ignored" => {
+                self.files.ignored = !self.files.ignored;
+                self.files.refresh(&self.io)?;
+                return Ok(Action::None);
+            }
+            "preview.match.next" | "preview.match.previous" => {
+                self.push_back();
+                if let Some(d) = &mut self.document {
+                    d.jump_match(id.ends_with("previous"));
+                }
+                return Ok(Action::None);
+            }
+            "preview.copy_selection" => {
+                let text = self
+                    .document
+                    .as_ref()
+                    .and_then(|d| d.selected_text())
+                    .context("Select text first")?;
+                files::copy(text)?;
+                return Ok(Action::None);
+            }
+            "preview.copy_path" => {
+                if let Some(d) = &self.document {
+                    files::copy(d.path.to_string_lossy().into_owned())?;
+                }
+                return Ok(Action::None);
+            }
+            _ => {}
+        }
+        if id.starts_with("panel.") {
+            let target = if self.focus == Focus::Tree {
+                self.files.selected_path()
+            } else {
+                self.document.as_ref().map(|d| d.path.clone())
+            }
+            .unwrap_or_else(|| self.files.root.clone());
+            return self.execute_at(id, target);
+        }
+        if id.ends_with(".menu") {
+            self.menu();
+        } else if id.ends_with(".refresh") {
+            self.explorer.invalidate();
+            self.files.retry_watch();
+            self.files.refresh(&self.io)?;
+            self.refresh_document()?;
+        } else if id == "editor.save" {
+            self.save()?;
+        } else if id.starts_with("editor.")
+            && let Some(e) = self.document.as_mut().and_then(|d| d.editor_mut())
+        {
+            e.execute_command(id)?;
+        }
+        Ok(Action::None)
+    }
     pub fn key(&mut self, key: KeyEvent) -> Result<Action> {
         if let Some(d) = &mut self.document {
             d.defaults_pending = false;
+        }
+        if !self.modal()
+            && !self
+                .document
+                .as_ref()
+                .and_then(|d| d.editor())
+                .is_some_and(|e| e.search_input.is_some())
+        {
+            let context = self.shortcut_context();
+            if let crate::shortcuts::Resolution::Execute(id) = self
+                .shortcuts
+                .resolve(context, &[crate::shortcuts::Chord::event(key)])
+            {
+                return self.execute_command(id);
+            }
         }
         if let Some(action) = self.explorer_key(key)? {
             return Ok(action);
@@ -2001,20 +2235,8 @@ impl Sidebar {
             self.cancel_drag(true);
             return Ok(Action::None);
         }
-        if key.code == KeyCode::F(2) {
-            self.menu();
-            return Ok(Action::None);
-        }
-        if key.code == KeyCode::F(5) {
-            self.files.retry_watch();
-            self.files.refresh(&self.io)?;
-            self.refresh_document()?;
-            return Ok(Action::None);
-        }
         if self.focus == Focus::Editor {
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
-                self.save()?;
-            } else if let Some(e) = self.document.as_mut().and_then(|d| d.editor_mut()) {
+            if let Some(e) = self.document.as_mut().and_then(|d| d.editor_mut()) {
                 e.key(key)?;
             }
             return Ok(Action::None);
@@ -2066,15 +2288,6 @@ impl Sidebar {
                     }
                 }
                 KeyCode::Enter => self.activate_tree(true)?,
-                KeyCode::Char('/') => self.start_query(true),
-                KeyCode::Char('.') => {
-                    self.files.hidden = !self.files.hidden;
-                    self.files.refresh(&self.io)?;
-                }
-                KeyCode::Char('i' | 'I') => {
-                    self.files.ignored = !self.files.ignored;
-                    self.files.refresh(&self.io)?;
-                }
                 KeyCode::Esc => {
                     self.focus_agent();
                     return Ok(Action::Agent);
@@ -2085,25 +2298,6 @@ impl Sidebar {
             let page = self
                 .document_area()
                 .map_or(10, |r| r.height.saturating_sub(1).max(1) as usize);
-            if matches!(key.code, KeyCode::Char('t' | 'T')) {
-                self.start_outline();
-                return Ok(Action::None);
-            }
-            if matches!(key.code, KeyCode::Char('e' | 'E')) {
-                self.begin_edit()?;
-                return Ok(Action::None);
-            }
-            if key.code == KeyCode::Char('/') {
-                self.start_query(false);
-                return Ok(Action::None);
-            }
-            if matches!(key.code, KeyCode::Char('o' | 'O')) {
-                if let Some(d) = &self.document {
-                    let path = d.path.clone();
-                    self.open_external(path)?;
-                }
-                return Ok(Action::None);
-            }
             let Some(d) = &mut self.document else {
                 return Ok(Action::None);
             };
@@ -2117,24 +2311,6 @@ impl Sidebar {
                             self.close();
                         }
                     }
-                }
-                KeyCode::Char('m' | 'M') => {
-                    if d.loaded().is_some_and(|l| l.markdown()) {
-                        d.reader.seek = Some(d.reading_byte());
-                        d.markdown = !d.markdown;
-                        d.selection = None;
-                        d.render_pending = false;
-                        d.render_id = 0;
-                    }
-                }
-                KeyCode::Char('n') => d.jump_match(false),
-                KeyCode::Char('N') => d.jump_match(true),
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    let text = d
-                        .selected_text()
-                        .context(crate::i18n::t("ui.select_text_or_use_f2_copy_content"))?;
-                    files::copy(text)?;
-                    self.say(crate::i18n::t("ui.copied_selection"), true);
                 }
                 KeyCode::Up => d.offset_mut().0 = d.offset().0.saturating_sub(1),
                 KeyCode::Down => d.offset_mut().0 = d.offset().0.saturating_add(1),

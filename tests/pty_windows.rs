@@ -146,6 +146,11 @@ fn command(session: &Session, text: &str) {
         false,
         win32,
     ));
+    if win32 {
+        let mut release = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        release.kind = crossterm::event::KeyEventKind::Release;
+        bytes.extend(input::key(release, false, true));
+    }
     session.send(bytes).unwrap();
 }
 fn press(session: &Session, code: KeyCode, modifiers: KeyModifiers) {

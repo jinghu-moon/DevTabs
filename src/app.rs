@@ -61,7 +61,10 @@ pub struct App {
     pub sidebar: Option<crate::sidebar::Sidebar>,
     path_receipt: Option<(String, std::sync::mpsc::Receiver<Result<()>>)>,
     last_target: Instant,
-    consumed_keys: HashSet<KeyCode>,
+    shortcuts: crate::shortcuts::Index,
+    shortcut_router: crate::shortcuts::Router,
+    key_ledger: crate::shortcuts::ledger::Ledger,
+    forwarded: Option<crate::shortcuts::ledger::Owner>,
     size: ratatui::layout::Rect,
     pub(crate) popup: Option<usize>,
     pub(crate) popup_window: popup::Window,
@@ -139,7 +142,10 @@ impl App {
             chrome_capture: false,
             quit_requested: None,
             force_exit: false,
-            consumed_keys: HashSet::new(),
+            shortcuts: crate::shortcuts::Index::current(),
+            shortcut_router: Default::default(),
+            key_ledger: Default::default(),
+            forwarded: None,
             size,
             popup: None,
             popup_window: popup::Window::load(),
@@ -451,6 +457,12 @@ impl App {
         }
         rects
     }
+    fn balance_keys(&mut self) {
+        let mut ledger = std::mem::take(&mut self.key_ledger);
+        ledger.blur(|target, bytes| self.send_owned(target, bytes));
+        self.key_ledger = ledger;
+        self.shortcut_router.cancel();
+    }
     fn attach_visible(&mut self) -> Result<()> {
         if self.parallel.restore_popup
             && let Some(i) = self.popup
@@ -491,6 +503,13 @@ impl App {
             if !rects.iter().any(|(i, _)| *i == index)
                 && !(self.zoom.is_some() && self.popup == Some(index))
             {
+                if let Some(generation) = session.input_lease() {
+                    self.key_ledger
+                        .disconnect(&crate::shortcuts::ledger::Target {
+                            session: session.info.id.clone(),
+                            generation,
+                        });
+                }
                 session.detach();
             }
         }
@@ -543,6 +562,13 @@ impl App {
         }
         for (i, session) in self.sessions.iter_mut().enumerate() {
             if self.popup != Some(i) {
+                if let Some(generation) = session.input_lease() {
+                    self.key_ledger
+                        .disconnect(&crate::shortcuts::ledger::Target {
+                            session: session.info.id.clone(),
+                            generation,
+                        });
+                }
                 session.detach();
             }
         }
@@ -584,6 +610,7 @@ impl App {
         Ok(())
     }
     fn detach(&mut self) {
+        self.balance_keys();
         if let Some(task) = self
             .parallel
             .sidebars
@@ -733,23 +760,284 @@ impl App {
         self.message = crate::i18n::t("ui.copied_selection_ctrl_g_s_returns_to_live_output").into();
         Ok(())
     }
+    fn shortcut_context(&self) -> &'static str {
+        self.sidebar
+            .as_ref()
+            .map_or("terminal.input", |s| s.shortcut_context())
+    }
+    fn input_context(&self) -> u64 {
+        (self.parallel.review.open as u64)
+            | ((self.parallel.dialog.is_some() as u64) << 1)
+            | ((self.terminal_menu.is_some() as u64) << 2)
+            | ((self.mode as u64) << 3)
+            | ((self.sidebar.as_ref().is_some_and(|s| s.modal()) as u64) << 5)
+            | ((self.sidebar.as_ref().map_or(0, |s| s.focus as u64)) << 6)
+    }
+    fn send_owned(&mut self, target: &crate::shortcuts::ledger::Target, bytes: Vec<u8>) -> bool {
+        self.sessions
+            .iter()
+            .find(|s| {
+                s.info.id == target.session
+                    && s.input_lease().as_deref() == Some(&target.generation)
+            })
+            .is_some_and(|s| s.send(bytes).is_ok())
+    }
     fn key(&mut self, key: KeyEvent, native: Option<Vec<u8>>, repeat: usize) {
+        use crate::shortcuts::ledger::{Existing, Owner, RawKey, WireMode};
+        let context = self.input_context();
+        let raw = native.as_deref().and_then(RawKey::parse);
+        if let Some(raw) = &raw {
+            match self.key_ledger.existing(raw, context) {
+                Existing::Consume => return,
+                Existing::Forward { target, wire } => {
+                    let bytes = if wire == WireMode::Win32 {
+                        raw.bytes.clone()
+                    } else {
+                        input::key(
+                            key,
+                            matches!(
+                                wire,
+                                WireMode::Vt {
+                                    application_cursor: true
+                                }
+                            ),
+                            false,
+                        )
+                        .repeat(repeat)
+                    };
+                    if !bytes.is_empty() && !self.send_owned(&target, bytes) {
+                        self.key_ledger.disconnect(&target);
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        } else if key.kind == KeyEventKind::Release {
+            return;
+        }
+        self.forwarded = None;
+        self.route_key(key, native, repeat);
+        if let Some(raw) = raw {
+            let owner = self.forwarded.take().unwrap_or(Owner::Ui {
+                context,
+                repeat: false,
+            });
+            let delivered = matches!(owner, Owner::Terminal { .. });
+            self.key_ledger.own(raw, owner, delivered);
+        }
+        if context != self.input_context() {
+            self.key_ledger.context_changed();
+        }
+    }
+    pub(crate) fn execute_command(&mut self, id: &str) {
+        self.shortcut_router.cancel();
+        self.mode = Mode::Normal;
+        let leaving = match id {
+            "workspace.detach" => 'x',
+            "workspace.overview" => 'p',
+            "workspace.quit" => 'q',
+            _ => '\0',
+        };
+        if leaving != '\0' && self.sidebar.as_mut().is_some_and(|s| !s.leave(leaving)) {
+            return;
+        }
+        if ["editor.", "tree.", "preview.", "panel."]
+            .iter()
+            .any(|p| id.starts_with(p))
+        {
+            if let Some(sidebar) = &mut self.sidebar {
+                match sidebar.execute_command(id) {
+                    Ok(action) => self.sidebar_action(action),
+                    Err(e) => self.message = e.to_string(),
+                }
+            }
+            let _ = self.attach_visible();
+            return;
+        }
+        match id {
+            "workspace.files.toggle" => self.toggle_file_panel(),
+            "workspace.zoom" => self.toggle_zoom(),
+            "workspace.terminal.menu" => self.terminal_menu = Some(self.focus),
+            "workspace.task.new" => self.new_task(),
+            "workspace.review" => self.open_review(false),
+            "workspace.attention" => self.open_review(true),
+            "workspace.resources" => self.open_resources(),
+            "workspace.task.pin" => self.toggle_task_pins(),
+            "workspace.task.replace" => self.replace_pinned_task(),
+            "workspace.task.previous" => self.select_task(-1),
+            "workspace.task.next" => self.select_task(1),
+            "workspace.axis" => {
+                self.parallel.layout.axis = match self.parallel.layout.axis {
+                    parallel::Axis::Auto | parallel::Axis::Stack => parallel::Axis::Sides,
+                    parallel::Axis::Sides => parallel::Axis::Stack,
+                };
+                self.save_task_layout();
+                let _ = self.attach_visible();
+            }
+            id if id
+                .rsplit('.')
+                .next()
+                .is_some_and(|n| n.parse::<usize>().is_ok())
+                && id.starts_with("workspace.agent.") =>
+            {
+                if let Some(n) = id.rsplit('.').next().and_then(|n| n.parse::<usize>().ok())
+                    && let Some(&i) = self.agents().get(n.saturating_sub(1))
+                {
+                    self.focus(i);
+                }
+            }
+            "workspace.agent.focus" => {
+                if let Some(i) = self.role_index(crate::tasks::Role::Agent) {
+                    self.focus(i);
+                }
+            }
+            "workspace.language.next" => {
+                if let Some(sidebar) = &mut self.sidebar
+                    && let Err(error) = sidebar.cycle_language()
+                {
+                    self.message = format!("{error:#}")
+                }
+            }
+            "workspace.debug.focus" => {
+                if let Some(i) = self.role_index(crate::tasks::Role::Debug) {
+                    self.focus(i);
+                } else {
+                    self.start_task_role(crate::tasks::Role::Debug, true);
+                }
+            }
+            "workspace.agent.restart" => self.start_task_role(crate::tasks::Role::Agent, true),
+            "workspace.agent.fresh" => self.start_task_role(crate::tasks::Role::Agent, false),
+            "workspace.layout.next" => {
+                if let Err(error) = self.layout() {
+                    self.message = format!("{error:#}");
+                }
+            }
+            "workspace.detach" => self.detach(),
+            "workspace.overview" => {
+                self.return_overview = true;
+                self.detach();
+            }
+            "workspace.popup.move" => {
+                self.popup_window.edit = Some(popup::Edit::Move);
+            }
+            "workspace.session.next" => {
+                let mut next = (self.focus + 1) % self.sessions.len();
+                if next == 1
+                    && self.view.is_none()
+                    && self.options.layout != Layout::Split
+                    && self.sessions.len() > 2
+                {
+                    next = 2;
+                }
+                self.focus(next);
+            }
+            "workspace.interrupt" => {
+                if let Err(error) = self.sessions[self.focus].action(true, false) {
+                    self.message = format!("{error:#}");
+                } else {
+                    self.message = crate::i18n::t(
+                        "ui.interrupt_requested_ctrl_g_shift_f_can_force_after_3_seconds",
+                    )
+                    .into();
+                }
+            }
+            "workspace.force" => {
+                if let Err(error) = self.sessions[self.focus].action(true, true) {
+                    self.message = format!("{error:#}");
+                }
+            }
+            "workspace.tree.toggle" => {
+                self.zoom = None;
+                if let Some(s) = &mut self.sidebar {
+                    s.toggle();
+                }
+                let _ = self.attach_visible();
+            }
+            "workspace.tree.focus" => {
+                self.zoom = None;
+                if let Some(s) = &mut self.sidebar {
+                    s.focus_tree();
+                }
+                let _ = self.attach_visible();
+            }
+            "workspace.preview.focus" => {
+                self.zoom = None;
+                if let Some(s) = &mut self.sidebar
+                    && s.document.is_some()
+                {
+                    s.preview_visible = true;
+                    s.focus = crate::sidebar::Focus::Preview;
+                }
+                let _ = self.attach_visible();
+            }
+            "workspace.path.insert" => {
+                let action = self
+                    .sidebar
+                    .as_ref()
+                    .and_then(|s| s.files.selected_file().map(|path| s.insert_selection(path)));
+                if let Some(action) = action {
+                    self.sidebar_action(action);
+                }
+            }
+            "workspace.debug.restart" => {
+                if let Err(error) = self.sessions[self.focus].action(false, false) {
+                    self.message = format!("{error:#}");
+                }
+            }
+            "terminal.selection.toggle" => self.toggle_selection(),
+            "terminal.selection.copy" => {
+                if let Err(e) = self.copy() {
+                    self.message = e.to_string();
+                }
+            }
+            "workspace.quit" => {
+                self.mode = Mode::Confirm;
+                self.quit_requested.get_or_insert_with(Instant::now);
+            }
+            "terminal.send_prefix" => {
+                let chord = self.shortcuts.prefix;
+                let key = KeyEvent::new(chord.code, chord.modifiers);
+                self.forward_key(key, None, 1);
+                if self.sessions[self.focus]
+                    .state()
+                    .terminal
+                    .parser
+                    .callbacks()
+                    .win32_input
+                {
+                    self.forward_key(
+                        KeyEvent {
+                            kind: KeyEventKind::Release,
+                            ..key
+                        },
+                        None,
+                        1,
+                    );
+                }
+                self.forwarded = None;
+            }
+            _ => {}
+        }
+    }
+    pub(crate) fn execute_legacy_menu(&mut self, key: char) {
+        if let Some(id) = crate::shortcuts::workspace_menu_command(key) {
+            self.execute_command(id);
+        }
+    }
+    fn route_key(&mut self, key: KeyEvent, native: Option<Vec<u8>>, repeat: usize) {
         if self.parallel.review.open {
-            self.consumed_keys.insert(key.code);
             self.review_key(key);
             return;
         }
         let pressed = key.kind != KeyEventKind::Release;
-        if !pressed && self.consumed_keys.remove(&key.code) {
+        if !pressed {
             return;
         }
         if self.parallel.dialog.is_some() {
-            self.consumed_keys.insert(key.code);
             self.task_key(key);
             return;
         }
         if pressed && key.code == KeyCode::Esc && self.cancel_file_drag() {
-            self.consumed_keys.insert(key.code);
             let _ = self.attach_visible();
             return;
         }
@@ -760,167 +1048,7 @@ impl App {
         }
         if self.terminal_menu.is_some() {
             if pressed {
-                self.consumed_keys.insert(key.code);
                 self.terminal_key(key);
-            }
-            return;
-        }
-        let prefix =
-            key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL);
-        if self.mode == Mode::Prefix {
-            if !pressed {
-                return;
-            }
-            self.mode = Mode::Normal;
-            if let KeyCode::Char(c) = key.code
-                && matches!(c, 'x' | 'X' | 'p' | 'P' | 'q' | 'Q')
-                && self.sidebar.as_mut().is_some_and(|s| !s.leave(c))
-            {
-                return;
-            }
-            if !prefix {
-                self.consumed_keys.insert(key.code);
-            }
-            match key.code {
-                KeyCode::Char('.') => self.toggle_file_panel(),
-                KeyCode::Char('z' | 'Z') => self.toggle_zoom(),
-                KeyCode::Char('w' | 'W') => self.terminal_menu = Some(self.focus),
-                KeyCode::Char('+') => self.new_task(),
-                KeyCode::Char('g') => self.open_review(false),
-                KeyCode::Char('!') => self.open_review(true),
-                KeyCode::Char('m' | 'M') => self.open_resources(),
-                KeyCode::Char('c' | 'C') => self.toggle_task_pins(),
-                KeyCode::Char('e' | 'E') => self.replace_pinned_task(),
-                KeyCode::Char('[') => self.select_task(-1),
-                KeyCode::Char(']') => self.select_task(1),
-                KeyCode::Char('v' | 'V') => {
-                    self.parallel.layout.axis = match self.parallel.layout.axis {
-                        parallel::Axis::Auto | parallel::Axis::Stack => parallel::Axis::Sides,
-                        parallel::Axis::Sides => parallel::Axis::Stack,
-                    };
-                    self.save_task_layout();
-                    let _ = self.attach_visible();
-                }
-                KeyCode::Char(c @ '1'..='9') => {
-                    if let Some(&i) = self.agents().get(c as usize - '1' as usize) {
-                        self.focus(i);
-                    }
-                }
-                KeyCode::Char('a' | 'A') => {
-                    if let Some(i) = self.role_index(crate::tasks::Role::Agent) {
-                        self.focus(i);
-                    }
-                }
-                KeyCode::Char('u' | 'U') => {
-                    if let Some(sidebar) = &mut self.sidebar
-                        && let Err(error) = sidebar.cycle_language()
-                    {
-                        self.message = format!("{error:#}")
-                    }
-                }
-                KeyCode::Char('d' | 'D') => {
-                    if let Some(i) = self.role_index(crate::tasks::Role::Debug) {
-                        self.focus(i);
-                    } else {
-                        self.start_task_role(crate::tasks::Role::Debug, true);
-                    }
-                }
-                KeyCode::Char('j' | 'J') => self.start_task_role(crate::tasks::Role::Agent, true),
-                KeyCode::Char('h' | 'H') => self.start_task_role(crate::tasks::Role::Agent, false),
-                KeyCode::Char('l' | 'L') => {
-                    if let Err(error) = self.layout() {
-                        self.message = format!("{error:#}");
-                    }
-                }
-                KeyCode::Char('x' | 'X') => self.detach(),
-                KeyCode::Char('p' | 'P') => {
-                    self.return_overview = true;
-                    self.detach();
-                }
-                KeyCode::Char('t' | 'T') => {
-                    self.popup_window.edit = Some(popup::Edit::Move);
-                }
-                KeyCode::Char('n' | 'N') => {
-                    let mut next = (self.focus + 1) % self.sessions.len();
-                    if next == 1
-                        && self.view.is_none()
-                        && self.options.layout != Layout::Split
-                        && self.sessions.len() > 2
-                    {
-                        next = 2;
-                    }
-                    self.focus(next);
-                }
-                KeyCode::Char('k' | 'K') => {
-                    if let Err(error) = self.sessions[self.focus].action(true, false) {
-                        self.message = format!("{error:#}");
-                    } else {
-                        self.message = crate::i18n::t(
-                            "ui.interrupt_requested_ctrl_g_shift_f_can_force_after_3_seconds",
-                        )
-                        .into();
-                    }
-                }
-                KeyCode::Char('F') => {
-                    if let Err(error) = self.sessions[self.focus].action(true, true) {
-                        self.message = format!("{error:#}");
-                    }
-                }
-                KeyCode::Char('b' | 'B') => {
-                    self.zoom = None;
-                    if let Some(s) = &mut self.sidebar {
-                        s.toggle();
-                    }
-                    let _ = self.attach_visible();
-                }
-                KeyCode::Char('f') => {
-                    self.zoom = None;
-                    if let Some(s) = &mut self.sidebar {
-                        s.focus_tree();
-                    }
-                    let _ = self.attach_visible();
-                }
-                KeyCode::Char('o' | 'O') => {
-                    self.zoom = None;
-                    if let Some(s) = &mut self.sidebar
-                        && s.document.is_some()
-                    {
-                        s.preview_visible = true;
-                        s.focus = crate::sidebar::Focus::Preview;
-                    }
-                    let _ = self.attach_visible();
-                }
-                KeyCode::Char('i' | 'I') => {
-                    let action = self
-                        .sidebar
-                        .as_ref()
-                        .and_then(|s| s.files.selected_file().map(|path| s.insert_selection(path)));
-                    if let Some(action) = action {
-                        self.sidebar_action(action);
-                    }
-                }
-                KeyCode::Char('r' | 'R') => {
-                    if let Err(error) = self.sessions[self.focus].action(false, false) {
-                        self.message = format!("{error:#}");
-                    }
-                }
-                KeyCode::Char('s' | 'S') => self.toggle_selection(),
-                KeyCode::Char('y' | 'Y') => {
-                    if let Err(e) = self.copy() {
-                        self.message = e.to_string();
-                    }
-                }
-                KeyCode::Char('q' | 'Q') => {
-                    self.mode = Mode::Confirm;
-                    self.quit_requested.get_or_insert_with(Instant::now);
-                }
-                _ if prefix => self.forward_key(key, native, repeat),
-                KeyCode::Esc => {}
-                _ => {
-                    self.message =
-                        crate::i18n::t("ui.unknown_devtabs_command_press_ctrl_g_to_see_commands")
-                            .into()
-                }
             }
             return;
         }
@@ -928,7 +1056,6 @@ impl App {
             if !pressed {
                 return;
             }
-            self.consumed_keys.insert(key.code);
             match key.code {
                 KeyCode::Esc => self.mode = Mode::Normal,
                 KeyCode::Enter => {
@@ -957,16 +1084,44 @@ impl App {
             }
             return;
         }
-        if prefix {
-            if key.kind == KeyEventKind::Press {
-                self.mode = Mode::Prefix;
-                self.consumed_keys.insert(key.code);
+        if matches!(
+            key.code,
+            KeyCode::Modifier(_) | KeyCode::CapsLock | KeyCode::NumLock | KeyCode::ScrollLock
+        ) {
+            if self.shortcut_context() == "terminal.input"
+                && !self.sidebar.as_ref().is_some_and(|s| s.modal())
+            {
+                self.forward_key(key, native, repeat);
             }
             return;
         }
+        if pressed && !self.sidebar.as_ref().is_some_and(|s| s.modal()) {
+            // Mode::Prefix is presentation; Router owns matching and cancellation.
+            if self.mode == Mode::Prefix && !self.shortcut_router.waiting() {
+                let opener =
+                    KeyEvent::new(self.shortcuts.prefix.code, self.shortcuts.prefix.modifiers);
+                self.shortcut_router
+                    .route(&self.shortcuts, self.shortcut_context(), opener);
+            }
+            let context = self.shortcut_context();
+            match self.shortcut_router.route(&self.shortcuts, context, key) {
+                crate::shortcuts::Resolution::Execute(id) => {
+                    self.execute_command(id);
+                    return;
+                }
+                crate::shortcuts::Resolution::AwaitSequence => {
+                    self.mode = Mode::Prefix;
+                    return;
+                }
+                crate::shortcuts::Resolution::Handled => {
+                    self.mode = Mode::Normal;
+                    return;
+                }
+                _ => {}
+            }
+        }
         if self.popup.is_some() && self.popup_window.edit.is_some() {
             if pressed {
-                self.consumed_keys.insert(key.code);
                 self.popup_key(key);
             }
             return;
@@ -996,7 +1151,6 @@ impl App {
                 || (key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL))
         {
             if pressed {
-                self.consumed_keys.insert(key.code);
                 match sidebar.key(key) {
                     Ok(action) => self.sidebar_action(action),
                     Err(e) => {
@@ -1015,8 +1169,7 @@ impl App {
         match action {
             crate::sidebar::Action::None => {}
             crate::sidebar::Action::Manage(c) => {
-                self.mode = Mode::Prefix;
-                self.key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), None, 1);
+                self.execute_legacy_menu(c);
             }
             crate::sidebar::Action::Agent => {
                 if let Some(i) = self.role_index(crate::tasks::Role::Agent) {
@@ -1123,7 +1276,34 @@ impl App {
         };
         if !bytes.is_empty() {
             self.sessions[self.focus].live();
-            self.send(self.focus, bytes);
+            let target = self.sessions[self.focus].input_lease().map(|generation| {
+                crate::shortcuts::ledger::Target {
+                    session: self.sessions[self.focus].info.id.clone(),
+                    generation,
+                }
+            });
+            if self.sessions[self.focus].send(bytes).is_ok()
+                && let Some(target) = target
+            {
+                let wire = if self.sessions[self.focus]
+                    .state()
+                    .terminal
+                    .parser
+                    .callbacks()
+                    .win32_input
+                {
+                    crate::shortcuts::ledger::WireMode::Win32
+                } else {
+                    crate::shortcuts::ledger::WireMode::Vt {
+                        application_cursor: self.sessions[self.focus]
+                            .state()
+                            .terminal
+                            .screen()
+                            .application_cursor(),
+                    }
+                };
+                self.forwarded = Some(crate::shortcuts::ledger::Owner::Terminal { target, wire });
+            }
         }
     }
     fn mouse(&mut self, event: MouseEvent) {
@@ -1336,7 +1516,22 @@ impl App {
                 self.attach_visible()?;
             }
             Event::FocusGained | Event::FocusLost => {
+                if event == Event::FocusGained {
+                    self.key_ledger.focus();
+                    self.shortcuts = crate::shortcuts::Index::current();
+                    if let Some(s) = &mut self.sidebar {
+                        s.shortcuts = self.shortcuts.clone();
+                        if let Some(e) = s.document.as_mut().and_then(|d| d.editor_mut()) {
+                            e.shortcuts = self.shortcuts.clone();
+                        }
+                    }
+                }
                 if event == Event::FocusLost {
+                    let mut ledger = std::mem::take(&mut self.key_ledger);
+                    ledger.blur(|target, bytes| self.send_owned(target, bytes));
+                    self.key_ledger = ledger;
+                    self.shortcut_router.cancel();
+                    self.mode = Mode::Normal;
                     if self.cancel_file_drag() {
                         self.attach_visible()?;
                     }
@@ -1533,6 +1728,14 @@ pub fn run(terminal: &mut DefaultTerminal, app: &mut App) -> Result<()> {
                         } else {
                             for (i, session) in app.sessions.iter_mut().enumerate() {
                                 if app.popup != Some(i) {
+                                    if let Some(generation) = session.input_lease() {
+                                        app.key_ledger.disconnect(
+                                            &crate::shortcuts::ledger::Target {
+                                                session: session.info.id.clone(),
+                                                generation,
+                                            },
+                                        );
+                                    }
                                     session.detach();
                                 }
                             }

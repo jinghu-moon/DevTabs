@@ -755,38 +755,18 @@ impl Sidebar {
         if key.code == KeyCode::Esc && !matches!(self.gesture, Gesture::Idle) {
             return Ok(None);
         }
-        if key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL {
-            self.quick_open();
-            return Ok(Some(Action::None));
-        }
-        if key.code == KeyCode::F(5) {
-            self.explorer.invalidate();
-        }
         if self.focus != Focus::Tree {
             return Ok(None);
         }
-        let target = self
-            .files
-            .selected_path()
-            .unwrap_or_else(|| self.files.root.clone());
-        let command = match key.code {
-            KeyCode::Delete => Some(Command::Trash),
-            KeyCode::F(4) => Some(Command::Rename),
-            KeyCode::Char('n') if key.modifiers == KeyModifiers::CONTROL => Some(Command::NewFile),
-            KeyCode::Char('n' | 'N')
-                if key.modifiers == KeyModifiers::CONTROL | KeyModifiers::SHIFT =>
-            {
-                Some(Command::NewDirectory)
-            }
-            KeyCode::Char('g' | 'G') => Some(Command::Modified),
-            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
-                Some(Command::CopyAbsolute)
-            }
-            KeyCode::Enter if self.files.selected_paths.len() > 1 => Some(Command::PreviewSelected),
-            _ => None,
-        };
-        if let Some(c) = command {
-            return self.explorer_command(c, &target);
+        if key.code == KeyCode::Enter
+            && key.modifiers == KeyModifiers::NONE
+            && self.files.selected_paths.len() > 1
+        {
+            let target = self
+                .files
+                .selected_path()
+                .unwrap_or_else(|| self.files.root.clone());
+            return self.explorer_command(Command::PreviewSelected, &target);
         }
         if key.code == KeyCode::Esc && !self.files.selected_paths.is_empty() {
             self.files.selected_paths.clear();

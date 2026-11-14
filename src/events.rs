@@ -187,7 +187,15 @@ mod windows {
                 45 => KeyCode::Insert,
                 46 => KeyCode::Delete,
                 n @ 112..=135 => KeyCode::F((n - 111) as u8),
-                16..=18 | 20 | 144 | 145 => return,
+                16 | 160 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
+                161 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightShift),
+                17 | 162 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftControl),
+                163 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightControl),
+                18 | 164 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftAlt),
+                165 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightAlt),
+                20 => KeyCode::CapsLock,
+                144 => KeyCode::NumLock,
+                145 => KeyCode::ScrollLock,
                 n @ 65..=90 if character.is_control() => {
                     KeyCode::Char(char::from(n as u8).to_ascii_lowercase())
                 }
@@ -370,6 +378,29 @@ mod windows {
                 wVirtualScanCode: 31,
                 uChar: KEY_EVENT_RECORD_0 { UnicodeChar: unit },
                 dwControlKeyState: 0,
+            }
+        }
+        #[test]
+        fn standalone_modifier_down_and_up_preserve_physical_records() {
+            let mut source = Events::new().unwrap();
+            for down in [1, 0] {
+                let mut record = raw(0, 17, 1);
+                record.bKeyDown = down;
+                record.dwControlKeyState = if down == 1 { 8 } else { 0 };
+                source.key(record);
+                let input = source.queued.pop_front().unwrap();
+                assert!(matches!(
+                    input.event,
+                    Event::Key(KeyEvent {
+                        code: KeyCode::Modifier(_),
+                        ..
+                    })
+                ));
+                let raw =
+                    crate::shortcuts::ledger::RawKey::parse(input.win32.as_ref().unwrap()).unwrap();
+                assert_eq!(raw.down, down == 1);
+                assert_eq!(raw.physical.vk, 17);
+                assert_eq!(raw.physical.scan, 31);
             }
         }
         #[test]

@@ -922,7 +922,10 @@ pub(super) fn detail_lines(app: &mut Overview, width: u16) -> Vec<Line<'static>>
     app.dashboard
         .detail_actions
         .push((lines.len(), DetailAction::Note));
-    lines.push(section(format!("{}  [F3]", t("overview.next_step")), width));
+    lines.push(section(
+        format!("{}  [Ctrl+F3]", t("overview.next_step")),
+        width,
+    ));
     lines.extend(if project.note.is_empty() {
         vec![Line::from(t("overview.no_note"))]
     } else {

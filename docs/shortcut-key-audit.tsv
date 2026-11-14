@@ -1,0 +1,464 @@
+# Exact KeyCode inventory. CI rejects unreviewed changes.
+# protocol: encoding/native input; registry: metadata/matcher; control: base text/navigation; widget: exclusive dialog/confirmation interaction; fixture: test input.
+widget	src/app/parallel.rs	if key.code == KeyCode::Esc {
+widget	src/app/parallel.rs	KeyCode::Tab => {
+widget	src/app/parallel.rs	KeyCode::BackTab => {
+widget	src/app/parallel.rs	KeyCode::Backspace => {
+widget	src/app/parallel.rs	KeyCode::Char(c)
+widget	src/app/parallel.rs	KeyCode::Enter => {
+widget	src/app/popup.rs	KeyCode::Left => Some((-step, 0)),
+widget	src/app/popup.rs	KeyCode::Right => Some((step, 0)),
+widget	src/app/popup.rs	KeyCode::Up => Some((0, -step)),
+widget	src/app/popup.rs	KeyCode::Down => Some((0, step)),
+widget	src/app/popup.rs	KeyCode::Esc => {
+widget	src/app/popup.rs	KeyCode::Enter => {
+widget	src/app/review.rs	if key.code == KeyCode::Esc {
+widget	src/app/review.rs	KeyCode::Down => {
+widget	src/app/review.rs	KeyCode::Up => {
+widget	src/app/review.rs	KeyCode::Char('m' | 'd') => {
+widget	src/app/review.rs	cleanup: key.code == KeyCode::Char('d'),
+widget	src/app/review.rs	KeyCode::Char('p') => {
+widget	src/app/review.rs	KeyCode::Char('a') => {
+widget	src/app/review.rs	KeyCode::Char('l') => Some(L::List),
+widget	src/app/review.rs	KeyCode::Char('q') => s.operation.as_ref().map(|op| L::Query {
+widget	src/app/review.rs	KeyCode::Char('y') => {
+widget	src/app/review.rs	KeyCode::Enter if s.archive_pending => {
+widget	src/app/review.rs	KeyCode::Enter => s.operation.as_ref().map(|op| L::Apply {
+widget	src/app/review.rs	KeyCode::Backspace => {
+widget	src/app/review.rs	KeyCode::Char(c) if text.len() < 1024 => text.push(c),
+widget	src/app/review.rs	KeyCode::Enter => {
+widget	src/app/review.rs	if key.code == KeyCode::Char('/') {
+widget	src/app/review.rs	KeyCode::Enter => selected.map(|(target, _)| N::Navigate { target }),
+widget	src/app/review.rs	KeyCode::Char('a') => selected.map(|(target, _)| N::Ack { target }),
+widget	src/app/review.rs	KeyCode::Char('m') => selected.map(|(target, _)| N::Mute {
+widget	src/app/review.rs	KeyCode::Char('u') => selected.map(|(target, _)| N::Mute {
+widget	src/app/review.rs	KeyCode::Char('1') => selected.map(|(target, _)| N::Once { task: target.task }),
+widget	src/app/review.rs	KeyCode::Char('5') => selected.map(|(target, _)| N::Snooze {
+widget	src/app/review.rs	KeyCode::Char('3') => selected.map(|(target, _)| N::Snooze {
+widget	src/app/review.rs	KeyCode::Char('0') => selected.map(|(target, _)| N::Snooze { target, seconds: 0 }),
+widget	src/app/review.rs	KeyCode::Char('t') => Some(N::Test),
+widget	src/app/review.rs	KeyCode::Char('d') => Some(N::Diagnostics),
+widget	src/app/review.rs	KeyCode::Char('g') => Some(N::Global {
+widget	src/app/review.rs	if key.code == KeyCode::Char('c') {
+widget	src/app/review.rs	if key.code == KeyCode::Char('k') {
+widget	src/app/review.rs	KeyCode::Char('b') => Some(Action::Begin {
+widget	src/app/review.rs	KeyCode::Char('e') => Some(Action::End),
+widget	src/app/review.rs	KeyCode::Char('l') => Some(Action::List),
+widget	src/app/review.rs	KeyCode::Char('s') => {
+widget	src/app/review.rs	KeyCode::Char('[') => {
+widget	src/app/review.rs	KeyCode::Char(']') => {
+widget	src/app/review.rs	KeyCode::PageDown => {
+widget	src/app/review.rs	KeyCode::PageUp => {
+widget	src/app/review.rs	KeyCode::Home => {
+widget	src/app/review.rs	KeyCode::Char('a') => record.map(|r| Action::Ack {
+widget	src/app/review.rs	KeyCode::Char('n') => {
+widget	src/app/review.rs	KeyCode::Char('o') => {
+widget	src/app/review.rs	MouseEventKind::ScrollDown => Some(KeyCode::Down),
+widget	src/app/review.rs	MouseEventKind::ScrollUp => Some(KeyCode::Up),
+control	src/app/terminals.rs	KeyCode::Esc => {
+control	src/app/terminals.rs	KeyCode::Up => {
+control	src/app/terminals.rs	KeyCode::Down => {
+control	src/app/terminals.rs	KeyCode::Home => {
+control	src/app/terminals.rs	KeyCode::End => {
+control	src/app/terminals.rs	KeyCode::Enter => Some(Action::Activate(selected)),
+control	src/app/terminals.rs	KeyCode::Char('d' | 'D') => Some(Action::Place(selected, Placement::Docked)),
+control	src/app/terminals.rs	KeyCode::Char('c' | 'C') => Some(Action::Place(selected, Placement::Collapsed)),
+control	src/app/terminals.rs	KeyCode::Char('f' | 'F') => Some(Action::Float(selected)),
+control	src/app/terminals.rs	KeyCode::Char('m' | 'M') => Some(Action::Move(selected)),
+control	src/app/terminals.rs	KeyCode::Char('r' | 'R') => Some(Action::Resize(selected)),
+control	src/app/terminals.rs	KeyCode::Up
+control	src/app/terminals.rs	KeyCode::Down
+fixture	src/app/terminals.rs	s.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+fixture	src/app/terminals.rs	app.review_key(KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE));
+fixture	src/app/terminals.rs	app.review_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+fixture	src/app/terminals.rs	app.review_key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+fixture	src/app/terminals.rs	KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE),
+fixture	src/app/terminals.rs	app.key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE), None, 1);
+fixture	src/app/terminals.rs	app.key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE), None, 1);
+fixture	src/app/terminals.rs	KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+fixture	src/app/terminals.rs	app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::NONE), None, 1);
+fixture	src/app/terminals.rs	.key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+fixture	src/app/terminals.rs	KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL),
+fixture	src/app/terminals.rs	let mut release = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE);
+fixture	src/app/terminals.rs	KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
+control	src/app.rs	if pressed && key.code == KeyCode::Esc && self.cancel_file_drag() {
+control	src/app.rs	if self.parallel.drag && key.code == KeyCode::Esc {
+control	src/app.rs	KeyCode::Esc => self.mode = Mode::Normal,
+control	src/app.rs	KeyCode::Enter => {
+control	src/app.rs	KeyCode::Char('f' | 'F')
+control	src/app.rs	KeyCode::Modifier(_) | KeyCode::CapsLock | KeyCode::NumLock | KeyCode::ScrollLock
+control	src/app.rs	KeyCode::PageUp => selection.screen.set_scrollback(offset + 10),
+control	src/app.rs	KeyCode::PageDown => selection.screen.set_scrollback(offset.saturating_sub(10)),
+control	src/app.rs	KeyCode::Esc => {
+control	src/app.rs	|| (key.code == KeyCode::Char('p') && key.modifiers == KeyModifiers::CONTROL))
+control	src/editor.rs	KeyCode::Esc => {
+control	src/editor.rs	KeyCode::Enter => {
+control	src/editor.rs	KeyCode::Backspace => {
+control	src/editor.rs	KeyCode::Char(c)
+control	src/editor.rs	KeyCode::Up
+control	src/editor.rs	| KeyCode::Down
+control	src/editor.rs	| KeyCode::Left
+control	src/editor.rs	| KeyCode::Right
+control	src/editor.rs	| KeyCode::Home
+control	src/editor.rs	| KeyCode::End
+control	src/editor.rs	| KeyCode::PageUp
+control	src/editor.rs	| KeyCode::PageDown => {
+control	src/editor.rs	KeyCode::Tab => self.indent(false),
+control	src/editor.rs	KeyCode::BackTab => self.indent(true),
+protocol	src/events.rs	8 => KeyCode::Backspace,
+protocol	src/events.rs	9 if mods.contains(KeyModifiers::SHIFT) => KeyCode::BackTab,
+protocol	src/events.rs	9 => KeyCode::Tab,
+protocol	src/events.rs	13 => KeyCode::Enter,
+protocol	src/events.rs	27 => KeyCode::Esc,
+protocol	src/events.rs	33 => KeyCode::PageUp,
+protocol	src/events.rs	34 => KeyCode::PageDown,
+protocol	src/events.rs	35 => KeyCode::End,
+protocol	src/events.rs	36 => KeyCode::Home,
+protocol	src/events.rs	37 => KeyCode::Left,
+protocol	src/events.rs	38 => KeyCode::Up,
+protocol	src/events.rs	39 => KeyCode::Right,
+protocol	src/events.rs	40 => KeyCode::Down,
+protocol	src/events.rs	45 => KeyCode::Insert,
+protocol	src/events.rs	46 => KeyCode::Delete,
+protocol	src/events.rs	n @ 112..=135 => KeyCode::F((n - 111) as u8),
+protocol	src/events.rs	16 | 160 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftShift),
+protocol	src/events.rs	161 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightShift),
+protocol	src/events.rs	17 | 162 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftControl),
+protocol	src/events.rs	163 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightControl),
+protocol	src/events.rs	18 | 164 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::LeftAlt),
+protocol	src/events.rs	165 => KeyCode::Modifier(crossterm::event::ModifierKeyCode::RightAlt),
+protocol	src/events.rs	20 => KeyCode::CapsLock,
+protocol	src/events.rs	144 => KeyCode::NumLock,
+protocol	src/events.rs	145 => KeyCode::ScrollLock,
+protocol	src/events.rs	KeyCode::Char(char::from(n as u8).to_ascii_lowercase())
+protocol	src/events.rs	32 if character == '\0' => KeyCode::Char(' '),
+protocol	src/events.rs	_ if character == '\u{1b}' => KeyCode::Esc,
+protocol	src/events.rs	_ if character == '\r' => KeyCode::Enter,
+protocol	src/events.rs	_ if character == '\t' => KeyCode::Tab,
+protocol	src/events.rs	_ => KeyCode::Char(character),
+protocol	src/events.rs	KeyCode::Char(c) => Some(c),
+protocol	src/events.rs	KeyCode::Esc => Some('\x1b'),
+protocol	src/events.rs	KeyCode::Enter => Some('\r'),
+protocol	src/events.rs	KeyCode::Tab => Some('\t'),
+fixture	src/events.rs	code: KeyCode::Modifier(_),
+fixture	src/events.rs	code: KeyCode::Char('😀'),
+control	src/host.rs	crossterm::event::KeyCode::F(12),
+protocol	src/input.rs	KeyCode::Char(c) if m.contains(Mods::CONTROL) => {
+protocol	src/input.rs	KeyCode::Char(c) => c.to_string().into_bytes(),
+protocol	src/input.rs	KeyCode::Enter => {
+protocol	src/input.rs	KeyCode::Backspace => vec![127],
+protocol	src/input.rs	KeyCode::Tab => vec![9],
+protocol	src/input.rs	KeyCode::BackTab => b"\x1b[Z".to_vec(),
+protocol	src/input.rs	KeyCode::Esc => vec![27],
+protocol	src/input.rs	KeyCode::Null => vec![0],
+protocol	src/input.rs	KeyCode::Up
+protocol	src/input.rs	| KeyCode::Down
+protocol	src/input.rs	| KeyCode::Left
+protocol	src/input.rs	| KeyCode::Right
+protocol	src/input.rs	| KeyCode::Home
+protocol	src/input.rs	| KeyCode::End => {
+protocol	src/input.rs	KeyCode::Up => 'A',
+protocol	src/input.rs	KeyCode::Down => 'B',
+protocol	src/input.rs	KeyCode::Right => 'C',
+protocol	src/input.rs	KeyCode::Left => 'D',
+protocol	src/input.rs	KeyCode::Home => 'H',
+protocol	src/input.rs	KeyCode::Insert | KeyCode::Delete | KeyCode::PageUp | KeyCode::PageDown => {
+protocol	src/input.rs	KeyCode::Insert => 2,
+protocol	src/input.rs	KeyCode::Delete => 3,
+protocol	src/input.rs	KeyCode::PageUp => 5,
+protocol	src/input.rs	KeyCode::F(n @ 1..=4) => {
+protocol	src/input.rs	KeyCode::F(n @ 5..=12) => tilde(
+protocol	src/input.rs	KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Tab
+protocol	src/input.rs	KeyCode::Char(c) => (
+protocol	src/input.rs	KeyCode::Enter => (13, Some('\r'), false),
+protocol	src/input.rs	KeyCode::Tab | KeyCode::BackTab => (9, Some('\t'), false),
+protocol	src/input.rs	KeyCode::Backspace => (8, Some('\u{8}'), false),
+protocol	src/input.rs	KeyCode::Esc => (27, Some('\u{1b}'), false),
+protocol	src/input.rs	KeyCode::Left => (37, None, true),
+protocol	src/input.rs	KeyCode::Up => (38, None, true),
+protocol	src/input.rs	KeyCode::Right => (39, None, true),
+protocol	src/input.rs	KeyCode::Down => (40, None, true),
+protocol	src/input.rs	KeyCode::Home => (36, None, true),
+protocol	src/input.rs	KeyCode::End => (35, None, true),
+protocol	src/input.rs	KeyCode::PageUp => (33, None, true),
+protocol	src/input.rs	KeyCode::PageDown => (34, None, true),
+protocol	src/input.rs	KeyCode::Insert => (45, None, true),
+protocol	src/input.rs	KeyCode::Delete => (46, None, true),
+protocol	src/input.rs	KeyCode::F(n @ 1..=24) => (111 + u16::from(n), None, false),
+protocol	src/input.rs	if event.modifiers.contains(Mods::SHIFT) || event.code == KeyCode::BackTab {
+fixture	src/input.rs	KeyEvent::new(KeyCode::Char('c'), Mods::CONTROL),
+fixture	src/input.rs	key(KeyEvent::new(KeyCode::Up, Mods::NONE), true, false),
+fixture	src/input.rs	key(KeyEvent::new(KeyCode::Right, Mods::CONTROL), false, false),
+fixture	src/input.rs	KeyEvent::new(KeyCode::Char('v'), Mods::CONTROL | Mods::SHIFT),
+fixture	src/input.rs	let mut release = KeyEvent::new(KeyCode::Char('a'), Mods::NONE);
+control	src/overview/dashboard.rs	if matches!(key.code, KeyCode::Esc) && !viewer.modal() {
+control	src/overview/dashboard.rs	if key.code == KeyCode::Char('c')
+control	src/overview/dashboard.rs	if key.code == KeyCode::Esc && self.dashboard.text_selection.take().is_some() {
+control	src/overview/dashboard.rs	KeyCode::Char('y' | 'Y') => {
+control	src/overview/dashboard.rs	KeyCode::Char('z' | 'Z') => {
+control	src/overview/dashboard.rs	if key.code == KeyCode::Esc
+control	src/overview/dashboard.rs	if key.code == KeyCode::Esc {
+control	src/overview/dashboard.rs	if key.code == KeyCode::Enter
+control	src/overview/dashboard.rs	if key.code == KeyCode::Char('e')
+control	src/overview/dashboard.rs	if !matches!(key.code, KeyCode::F(_) | KeyCode::Enter)
+control	src/overview/dashboard.rs	if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+control	src/overview/dashboard.rs	key.code == KeyCode::BackTab || key.modifiers.contains(KeyModifiers::SHIFT);
+control	src/overview/dashboard.rs	&& matches!(key.code, KeyCode::Left | KeyCode::Right)
+control	src/overview/dashboard.rs	if key.code == KeyCode::Right {
+control	src/overview/dashboard.rs	if key.code == KeyCode::Char('/') && !ctrl && self.dashboard.focus != Search {
+control	src/overview/dashboard.rs	KeyCode::Enter | KeyCode::Esc => self.dashboard.focus = Projects,
+control	src/overview/dashboard.rs	KeyCode::Char(c) => {
+control	src/overview/dashboard.rs	KeyCode::Backspace => {
+control	src/overview/dashboard.rs	if key.code == KeyCode::Char(' ') {
+control	src/overview/dashboard.rs	if self.dashboard.focus == Queue && key.code == KeyCode::Delete && !self.marked.is_empty() {
+control	src/overview/dashboard.rs	if self.dashboard.focus != Projects && key.code == KeyCode::Char(' ') && !ctrl {
+control	src/overview/dashboard.rs	&& key.code == KeyCode::Enter
+control	src/overview/dashboard.rs	if ctrl && key.code == KeyCode::Char('z') {
+control	src/overview/dashboard.rs	o.agent = match (o.agent, key.code == KeyCode::Right) {
+control	src/overview/dashboard.rs	if self.dashboard.focus == Projects && key.code == KeyCode::Char(' ') && !ctrl {
+control	src/overview/dashboard.rs	if matches!(key.code, KeyCode::Char(c) if !c.is_whitespace())
+control	src/overview/dashboard.rs	self.dashboard_key(w, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))?;
+control	src/overview/dashboard.rs	KeyCode::Up => Some(-1),
+control	src/overview/dashboard.rs	KeyCode::Down => Some(1),
+control	src/overview/dashboard.rs	KeyCode::PageUp => Some(-10),
+control	src/overview/dashboard.rs	KeyCode::PageDown => Some(10),
+control	src/overview/dashboard.rs	KeyCode::Home => Some(-i32::MAX),
+control	src/overview/dashboard.rs	KeyCode::End => Some(i32::MAX),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('m'), KeyModifiers::ALT),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('n'), KeyModifiers::ALT),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
+control	src/overview/tests.rs	app.key(&t.worker, KeyEvent::new(KeyCode::Enter, KeyModifiers::ALT))
+control	src/overview/tests.rs	app.key(&t.worker, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+control	src/overview/tests.rs	app.key(&t.worker, KeyEvent::new(KeyCode::Char(shortcut), modifiers))
+control	src/overview/tests.rs	app.key(&t.worker, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('e'), KeyModifiers::CONTROL),
+control	src/overview/tests.rs	app.key(&t.worker, KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE))
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL),
+control	src/overview/tests.rs	app.key(&t.worker, KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL)
+control	src/overview/tests.rs	app.key(&t.worker, KeyEvent::new(KeyCode::Down, KeyModifiers::ALT))
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('p'), KeyModifiers::ALT),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char(key), KeyModifiers::ALT),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+control	src/overview/tests.rs	app.dashboard_key(&t.worker, KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::Char('z'), KeyModifiers::NONE),
+control	src/overview/tests.rs	KeyEvent::new(KeyCode::PageDown, KeyModifiers::NONE),
+widget	src/overview.rs	if key.code == KeyCode::Esc {
+widget	src/overview.rs	KeyCode::Enter => set_draft_value(options, field, value)?,
+widget	src/overview.rs	KeyCode::Tab => {
+widget	src/overview.rs	KeyCode::Delete
+widget	src/overview.rs	if key.code == KeyCode::Backspace {
+widget	src/overview.rs	} else if let KeyCode::Char(c) = key.code
+widget	src/overview.rs	KeyCode::Down => {
+widget	src/overview.rs	KeyCode::Up => *selected = selected.saturating_sub(1),
+widget	src/overview.rs	KeyCode::Enter => {
+widget	src/overview.rs	KeyCode::Delete => {
+widget	src/overview.rs	KeyCode::F(2) => {
+widget	src/overview.rs	KeyCode::Backspace => {
+widget	src/overview.rs	KeyCode::Char(c)
+widget	src/overview.rs	KeyCode::Tab | KeyCode::Down => {
+widget	src/overview.rs	KeyCode::BackTab | KeyCode::Up => {
+widget	src/overview.rs	KeyCode::Left | KeyCode::Right if *field == 6 => {
+widget	src/overview.rs	KeyCode::Left | KeyCode::Right if *field < 2 => {
+widget	src/overview.rs	KeyCode::Char('m' | 'M') if key.modifiers.contains(KeyModifiers::ALT) => {
+widget	src/overview.rs	KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::ALT) => {
+widget	src/overview.rs	KeyCode::Char('d')
+widget	src/overview.rs	KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+widget	src/overview.rs	KeyCode::Backspace if *field >= 2 => {
+widget	src/overview.rs	KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+widget	src/overview.rs	KeyCode::Char('a') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+widget	src/overview.rs	KeyCode::Char('e')
+widget	src/overview.rs	KeyCode::Char('1') => {
+widget	src/overview.rs	KeyCode::Char('2') => {
+widget	src/overview.rs	KeyCode::Char('3') => {
+widget	src/overview.rs	KeyCode::Char('r' | 'R') if options.agent != Agent::Shell => {
+widget	src/overview.rs	KeyCode::Char('n' | 'N') => options.new_instance = !options.new_instance,
+widget	src/overview.rs	KeyCode::Char('t' | 'T') => *new_tab = !*new_tab,
+widget	src/overview.rs	KeyCode::Char('w' | 'W') => options.new_window = !options.new_window,
+widget	src/overview.rs	KeyCode::Char('c' | 'C') => {
+widget	src/overview.rs	KeyCode::Char('m' | 'M') => {
+widget	src/overview.rs	KeyCode::Char('l' | 'L') => options.layout = next_layout(options.layout),
+widget	src/overview.rs	KeyCode::Down => *selected += 1,
+widget	src/overview.rs	if key.code == KeyCode::Enter {
+widget	src/overview.rs	KeyCode::Up => {
+widget	src/overview.rs	KeyCode::PageUp => *scroll = scroll.saturating_sub(6),
+widget	src/overview.rs	KeyCode::PageDown => *scroll = scroll.saturating_add(6),
+widget	src/overview.rs	KeyCode::Enter | KeyCode::Char('p' | 'P' | 'n' | 'N')
+widget	src/overview.rs	if key.code == KeyCode::Enter
+widget	src/overview.rs	options.fresh = matches!(key.code, KeyCode::Char('n' | 'N'));
+widget	src/overview.rs	KeyCode::Home => {
+widget	src/overview.rs	KeyCode::End => {
+widget	src/overview.rs	if key.code == KeyCode::Down {
+widget	src/overview.rs	} else if key.code == KeyCode::Up {
+widget	src/overview.rs	KeyCode::Char('n' | 'N') => {
+widget	src/overview.rs	KeyCode::Enter if key.modifiers.contains(KeyModifiers::CONTROL) => {
+widget	src/overview.rs	KeyCode::Up
+widget	src/overview.rs	KeyCode::Down
+widget	src/overview.rs	KeyCode::Delete if !self.marked.is_empty() => {
+widget	src/overview.rs	KeyCode::Char('z') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+widget	src/overview.rs	KeyCode::Up => self.batch_scroll = self.batch_scroll.saturating_sub(1),
+widget	src/overview.rs	KeyCode::Down => self.batch_scroll = self.batch_scroll.saturating_add(1),
+widget	src/overview.rs	KeyCode::PageUp => self.batch_scroll = self.batch_scroll.saturating_sub(10),
+widget	src/overview.rs	KeyCode::PageDown => {
+widget	src/overview.rs	if matches!(key.code, KeyCode::Char('r' | 'R')) {
+control	src/overview.rs	KeyCode::Esc if !self.query.is_empty() => {
+control	src/overview.rs	KeyCode::Esc if self.dashboard.overlay.is_some() => {
+control	src/overview.rs	KeyCode::Esc => Some(Command::Quit),
+control	src/overview.rs	KeyCode::Enter => {
+control	src/overview.rs	KeyCode::Left | KeyCode::Right => Some(Command::Group),
+control	src/overview.rs	KeyCode::Char(' ') if !ctrl => {
+control	src/overview.rs	KeyCode::Up => {
+control	src/overview.rs	KeyCode::Down => {
+control	src/overview.rs	KeyCode::PageUp if key.modifiers.contains(KeyModifiers::ALT) => {
+control	src/overview.rs	KeyCode::PageDown if key.modifiers.contains(KeyModifiers::ALT) => {
+control	src/overview.rs	KeyCode::PageUp => {
+control	src/overview.rs	KeyCode::PageDown => {
+control	src/overview.rs	KeyCode::Home => {
+control	src/overview.rs	KeyCode::End => {
+control	src/overview.rs	KeyCode::Backspace => {
+control	src/overview.rs	KeyCode::Char(c) if !ctrl => {
+control	src/overview.rs	return self.key(w, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+control	src/overview.rs	if up { KeyCode::Up } else { KeyCode::Down },
+protocol	src/preview/image/probe.rs	KeyCode::Esc => Some('\x1b'),
+protocol	src/preview/image/probe.rs	KeyCode::Char(c) => Some(c),
+registry	src/shortcuts.rs	if code == KeyCode::BackTab {
+registry	src/shortcuts.rs	code: KeyCode::Tab,
+registry	src/shortcuts.rs	if let KeyCode::Char(c) = code {
+registry	src/shortcuts.rs	code = KeyCode::Char(c.to_ascii_lowercase());
+registry	src/shortcuts.rs	"enter" => KeyCode::Enter,
+registry	src/shortcuts.rs	"esc" | "escape" => KeyCode::Esc,
+registry	src/shortcuts.rs	"tab" => KeyCode::Tab,
+registry	src/shortcuts.rs	KeyCode::Tab
+registry	src/shortcuts.rs	"space" => KeyCode::Char(' '),
+registry	src/shortcuts.rs	"backspace" => KeyCode::Backspace,
+registry	src/shortcuts.rs	"delete" => KeyCode::Delete,
+registry	src/shortcuts.rs	"insert" => KeyCode::Insert,
+registry	src/shortcuts.rs	"up" => KeyCode::Up,
+registry	src/shortcuts.rs	"down" => KeyCode::Down,
+registry	src/shortcuts.rs	"left" => KeyCode::Left,
+registry	src/shortcuts.rs	"right" => KeyCode::Right,
+registry	src/shortcuts.rs	"home" => KeyCode::Home,
+registry	src/shortcuts.rs	"end" => KeyCode::End,
+registry	src/shortcuts.rs	"pageup" => KeyCode::PageUp,
+registry	src/shortcuts.rs	"pagedown" => KeyCode::PageDown,
+registry	src/shortcuts.rs	KeyCode::F(n)
+registry	src/shortcuts.rs	KeyCode::Char(c.to_ascii_lowercase())
+registry	src/shortcuts.rs	|| (self.modifiers == Mods::CONTROL && self.code == KeyCode::Char(' '))
+registry	src/shortcuts.rs	|| (self.modifiers == Mods::ALT && matches!(self.code, KeyCode::Tab | KeyCode::F(4)))
+fixture	src/shortcuts.rs	.map(KeyCode::F)
+fixture	src/shortcuts.rs	.chain(('a'..='z').map(KeyCode::Char))
+fixture	src/shortcuts.rs	KeyCode::Char(' ') => write!(f, "Space"),
+fixture	src/shortcuts.rs	KeyCode::Char(c) => write!(f, "{}", c.to_ascii_uppercase()),
+fixture	src/shortcuts.rs	KeyCode::F(n) => write!(f, "F{n}"),
+fixture	src/shortcuts.rs	if matches!(key.code, KeyCode::Modifier(_)) {
+widget	src/sidebar/controls.rs	if key.code == KeyCode::Esc {
+widget	src/sidebar/controls.rs	if matches!(key.code, KeyCode::Char('c' | 'C')) {
+widget	src/sidebar/controls.rs	KeyCode::Enter => {
+widget	src/sidebar/controls.rs	KeyCode::Backspace => {
+widget	src/sidebar/controls.rs	KeyCode::Char(c)
+widget	src/sidebar/controls.rs	KeyCode::Up => {
+widget	src/sidebar/controls.rs	KeyCode::Down => {
+widget	src/sidebar/controls.rs	KeyCode::Home => self.controls.selected = 0,
+widget	src/sidebar/controls.rs	KeyCode::End => {
+widget	src/sidebar/controls.rs	KeyCode::Delete => {
+widget	src/sidebar/controls.rs	KeyCode::Char('e' | 'E') => {
+widget	src/sidebar/controls.rs	KeyCode::Char('r' | 'R') => self.bookmark_request(Operation::List)?,
+control	src/sidebar/explorer.rs	if key.code == KeyCode::Esc {
+control	src/sidebar/explorer.rs	KeyCode::Char('u') if key.modifiers == KeyModifiers::CONTROL => {
+control	src/sidebar/explorer.rs	KeyCode::F(5) => {
+control	src/sidebar/explorer.rs	KeyCode::Esc => {
+control	src/sidebar/explorer.rs	KeyCode::Enter if !p.pending => {
+control	src/sidebar/explorer.rs	KeyCode::Up => p.selected = p.selected.saturating_sub(1),
+control	src/sidebar/explorer.rs	KeyCode::Down => p.selected = (p.selected + 1).min(p.paths.len().saturating_sub(1)),
+control	src/sidebar/explorer.rs	KeyCode::PageUp => p.selected = p.selected.saturating_sub(10),
+control	src/sidebar/explorer.rs	KeyCode::PageDown => {
+control	src/sidebar/explorer.rs	KeyCode::Backspace => {
+control	src/sidebar/explorer.rs	KeyCode::Char(c)
+control	src/sidebar/explorer.rs	KeyCode::Esc => self.explorer.form = None,
+control	src/sidebar/explorer.rs	KeyCode::Enter => {
+control	src/sidebar/explorer.rs	if key.code == KeyCode::Esc && !matches!(self.gesture, Gesture::Idle) {
+control	src/sidebar/explorer.rs	if key.code == KeyCode::Enter
+control	src/sidebar/explorer.rs	if key.code == KeyCode::Esc && !self.files.selected_paths.is_empty() {
+control	src/sidebar/explorer.rs	KeyCode::Up
+control	src/sidebar/explorer.rs	| KeyCode::Down
+control	src/sidebar/explorer.rs	| KeyCode::Home
+control	src/sidebar/explorer.rs	| KeyCode::End
+control	src/sidebar/explorer.rs	| KeyCode::PageUp
+control	src/sidebar/explorer.rs	| KeyCode::PageDown
+control	src/sidebar/explorer.rs	KeyCode::Up => {
+control	src/sidebar/explorer.rs	KeyCode::Down => {
+control	src/sidebar/explorer.rs	KeyCode::Home => {
+control	src/sidebar/explorer.rs	KeyCode::End => {
+control	src/sidebar/explorer.rs	KeyCode::PageUp => {
+widget	src/sidebar/features.rs	KeyCode::Esc => self.tools.navigation = None,
+widget	src/sidebar/features.rs	KeyCode::Enter => {
+widget	src/sidebar/features.rs	KeyCode::Backspace => {
+widget	src/sidebar/features.rs	KeyCode::Char(c) if (c.is_ascii_digit() || c == '%') && n.value.len() < 16 => {
+widget	src/sidebar/features.rs	if key.code == KeyCode::Esc {
+widget	src/sidebar/features.rs	KeyCode::Char('n') | KeyCode::Char(']') => {
+widget	src/sidebar/features.rs	KeyCode::Char('N') | KeyCode::Char('[') => {
+widget	src/sidebar/features.rs	KeyCode::Char('c' | 'C') => {
+widget	src/sidebar/features.rs	KeyCode::Down => v.top = v.top.saturating_add(1),
+widget	src/sidebar/features.rs	KeyCode::Up => v.top = v.top.saturating_sub(1),
+widget	src/sidebar/features.rs	KeyCode::PageDown => v.top = v.top.saturating_add(page),
+widget	src/sidebar/features.rs	KeyCode::PageUp => v.top = v.top.saturating_sub(page),
+widget	src/sidebar/features.rs	KeyCode::Home => v.top = 0,
+widget	src/sidebar/features.rs	KeyCode::End => v.top = v.data.lines.len().saturating_sub(1),
+widget	src/sidebar/features.rs	KeyCode::Right => v.left = v.left.saturating_add(4),
+widget	src/sidebar/features.rs	KeyCode::Left => v.left = v.left.saturating_sub(4),
+widget	src/sidebar/features.rs	KeyCode::Char('w' | 'W') => {
+widget	src/sidebar/features.rs	KeyCode::Char('r' | 'R') => {
+control	src/sidebar/image.rs	KeyCode::PageUp | KeyCode::PageDown | KeyCode::Left | KeyCode::Right
+control	src/sidebar/image.rs	KeyCode::Left => i.pan(-f64::from(cell.width) * 3.0, 0.0),
+control	src/sidebar/image.rs	KeyCode::Right => i.pan(f64::from(cell.width) * 3.0, 0.0),
+control	src/sidebar/image.rs	KeyCode::Up => i.pan(0.0, -f64::from(cell.height) * 3.0),
+control	src/sidebar/image.rs	KeyCode::Down => i.pan(0.0, f64::from(cell.height) * 3.0),
+control	src/sidebar/image.rs	KeyCode::PageUp => i.pan(0.0, -f64::from(cell.height) * f64::from(page)),
+control	src/sidebar/image.rs	KeyCode::PageDown => i.pan(0.0, f64::from(cell.height) * f64::from(page)),
+control	src/sidebar/image.rs	KeyCode::Esc => self.close(),
+widget	src/sidebar/reading.rs	KeyCode::Esc => self.reader.outline = None,
+widget	src/sidebar/reading.rs	KeyCode::Up => outline.selected = outline.selected.saturating_sub(1),
+widget	src/sidebar/reading.rs	KeyCode::Down => outline.selected = (outline.selected + 1).min(len.saturating_sub(1)),
+widget	src/sidebar/reading.rs	KeyCode::Backspace => {
+widget	src/sidebar/reading.rs	KeyCode::Char(c)
+widget	src/sidebar/reading.rs	KeyCode::Enter => self.accept_outline(),
+control	src/sidebar.rs	&& key.code == KeyCode::Left
+control	src/sidebar.rs	KeyCode::Esc | KeyCode::Char('c' | 'C') => {}
+control	src/sidebar.rs	KeyCode::Char('s' | 'S') => {
+control	src/sidebar.rs	KeyCode::Char('d' | 'D') => {
+control	src/sidebar.rs	KeyCode::Char('o' | 'O') => files::external(&path, false)?,
+control	src/sidebar.rs	KeyCode::Esc => {
+control	src/sidebar.rs	KeyCode::Enter => {
+control	src/sidebar.rs	KeyCode::Backspace => {
+control	src/sidebar.rs	KeyCode::Up | KeyCode::Down if q.tree => {
+control	src/sidebar.rs	q.index = if key.code == KeyCode::Up {
+control	src/sidebar.rs	KeyCode::Char(c)
+control	src/sidebar.rs	KeyCode::Esc => self.menu = None,
+control	src/sidebar.rs	KeyCode::Up => menu.selected = menu.selected.saturating_sub(1),
+control	src/sidebar.rs	KeyCode::Down => menu.selected = (menu.selected + 1).min(menu.items.len() - 1),
+control	src/sidebar.rs	if key.code == KeyCode::Esc && !matches!(self.gesture, Gesture::Idle) {
+control	src/sidebar.rs	KeyCode::Up => {
+control	src/sidebar.rs	KeyCode::Down => {
+control	src/sidebar.rs	KeyCode::Home => {
+control	src/sidebar.rs	KeyCode::End => {
+control	src/sidebar.rs	KeyCode::PageUp => {
+control	src/sidebar.rs	KeyCode::PageDown => {
+control	src/sidebar.rs	KeyCode::Left => {
+control	src/sidebar.rs	KeyCode::Right => {
+control	src/sidebar.rs	KeyCode::Enter => self.activate_tree(true)?,
+control	src/sidebar.rs	KeyCode::Up => d.offset_mut().0 = d.offset().0.saturating_sub(1),
+control	src/sidebar.rs	KeyCode::Down => d.offset_mut().0 = d.offset().0.saturating_add(1),
+control	src/sidebar.rs	KeyCode::PageUp => d.offset_mut().0 = d.offset().0.saturating_sub(page),
+control	src/sidebar.rs	KeyCode::PageDown => d.offset_mut().0 = d.offset().0.saturating_add(page),
+control	src/sidebar.rs	KeyCode::Left => d.offset_mut().1 = d.offset().1.saturating_sub(4),
+control	src/sidebar.rs	KeyCode::Right => d.offset_mut().1 += 4,
+control	src/sidebar.rs	KeyCode::Home => *d.offset_mut() = (0, 0),
