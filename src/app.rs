@@ -994,17 +994,21 @@ impl App {
         }
         match id {
             "shortcuts.open" => {
+                let context = self.shortcut_context();
                 self.execute_command("settings.workspace.open");
                 if let Some(ui) = &mut self.settings_ui {
                     ui.shortcuts_page();
+                    ui.shortcuts_context(context);
                 }
             }
             "settings.workspace.open" => {
+                let context = self.shortcut_context();
                 self.balance_keys();
                 self.settings_ui = Some(crate::settings::ui::SettingsUi::open(Some(
                     self.sessions[self.focus].info.task.initial_cwd.clone(),
                 )));
                 if let Some(ui) = &mut self.settings_ui {
+                    ui.shortcuts_context(context);
                     ui.can_queue = false;
                     if let Some(sidebar) = &self.sidebar {
                         ui.image_status = sidebar.image_status();

@@ -1140,3 +1140,76 @@ fn settings_screen_wait(
         thread::sleep(Duration::from_millis(25));
     }
 }
+
+#[test]
+fn shortcut_reference_manager_adds_an_alias_and_returns_without_shell_input_leaks() {
+    let work = Workspace::new("shortcut-manager-ui");
+    let args = vec![
+        "--layout".into(),
+        "split".into(),
+        "--agent".into(),
+        "shell".into(),
+        "--no-profile".into(),
+        "--project".into(),
+        work.0.display().to_string(),
+    ];
+    let outer = spawn(&work, 0, Path::new(env!("CARGO_BIN_EXE_devtabs")), &args);
+    let screen = || outer.state().terminal.screen().contents();
+    until("shortcut manager shells", Duration::from_secs(20), || {
+        screen().matches("PS ").count() >= 2
+    });
+    press(&outer, KeyCode::Char('g'), KeyModifiers::CONTROL);
+    press(&outer, KeyCode::Char(','), KeyModifiers::NONE);
+    settings_screen_wait(&outer, "settings centre for shortcut manager", 10, |s| {
+        s.contains("Save Ctrl+S")
+    });
+    press(&outer, KeyCode::Char('/'), KeyModifiers::NONE);
+    paste_console(&outer, "shortcuts");
+    press(&outer, KeyCode::Enter, KeyModifiers::NONE);
+    settings_screen_wait(&outer, "dedicated shortcut manager", 15, |s| {
+        s.contains("Keyboard shortcuts") && s.contains("Current command")
+    });
+    press(&outer, KeyCode::Char('/'), KeyModifiers::NONE);
+    paste_console(&outer, "overview.note.edit");
+    press(&outer, KeyCode::Enter, KeyModifiers::NONE);
+    press(&outer, KeyCode::Char('e'), KeyModifiers::NONE);
+    settings_screen_wait(&outer, "binding text entry", 10, |s| {
+        s.contains("Enter binding")
+    });
+    paste_console(&outer, "Ctrl+J");
+    press(&outer, KeyCode::Enter, KeyModifiers::NONE);
+    press(&outer, KeyCode::Char('s'), KeyModifiers::CONTROL);
+    until("shortcut alias committed", Duration::from_secs(15), || {
+        fs::read_to_string(work.file("data/config.toml"))
+            .is_ok_and(|s| s.contains("Ctrl+J") && s.contains("overview.note.edit"))
+    });
+    press(&outer, KeyCode::Esc, KeyModifiers::NONE);
+    until("shortcut manager closed", Duration::from_secs(10), || {
+        !screen().contains("Keyboard shortcuts")
+    });
+    let result = work.file("after-shortcut-manager.txt");
+    command(
+        &outer,
+        &format!("[IO.File]::WriteAllText({}, 'alive')", quote(&result)),
+    );
+    assert_eq!(wait_file(&result), "alive");
+    let snapshot = devtabs::settings::store::SettingsStore::new(work.file("data"))
+        .read()
+        .unwrap();
+    let index = devtabs::shortcuts::Index::build(&snapshot.effective.shortcuts).unwrap();
+    for binding in ["F3", "Ctrl+F3", "Ctrl+J"] {
+        assert_eq!(
+            index.resolve(
+                "overview",
+                &[devtabs::shortcuts::Chord::parse(binding).unwrap()]
+            ),
+            devtabs::shortcuts::Resolution::Execute("overview.note.edit")
+        );
+    }
+    outer.send(b"\x07x".to_vec()).unwrap();
+    until(
+        "shortcut manager frontend detached",
+        Duration::from_secs(10),
+        || !outer.running(),
+    );
+}

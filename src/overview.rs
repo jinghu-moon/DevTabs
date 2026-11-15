@@ -1667,6 +1667,7 @@ impl Overview {
             Command::Shortcuts => {
                 let mut ui = crate::settings::ui::SettingsUi::open(None);
                 ui.shortcuts_page();
+                ui.shortcuts_context("overview");
                 self.settings_ui = Some(ui);
             }
             Command::Settings => {

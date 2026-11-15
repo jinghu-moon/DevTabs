@@ -817,3 +817,168 @@ fn acceptance_frames_include_both_languages_themes_and_narrow_action_menu() {
         });
     }
 }
+
+fn shortcuts_note(ui: &mut SettingsUi) {
+    ui.shortcuts_page();
+    ui.shortcuts_context("overview");
+    ui.shortcuts
+        .focus_command("overview.note.edit", ui.draft.as_ref().unwrap());
+}
+fn shortcut_click(
+    ui: &mut SettingsUi,
+    predicate: impl Fn(&super::super::shortcut_ui::Action) -> bool,
+) {
+    let r = ui
+        .hits
+        .iter()
+        .find_map(|(r, h)| match h {
+            Hit::Shortcut(a) if predicate(a) => Some(*r),
+            _ => None,
+        })
+        .expect("visible shortcut action");
+    ui.mouse(MouseEvent {
+        kind: MouseEventKind::Down(MouseButton::Left),
+        column: r.x,
+        row: r.y,
+        modifiers: Mods::NONE,
+    })
+    .unwrap();
+}
+#[test]
+fn shortcut_reference_inspector_mouse_edit_save_and_cancel_share_the_settings_transaction() {
+    use super::super::shortcut_ui::Action as A;
+    crate::i18n::with_language(crate::i18n::Language::EnUs, || {
+        let f = Fixture::new("schema=1\n");
+        let mut ui = f.ui();
+        shortcuts_note(&mut ui);
+        let output = draw(&mut ui, 180, 40);
+        assert!(output.contains("Keyboard shortcuts"));
+        assert!(output.contains("Ctrl+F3 / F3"));
+        assert!(output.contains("Backup / import / export"));
+        assert!(
+            !ui.hits.iter().any(|(_, h)| matches!(h, Hit::Page(10))),
+            "dedicated manager uses the full width"
+        );
+        shortcut_click(&mut ui, |a| matches!(a, A::RemoveNote(1)));
+        ui.paste("Screenshot tool");
+        draw(&mut ui, 180, 40);
+        assert!(
+            ui.hits.iter().any(|(_, h)| matches!(h, Hit::Save)),
+            "outer save stays blocked by exclusive ownership"
+        );
+        let before = fs::read(f.0.join("config.toml")).unwrap();
+        let save = ui
+            .hits
+            .iter()
+            .find_map(|(r, h)| matches!(h, Hit::Save).then_some(*r))
+            .unwrap();
+        ui.mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: save.x,
+            row: save.y,
+            modifiers: Mods::NONE,
+        })
+        .unwrap();
+        assert_eq!(fs::read(f.0.join("config.toml")).unwrap(), before);
+        shortcut_click(&mut ui, |a| matches!(a, A::Finish));
+        assert!(ui.dirty());
+        assert_eq!(fs::read(f.0.join("config.toml")).unwrap(), before);
+        key(&mut ui, KeyCode::Char('s'), Mods::CONTROL);
+        settle(&mut ui);
+        assert!(ui.error.is_none(), "{:?}", ui.error);
+        assert!(!ui.dirty());
+        let saved = SettingsStore::new(&f.0).read().unwrap();
+        let index = crate::shortcuts::Index::build(&saved.effective.shortcuts).unwrap();
+        assert_eq!(index.preferred("overview.note.edit", "overview"), "Ctrl+F3");
+        assert_eq!(
+            index.resolve("overview", &[crate::shortcuts::Chord::parse("F3").unwrap()]),
+            crate::shortcuts::Resolution::TextInput
+        );
+        assert_eq!(
+            saved.effective.shortcuts.bindings[0].notes["F3"],
+            "Screenshot tool"
+        );
+        draw(&mut ui, 180, 40);
+        shortcut_click(&mut ui, |a| matches!(a, A::Restore));
+        assert!(ui.dirty());
+        assert!(matches!(
+            ui.activate(Some(Hit::Close)).unwrap(),
+            Outcome::Stay
+        ));
+        assert!(ui.close_prompt);
+        ui.activate(Some(Hit::Discard)).unwrap();
+        let final_index = crate::shortcuts::Index::build(
+            &SettingsStore::new(&f.0).read().unwrap().effective.shortcuts,
+        )
+        .unwrap();
+        assert_eq!(
+            final_index.resolve("overview", &[crate::shortcuts::Chord::parse("F3").unwrap()]),
+            crate::shortcuts::Resolution::TextInput
+        );
+    });
+}
+
+#[test]
+fn shortcut_reference_frames_cover_inspector_recording_and_test_in_both_languages() {
+    use super::super::shortcut_ui::Action as A;
+    let f = Fixture::new("schema=1\n");
+    for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
+        crate::i18n::with_language(language, || {
+            for theme in [
+                crate::appearance::Theme::Tokyo,
+                crate::appearance::Theme::Light,
+            ] {
+                for (width, height) in [(40, 14), (80, 24), (120, 34), (180, 44)] {
+                    let mut ui = f.ui();
+                    crate::appearance::set(theme);
+                    shortcuts_note(&mut ui);
+                    for scene in ["commands", "record", "test"] {
+                        if scene == "record" {
+                            ui.shortcuts
+                                .action(A::Record, ui.draft.as_mut().unwrap())
+                                .unwrap();
+                        }
+                        if scene == "test" {
+                            ui.shortcuts
+                                .action(A::Cancel, ui.draft.as_mut().unwrap())
+                                .unwrap();
+                            ui.shortcuts
+                                .action(A::Test, ui.draft.as_mut().unwrap())
+                                .unwrap();
+                        }
+                        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(
+                            width, height,
+                        ))
+                        .unwrap();
+                        t.draw(|frame| ui.draw(frame)).unwrap();
+                        assert!(
+                            ui.hits
+                                .iter()
+                                .all(|(r, _)| r.right() <= width && r.bottom() <= height)
+                        );
+                        if scene == "record" {
+                            assert!(
+                                ui.hits
+                                    .iter()
+                                    .any(|(_, h)| matches!(h, Hit::Shortcut(A::Finish))),
+                                "Done must be reachable at {width}x{height}"
+                            );
+                            assert!(
+                                ui.hits
+                                    .iter()
+                                    .any(|(_, h)| matches!(h, Hit::Shortcut(A::Cancel)))
+                            );
+                        }
+                        if let Some(dir) = std::env::var_os("DEVTABS_SHORTCUT_FRAMES") {
+                            let dir = PathBuf::from(dir);
+                            fs::create_dir_all(&dir).unwrap();
+                            let cells=t.backend().buffer().content.iter().map(|c|serde_json::json!({"s":c.symbol(),"fg":format!("{:?}",c.fg),"bg":format!("{:?}",c.bg)})).collect::<Vec<_>>();
+                            fs::write(dir.join(format!("{language:?}-{theme:?}-{width}-{scene}.json")),serde_json::to_vec(&serde_json::json!({"width":width,"height":height,"cells":cells})).unwrap()).unwrap();
+                        }
+                    }
+                }
+            }
+        });
+    }
+    crate::appearance::set(crate::appearance::Theme::Terminal);
+}

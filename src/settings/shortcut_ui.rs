@@ -1,4 +1,5 @@
 //! Shortcut management never writes preferences independently of the outer draft.
+mod view;
 use super::{
     draft::{self, Draft},
     model::{self, Binding, Sequence as ModelSequence},
@@ -50,6 +51,13 @@ pub enum Action {
     ExportEffective,
     Inactive,
     DeleteInactive(usize),
+    FilterTo(usize),
+    ModifyKey(usize),
+    RemoveNote(usize),
+    SetContext(usize),
+    Transfers,
+    BackToList,
+    ClearTest,
 }
 enum Transfer {
     Import(model::Shortcuts),
@@ -58,6 +66,7 @@ enum Transfer {
 enum Mode {
     Browse,
     Menu(usize),
+    Transfers(usize),
     Removed(usize),
     Inactive(usize),
     Search,
@@ -97,6 +106,8 @@ pub struct Manager {
     record_pending: Option<(crate::shortcuts::ledger::PhysicalKey, Chord)>,
     note_key: Option<String>,
     export_effective: bool,
+    list_area: Rect,
+    detail_area: Rect,
 }
 impl Default for Manager {
     fn default() -> Self {
@@ -128,6 +139,8 @@ impl Default for Manager {
             record_pending: None,
             note_key: None,
             export_effective: false,
+            list_area: Rect::default(),
+            detail_area: Rect::default(),
         }
     }
 }
@@ -189,7 +202,37 @@ impl Manager {
     fn commands(&self, d: &Draft) -> Vec<crate::shortcuts::Command> {
         let settings = settings(d).unwrap_or_default();
         let index = Index::load(&settings);
-        let query = self.search.to_lowercase();
+        let mut commands = self.filtered_commands(&settings, &index, self.filter, &self.search);
+        const COMMON: &[&str] = &[
+            "overview.note.edit",
+            "overview.favorite",
+            "overview.settings",
+            "overview.refresh",
+            "overview.history",
+            "overview.queue.launch",
+            "overview.palette",
+            "shortcuts.open",
+            "editor.match.next",
+            "editor.match.previous",
+            "editor.save",
+            "workspace.layout.next",
+        ];
+        commands.sort_by_key(|c| {
+            COMMON
+                .iter()
+                .position(|id| *id == c.id)
+                .unwrap_or(COMMON.len())
+        });
+        commands
+    }
+    fn filtered_commands(
+        &self,
+        settings: &model::Shortcuts,
+        index: &Index,
+        filter: usize,
+        query: &str,
+    ) -> Vec<crate::shortcuts::Command> {
+        let query = query.to_lowercase();
         index
             .commands
             .iter()
@@ -205,9 +248,12 @@ impl Manager {
                     .filter(|b| b.command == c.id)
                     .collect::<Vec<_>>();
                 let search = format!(
-                    "{} {} {}",
+                    "{} {} {} {} {} {}",
                     c.id,
+                    view::label(c.id),
                     crate::shortcuts::command_label(c.id),
+                    c.context,
+                    view::context_label(c.context),
                     bindings
                         .iter()
                         .flat_map(|b| b.keys.iter().map(Sequence::display))
@@ -217,14 +263,14 @@ impl Manager {
                 .to_lowercase()
                 .contains(&query);
                 search
-                    && match self.filter {
+                    && match filter {
                         1 => crate::shortcuts::contexts_overlap(c.context, CONTEXTS[self.context]),
                         2 => !edits.is_empty(),
                         3 => bindings.iter().all(|b| b.disabled || b.keys.is_empty()),
-                        4 => {
-                            !index.diagnostics.is_empty()
-                                && index.diagnostics.iter().any(|e| e.contains(c.id))
-                        }
+                        4 => index
+                            .diagnostics
+                            .iter()
+                            .any(|e| e.starts_with("Internal conflict:") && e.contains(c.id)),
                         5 => edits.iter().any(|b| !b.notes.is_empty()),
                         _ => true,
                     }
@@ -397,10 +443,54 @@ impl Manager {
         Ok(())
     }
     pub fn action(&mut self, action: Action, d: &mut Draft) -> Result<()> {
-        if self.candidate.is_some() && !matches!(action, Action::ConfirmRisk | Action::Cancel) {
+        if self.candidate.is_some()
+            && !matches!(
+                action,
+                Action::ConfirmRisk | Action::Cancel | Action::Scroll(_)
+            )
+        {
             anyhow::bail!("Confirm or cancel the pending candidate first / 请先确认或取消候选");
         }
         match action {
+            Action::ClearTest => {
+                self.raw_events.clear();
+                self.last_test = None;
+                self.test_keys.clear();
+                self.committed_router.cancel();
+                self.proposed_router.cancel();
+                if let Mode::Test { received } = &mut self.mode {
+                    received.clear();
+                }
+            }
+            Action::BackToList => {
+                self.detail = false;
+                self.detail_scroll = 0;
+            }
+            Action::FilterTo(filter) => {
+                self.filter = filter.min(5);
+                self.selected = 0;
+                self.binding = 0;
+                self.scope = 0;
+                self.detail_scroll = 0;
+                self.note_key = None;
+                self.mode = Mode::Browse;
+            }
+            Action::ModifyKey(i) => {
+                self.binding = i;
+                self.action(Action::Modify, d)?;
+            }
+            Action::RemoveNote(i) => {
+                self.action(Action::Remove(i), d)?;
+                self.action(Action::Note, d)?;
+            }
+            Action::SetContext(i) => {
+                self.context = i.min(CONTEXTS.len() - 1);
+                self.last_test = None;
+                self.committed_router.cancel();
+                self.proposed_router.cancel();
+                self.test_keys.clear();
+            }
+            Action::Transfers => self.mode = Mode::Transfers(0),
             Action::ConfirmRisk => {
                 let (p, base) = self.candidate.as_ref().context("No candidate pending")?;
                 ensure!(
@@ -547,6 +637,7 @@ impl Manager {
             }
             Action::Search => self.mode = Mode::Search,
             Action::Add | Action::Record | Action::RecordSequence => {
+                self.detail_scroll = 0;
                 self.record_sequence = matches!(action, Action::RecordSequence);
                 self.record_pending = None;
                 self.native_down = None;
@@ -554,10 +645,12 @@ impl Manager {
                 self.mode = Mode::Record(vec![]);
             }
             Action::Text => {
+                self.detail_scroll = 0;
                 self.replacing = None;
                 self.mode = Mode::Text(TextArea::default());
             }
             Action::Modify => {
+                self.detail_scroll = 0;
                 let command = self.command(d).context("Select a command")?;
                 let old = self
                     .effective_keys(d)
@@ -588,6 +681,7 @@ impl Manager {
             }
             Action::Finish => self.finish(d)?,
             Action::Test => {
+                self.detail_scroll = 0;
                 self.mode = Mode::Test { received: vec![] };
                 self.committed_router.cancel();
                 self.proposed_router.cancel();
@@ -596,10 +690,7 @@ impl Manager {
                 self.raw_events.clear();
             }
             Action::Context => {
-                self.context = (self.context + 1) % CONTEXTS.len();
-                self.committed_router.cancel();
-                self.proposed_router.cancel();
-                self.test_keys.clear();
+                self.action(Action::SetContext((self.context + 1) % CONTEXTS.len()), d)?;
             }
             Action::Remove(i) => {
                 let keys = self.effective_keys(d);
@@ -865,6 +956,7 @@ impl Manager {
                 })
             })
             .unwrap_or(0);
+        let transfer_menu = matches!(self.mode, Mode::Transfers(_));
         match &mut self.mode {
             Mode::Inactive(selected) => {
                 match key.code {
@@ -879,8 +971,12 @@ impl Manager {
                 }
                 return Ok(true);
             }
-            Mode::Menu(selected) => {
-                let actions = menu_actions();
+            Mode::Menu(selected) | Mode::Transfers(selected) => {
+                let actions = if transfer_menu {
+                    view::transfer_actions()
+                } else {
+                    menu_actions()
+                };
                 match key.code {
                     KeyCode::Esc => self.mode = Mode::Browse,
                     KeyCode::Up => *selected = selected.saturating_sub(1),
@@ -1076,6 +1172,7 @@ impl Manager {
                 true
             }
             Mode::Menu(_)
+            | Mode::Transfers(_)
             | Mode::Removed(_)
             | Mode::Inactive(_)
             | Mode::Record(_)
@@ -1087,403 +1184,45 @@ impl Manager {
         self.candidate.is_some() || !matches!(self.mode, Mode::Browse | Mode::Search)
     }
     pub fn draw(&mut self, f: &mut Frame, r: Rect, d: &Draft) -> Vec<(Rect, Action)> {
-        let mut hits = vec![];
-        let p = crate::appearance::palette();
-        if r.width == 0 || r.height == 0 {
-            return hits;
-        }
-        if let Mode::Inactive(selected) = &self.mode {
-            let index = Index::load(&settings(d).unwrap_or_default());
-            let p = settings(d).unwrap_or_default();
-            let rows = p
-                .bindings
-                .iter()
-                .filter(|b| {
-                    index
-                        .commands
-                        .iter()
-                        .find(|c| c.id == b.command)
-                        .is_none_or(|c| {
-                            !command_contexts(c.id, c.context).contains(&b.context.as_str())
-                        })
-                })
-                .collect::<Vec<_>>();
-            f.render_widget(
-                Paragraph::new(
-                    "Inactive entries / 失效配置：保留原始差异和备注；点击删除或 Esc 返回",
-                ),
-                Rect::new(r.x, r.y, r.width, 1),
-            );
-            let first = selected.saturating_sub(r.height.saturating_sub(3) as usize);
-            for (i, b) in rows
-                .iter()
-                .enumerate()
-                .skip(first)
-                .take(r.height.saturating_sub(2) as usize)
-            {
-                let row = Rect::new(r.x, r.y + 1 + (i - first) as u16, r.width, 1);
-                f.render_widget(
-                    Paragraph::new(single_line(
-                        &format!(
-                            "{} {} [{}] {:?} [删除]",
-                            if i == *selected { "▸" } else { " " },
-                            b.command,
-                            b.context,
-                            b.notes
-                        ),
-                        r.width as usize,
-                    )),
-                    row,
-                );
-                hits.push((row, Action::DeleteInactive(i)));
-            }
-            let row = Rect::new(r.x, r.bottom() - 1, r.width, 1);
-            f.render_widget(Paragraph::new("[返回 Back / Esc]"), row);
-            hits.push((row, Action::Cancel));
-            return hits;
-        }
-        if let Mode::Menu(selected) | Mode::Removed(selected) = &self.mode {
-            let selected = *selected;
-            let rows = if matches!(self.mode, Mode::Menu(_)) {
-                menu_actions()
-                    .into_iter()
-                    .map(|(s, a)| (s.to_string(), a))
-                    .collect::<Vec<_>>()
-            } else {
-                self.command(d)
-                    .and_then(|c| {
-                        settings(d).ok().and_then(|p| {
-                            p.bindings
-                                .into_iter()
-                                .find(|b| b.command == c.id && b.context == c.context)
-                        })
-                    })
-                    .map_or(vec![], |b| {
-                        b.remove
-                            .iter()
-                            .enumerate()
-                            .map(|(i, key)| {
-                                (
-                                    format!(
-                                        "Restore / 恢复 {} · {}",
-                                        Sequence::parse(
-                                            key,
-                                            Index::load(&settings(d).unwrap_or_default()).prefix
-                                        )
-                                        .map(|s| s.display())
-                                        .unwrap_or_default(),
-                                        b.notes
-                                            .get(
-                                                &Sequence::parse(
-                                                    key,
-                                                    Index::load(&settings(d).unwrap_or_default())
-                                                        .prefix
-                                                )
-                                                .map(|s| s.display())
-                                                .unwrap_or_default()
-                                            )
-                                            .cloned()
-                                            .unwrap_or_default()
-                                    ),
-                                    Action::RestoreKey(i),
-                                )
-                            })
-                            .collect()
-                    })
-            };
-            f.render_widget(Block::default().style(crate::appearance::style()), r);
-            let available = r.height.saturating_sub(2).max(1) as usize;
-            let first = selected.saturating_sub(available - 1);
-            for (i, (label, action)) in rows.into_iter().enumerate().skip(first).take(available) {
-                let row = Rect::new(r.x, r.y + (i - first) as u16, r.width, 1);
-                f.render_widget(
-                    Paragraph::new(format!(
-                        "{} {}",
-                        if i == selected { "▸" } else { " " },
-                        label
-                    )),
-                    row,
-                );
-                hits.push((row, action));
-            }
-            let row = Rect::new(r.x, r.bottom().saturating_sub(1), r.width, 1);
-            f.render_widget(Paragraph::new("[返回 Back / Esc]"), row);
-            hits.push((row, Action::Cancel));
-            return hits;
-        }
-        let committed = Index::load(&d.base.effective.shortcuts);
-        let proposed = Index::build(&settings(d).unwrap_or_default());
-        let index = proposed.as_ref().unwrap_or(&committed);
-        f.render_widget(
-            Paragraph::new(format!(
-                "Shortcuts / 快捷键   Prefix: {}   / {}\nTerminal owned / 终端占用: {}",
-                index.prefix,
-                format!(
-                    "{}  Filter F: {}",
-                    self.search,
-                    [
-                        "all",
-                        "current context",
-                        "modified",
-                        "unbound",
-                        "internal conflict",
-                        "deletion notes"
-                    ][self.filter]
-                ),
-                index.terminal_owned().join(", ")
-            ))
-            .style(Style::new().fg(p.accent)),
-            Rect::new(r.x, r.y, r.width, r.height.min(2)),
-        );
-        let commands = self.commands(d);
-        let wide = r.width >= 90;
-        let left_w = if wide { r.width / 2 } else { r.width };
-        let max = r.height.saturating_sub(12) as usize;
-        let first = self.selected.saturating_sub(max.saturating_sub(1));
-        if !self.exclusive() && (wide || !self.detail) {
-            for (i, c) in commands.iter().enumerate().skip(first).take(max) {
-                let row = Rect::new(r.x, r.y + 2 + (i - first) as u16, left_w, 1);
-                f.render_widget(
-                    Paragraph::new(format!(
-                        "{} {}  {}",
-                        if i == self.selected { "▸" } else { " " },
-                        single_line(
-                            &crate::shortcuts::command_label(c.id),
-                            left_w.saturating_sub(index.preferred(c.id, c.context).len() as u16 + 5)
-                                as usize
-                        ),
-                        index.preferred(c.id, c.context)
-                    ))
-                    .style(if i == self.selected {
-                        Style::new().bg(p.selected)
-                    } else {
-                        Style::default()
-                    }),
-                    row,
-                );
-                hits.push((row, Action::Select(i)));
-            }
-        }
-        let detail = if !wide && self.detail {
-            Rect::new(r.x, r.y + 2, r.width, r.height.saturating_sub(10))
-        } else if wide {
-            Rect::new(
-                r.x + left_w,
-                r.y + 2,
-                r.width - left_w,
-                r.height.saturating_sub(8),
-            )
-        } else {
-            Rect::new(r.x, r.y + 2 + max as u16, r.width, 4)
-        };
-        if let Some(c) = self.command(d) {
-            let keys = self.effective_keys(d);
-            let mut lines = vec![
-                single_line(
-                    &crate::shortcuts::command_label(c.id),
-                    detail.width as usize,
-                ),
-                single_line(
-                    &format!("Scope / 区域 C: {} · #{}", c.context, self.binding + 1),
-                    detail.width as usize,
-                ),
-            ];
-            for key in &keys {
-                lines.push(format!(
-                    "{} {}",
-                    if index.preferred(c.id, c.context) == key.display() {
-                        "●"
-                    } else {
-                        "○"
-                    },
-                    key.display()
-                ));
-            }
-            let custom = settings(d).unwrap_or_default();
-            let edit = custom
-                .bindings
-                .iter()
-                .find(|b| b.command == c.id && b.context == c.context);
-            let effective = index
-                .bindings
-                .iter()
-                .find(|b| b.command == c.id && b.context == c.context);
-            let declared = index
-                .commands
-                .iter()
-                .find(|original| original.id == c.id)
-                .unwrap();
-            for text in [
-                format!("ID: {}", c.id),
-                format!("Default / 默认: {}", declared.defaults.iter().map(Sequence::display).collect::<Vec<_>>().join(", ")),
-                format!("Source / 来源: {}", if edit.is_some() { "custom / 自定义差异" } else if c.context != declared.context { "inherited / 继承父区域" } else { "default / 默认" }),
-                format!("Status / 状态: {}", if effective.is_some_and(|b| b.disabled) { "disabled / 已停用" } else if keys.is_empty() { "unbound / 未绑定" } else { "enabled / 已启用" }),
-                format!("Allowed / 允许区域: {}", command_contexts(declared.id,declared.context).join(", ")),
-                "Availability / 可用性: evaluated in the active view; settings does not execute commands / 由运行时当前视图判断，设置页不执行命令".into(),
-                format!("Removed / 已删除: {}", edit.map(|b| b.remove.iter().filter_map(|s| Sequence::parse(s, index.prefix).ok()).map(|s| s.display()).collect::<Vec<_>>().join(", ")).unwrap_or_default()),
-                format!("Notes / 备注: {:?}", edit.map(|b| &b.notes)),
-                "PgUp/PgDn scroll details / 翻页查看详情".into(),
-            ] {
-                lines.extend(wrap_lines(&text, detail.width as usize));
-            }
-            for diagnostic in index.diagnostics.iter().filter(|s| s.contains(c.id)) {
-                lines.extend(wrap_lines(diagnostic, detail.width as usize));
-            }
-            self.detail_scroll = self
-                .detail_scroll
-                .min(lines.len().saturating_sub(detail.height as usize) as u16);
-            f.render_widget(
-                Paragraph::new(lines.join("\n")).scroll((self.detail_scroll, 0)),
-                detail,
-            );
-            for n in 0..keys.len() {
-                let position = 2 + n as u16;
-                if position < self.detail_scroll {
-                    continue;
-                }
-                let row = Rect::new(
-                    detail.x,
-                    detail.y + position - self.detail_scroll,
-                    detail.width.min(22),
-                    1,
-                );
-                if row.y < detail.bottom() {
-                    hits.push((row, Action::Prefer(n)));
-                    let remove = Rect::new(
-                        row.right(),
-                        row.y,
-                        detail.width.saturating_sub(row.width).min(12),
-                        1,
-                    );
-                    f.render_widget(Paragraph::new("[删除/Delete]"), remove);
-                    hits.push((remove, Action::Remove(n)));
-                }
-            }
-        }
-        let status = if self.candidate.is_some() {
-            self.message.clone()
-        } else {
-            match &self.mode {
-            Mode::Record(keys)=>format!("Recording / 录制: {}\nEsc/Enter are recorded too. Use mouse Done/Cancel. Esc/Enter 也作为按键录制，使用鼠标完成/取消。",keys.iter().map(ToString::to_string).collect::<Vec<_>>().join(" → ")),
-            Mode::Test{received}=>format!("Key test / 按键测试 [{}]. Commands are never executed; external global hotkeys can still run / 不执行业务命令；外部全局热键仍可能触发。\n{}",CONTEXTS[self.context],received.iter().rev().take(2).cloned().chain(self.raw_events.back().cloned().or_else(|| Some("Physical fields unavailable until a native event arrives / 尚未收到原生物理事件；不能推断外部占用".into()))).collect::<Vec<_>>().join("\n")),
-            Mode::Text(_)=>"Text: Ctrl+F3 or Ctrl+G -> N".into(),Mode::Prefix(_)=>"Prefix / 前缀 chord".into(),Mode::Note(_)=>"Deletion note / 删除备注".into(),Mode::Import(_)=>"Import file path / 导入文件路径（只修改草稿）".into(),Mode::Export(_)=>"Export committed bindings; existing destination is replaced / 导出已提交绑定；覆盖目标".into(),_=>self.error.as_ref().unwrap_or(&self.message).clone(),
-        }
-        };
-        let overlay = Rect::new(r.x, r.bottom().saturating_sub(8), r.width, 5.min(r.height));
-        if self.exclusive() {
-            f.render_widget(Block::default().style(crate::appearance::style()), overlay);
-        }
-        if self.exclusive() || !status.is_empty() {
-            f.render_widget(Paragraph::new(status).wrap(Wrap { trim: false }), overlay);
-        }
-        if let Mode::Text(a) | Mode::Prefix(a) | Mode::Note(a) | Mode::Import(a) | Mode::Export(a) =
-            &self.mode
-        {
-            f.render_widget(a, Rect::new(overlay.x, overlay.y + 2, overlay.width, 2));
-        }
-        let mut buttons = if self.exclusive() {
-            vec![
-                ("完成 Done", Action::Finish),
-                ("取消 Cancel", Action::Cancel),
-                ("区域 Context", Action::Context),
-                ("设为首选 Preferred", Action::PreferTest),
-                ("替换冲突 Replace", Action::ReplaceConflict),
-            ]
-        } else {
-            vec![
-                ("录制 R", Action::Record),
-                ("文本 E", Action::Text),
-                ("修改 M", Action::Modify),
-                ("前缀 P", Action::Prefix),
-                ("测试 T", Action::Test),
-                ("停用 D", Action::Disable),
-                ("恢复 U", Action::Restore),
-                ("备注 N", Action::Note),
-                ("导入 I", Action::Import),
-                ("导出 X", Action::Export),
-                ("作用域 C", Action::Scope),
-                ("筛选 F", Action::Filter),
-                ("详情 Enter", Action::Details),
-            ]
-        };
-        if self.exclusive() {
-            buttons.retain(|(_, a)| match a {
-                Action::Context | Action::PreferTest => matches!(self.mode, Mode::Test { .. }),
-                Action::ReplaceConflict => self.conflict.is_some(),
-                _ => true,
-            });
-        } else if r.width < 90 {
-            buttons = vec![
-                ("操作 A", Action::Menu),
-                ("详情 Enter", Action::Details),
-                ("筛选 F", Action::Filter),
-            ];
-        }
-        if self.detail && !self.exclusive() {
-            buttons.push(("详情↑ PgUp", Action::Scroll(-3)));
-            buttons.push(("详情↓ PgDn", Action::Scroll(3)));
-        }
-        if self.export_confirm.is_some() {
-            buttons = vec![
-                ("取消 Cancel", Action::Cancel),
-                ("确认导出已提交绑定 Confirm export", Action::ConfirmExport),
-            ];
-        }
-        if self.candidate.is_some() {
-            buttons = vec![
-                ("确认草稿 Ctrl+Enter", Action::ConfirmRisk),
-                ("取消 Cancel", Action::Cancel),
-            ];
-        }
-        let mut x = r.x;
-        if self.note_key.is_some() && !self.exclusive() {
-            buttons.push(("清除此备注 Clear note", Action::ClearNote));
-        }
-        let mut y = r.bottom().saturating_sub(3);
-        use unicode_width::UnicodeWidthStr;
-        for (label, action) in buttons {
-            let w = (label.width() as u16 + 3).min(r.width);
-            if x + w > r.right() {
-                x = r.x;
-                y += 1;
-            }
-            if y >= r.bottom() {
-                break;
-            }
-            let row = Rect::new(x, y, w, 1);
-            f.render_widget(
-                Paragraph::new(format!("[{label}]")).style(Style::new().fg(p.accent)),
-                row,
-            );
-            hits.push((row, action));
-            x += w;
-        }
-        hits
+        self.draw_view(f, r, d)
     }
 }
 
 fn menu_actions() -> Vec<(&'static str, Action)> {
+    use view::text;
     vec![
-        ("录制组合键 Record chord (R)", Action::Record),
-        ("录制前缀序列 Record sequence", Action::RecordSequence),
-        ("清除当前命令历史备注 Clear notes", Action::ClearNotes),
-        ("失效配置 Inactive entries", Action::Inactive),
+        (text("录制组合键 R", "Record chord R"), Action::Record),
         (
-            "导出完整有效目录 Export effective catalog",
+            text("录制前缀序列", "Record sequence"),
+            Action::RecordSequence,
+        ),
+        (
+            text("清除当前命令历史备注", "Clear command notes"),
+            Action::ClearNotes,
+        ),
+        (text("失效配置", "Inactive entries"), Action::Inactive),
+        (
+            text("导出完整有效目录", "Export effective catalog"),
             Action::ExportEffective,
         ),
-        ("文本 Text (E)", Action::Text),
-        ("修改选中绑定 Modify (M)", Action::Modify),
-        ("前缀 Prefix (P)", Action::Prefix),
-        ("测试 Test (T)", Action::Test),
-        ("停用/启用 Disable (D)", Action::Disable),
-        ("恢复本命令 Restore (U)", Action::Restore),
-        ("已删除绑定 Restore deleted (V)", Action::Removed),
-        ("删除备注 Note (N)", Action::Note),
-        ("导入 Import (I)", Action::Import),
-        ("导出 Export (X)", Action::Export),
-        ("作用域 Scope (C)", Action::Scope),
-        ("筛选 Filter (F)", Action::Filter),
+        (text("文本输入 E", "Enter text E"), Action::Text),
+        (
+            text("修改选中绑定 M", "Edit selected binding M"),
+            Action::Modify,
+        ),
+        (text("修改前缀 P", "Change prefix P"), Action::Prefix),
+        (text("按键测试 T", "Key test T"), Action::Test),
+        (text("停用 / 启用 D", "Disable / enable D"), Action::Disable),
+        (text("恢复此命令 U", "Restore command U"), Action::Restore),
+        (
+            text("恢复已删除绑定 V", "Restore removed bindings V"),
+            Action::Removed,
+        ),
+        (text("删除备注 N", "Deletion note N"), Action::Note),
+        (text("导入 I", "Import I"), Action::Import),
+        (text("导出 X", "Export X"), Action::Export),
+        (text("切换作用域 C", "Change scope C"), Action::Scope),
+        (text("筛选 F", "Filter F"), Action::Filter),
     ]
 }
 

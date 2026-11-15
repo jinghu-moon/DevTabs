@@ -115,3 +115,11 @@ Ctrl+P 默认经真实转发分支透传，删除侧栏的遗留截获分支。`
 最终全量命令：`cargo test --workspace --all-targets --no-fail-fast -- --test-threads=1`。在 `artifacts/shortcut-refactor/phase6/home` 隔离配置下运行，去掉 `DEVTABS_AUDIT_EXPORT`，退出码 0。46 个测试套件合计 **590 通过、0 失败、33 忽略**；其中 lib 258/0/7、真实 PTY 8/0/4、工作区 25/0/2、AST 审计 4/0/0、差异报告 1/0/0。与升级前 563/0/33 相比新增 27 个通过测试，忽略数量不变；未通过减少断言或新增忽略来消除失败。
 
 日志为 `artifacts/shortcut-refactor/phase6/tests.log`，机器计数为同目录 `summary.json`。`cargo fmt --all -- --check` 与 `git diff --check` 通过。基准、大规模夹具、用户真实 Profile、已安装 Agent 等显式忽略项保留原有原因，按环境或显式基准命令另行运行；忽略不计通过。外部矩阵状态见上表，阶段 6 的发布准备代码完成，正式发布验收仍需补齐该矩阵。
+
+## 快捷键管理界面后续重写（2026-11-15）
+
+以 `7d43765` 为基线，按用户提供的终端风格 HTML 重写真实管理页，保留共同 Draft、校验/风险确认、别名和作用域、原子保存及输入所有权。实现全宽搜索与计数筛选、命令表/绑定检查区、逐绑定按钮、窄窗切换及录制/测试的鼠标出口；参考取舍与全部证据见 [界面重写验证](57-Shortcut-Manager-UI-Verification.md)。
+
+升级前设置套件 58/0/0，升级后 62/0/0；新增四个内存/交互测试，覆盖真实鼠标编辑、保存/取消事务、友好名称搜索、独立滚动、区域候选隔离及中英文/明暗主题 48 个帧。另新增一个真实 ConPTY 测试，经现有设置入口添加 Ctrl+J，确认保存后与 F3/Ctrl+F3 共存，退出后原 Shell 输入仍正常。
+
+最终在独立 target 和 `artifacts/shortcut-ui-redesign/final-home` 下执行完整工作区/all-targets 测试：46 个套件 **595 通过、0 失败、33 忽略**，退出码 0；lib 262/0/7、真实 PTY 9/0/4、工作区 25/0/2、正式 AST 门禁 4/0/0。日志 `artifacts/shortcut-ui-redesign/full-final.log`，汇总 `summary.json`。AST 指纹清单没有增删，忽略项与阶段 6 一致。最终格式检查与差异空白检查通过；保留初次测试入口假设错误及旧输出被锁的日志，未通过增加默认绑定或停止用户进程来规避。

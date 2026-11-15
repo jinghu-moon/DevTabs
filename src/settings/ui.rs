@@ -280,6 +280,7 @@ impl SettingsUi {
                 });
             }
         }
+        ui.shortcuts.set_context("overview");
         ui
     }
     pub fn at_root(root: PathBuf, project: Option<PathBuf>) -> Self {
@@ -334,6 +335,31 @@ impl SettingsUi {
         self.category = 10;
         self.stack.clear();
         self.nav = false;
+    }
+    pub fn shortcuts_context(&mut self, context: &str) {
+        self.shortcuts.set_context(context);
+    }
+    fn footer_actions(&self) -> Vec<(String, Hit)> {
+        if self.category == 10 && self.stack.is_empty() && self.draft.is_some() {
+            vec![
+                (tr("保存全部 Ctrl+S", "Save all Ctrl+S"), Hit::Save),
+                (tr("取消", "Cancel"), Hit::Close),
+                (tr("恢复全部默认", "Restore defaults"), Hit::Reset),
+                (
+                    tr("备份 / 导入 / 导出", "Backup / import / export"),
+                    Hit::Shortcut(super::shortcut_ui::Action::Transfers),
+                ),
+                (tr("返回设置", "Settings"), Hit::Page(0)),
+            ]
+        } else {
+            vec![
+                (tr("保存 Ctrl+S", "Save Ctrl+S"), Hit::Save),
+                (tr("恢复 F6", "Reset F6"), Hit::Reset),
+                (tr("重载 F5", "Reload F5"), Hit::Reload),
+                (tr("错误 F8", "Issues F8"), Hit::Issues),
+                (tr("关闭 Esc", "Close Esc"), Hit::Close),
+            ]
+        }
     }
     pub fn dirty(&self) -> bool {
         self.edit.is_some() || self.draft.as_ref().is_some_and(Draft::dirty)
@@ -1048,6 +1074,9 @@ impl SettingsUi {
             }
             return Ok(Outcome::Stay);
         }
+        if self.category == 10 && self.stack.is_empty() {
+            self.nav = false;
+        }
         if self.category == 10
             && self.edit.is_none()
             && !self.nav
@@ -1154,6 +1183,15 @@ impl SettingsUi {
         }
         if matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
             let backwards = key.code == KeyCode::BackTab || key.modifiers.contains(Mods::SHIFT);
+            if self.category == 10 && self.stack.is_empty() {
+                self.nav = false;
+                self.footer_focus = if self.footer_focus.is_some() {
+                    None
+                } else {
+                    Some(usize::from(!self.dirty()))
+                };
+                return Ok(Outcome::Stay);
+            }
             match (self.nav, self.footer_focus, backwards) {
                 (true, _, false) => {
                     self.nav = false;
@@ -1180,8 +1218,8 @@ impl SettingsUi {
                 }
                 KeyCode::Right | KeyCode::Down => self.footer_focus = Some((i + 1).min(4)),
                 KeyCode::Enter | KeyCode::Char(' ') => {
-                    let actions = [Hit::Save, Hit::Reset, Hit::Reload, Hit::Issues, Hit::Close];
-                    return self.activate(Some(actions[i].clone()));
+                    let action = self.footer_actions()[i].1.clone();
+                    return self.activate(Some(action));
                 }
                 KeyCode::Esc => self.footer_focus = None,
                 _ => {}
@@ -1366,10 +1404,29 @@ impl SettingsUi {
                 || self.operation_confirm.is_some()
                 || self.issues_open
                 || self.searching
-                || (self.category == 10 && self.shortcuts.exclusive())
             {
                 return Ok(Outcome::Stay);
             }
+        }
+        if self.category == 10
+            && self.stack.is_empty()
+            && matches!(
+                event.kind,
+                MouseEventKind::ScrollUp | MouseEventKind::ScrollDown
+            )
+        {
+            if let Some(d) = &self.draft {
+                self.shortcuts.scroll_at(
+                    (event.column, event.row).into(),
+                    if event.kind == MouseEventKind::ScrollUp {
+                        -3
+                    } else {
+                        3
+                    },
+                    d,
+                );
+            }
+            return Ok(Outcome::Stay);
         }
         if event.kind == MouseEventKind::ScrollUp {
             self.select(self.selected().saturating_sub(3));
@@ -1716,11 +1773,16 @@ impl SettingsUi {
         let area = self.area;
         crate::ui::clear_popup(frame, area);
         let palette = crate::appearance::palette();
+        let shortcuts_page = self.category == 10 && self.stack.is_empty() && self.draft.is_some();
         frame.render_widget(
             Block::bordered()
                 .title(format!(
                     " {}{} ",
-                    tr("设置", "Settings"),
+                    if shortcuts_page {
+                        tr("快捷键管理", "Keyboard shortcuts")
+                    } else {
+                        tr("设置", "Settings")
+                    },
                     if self.dirty() { " ●" } else { "" }
                 ))
                 .style(crate::appearance::style()),
@@ -1730,14 +1792,35 @@ impl SettingsUi {
         if inner.width == 0 || inner.height == 0 {
             return;
         }
-        let footer = inner.height.min(if inner.width < 55 { 4 } else { 3 });
+        if shortcuts_page {
+            let close = Rect::new(area.right().saturating_sub(5), area.y, 3.min(area.width), 1);
+            self.button(frame, close, "×".into(), Hit::Close);
+        }
+        let footer = inner.height.min(if shortcuts_page {
+            use unicode_width::UnicodeWidthStr;
+            let mut rows = 1;
+            let mut x = 0;
+            for (label, _) in self.footer_actions() {
+                let width = (label.width() as u16 + 4).min(inner.width);
+                if x + width > inner.width {
+                    rows += 1;
+                    x = 0;
+                }
+                x += width;
+            }
+            rows + 1 + u16::from(inner.width >= 90)
+        } else if inner.width < 55 {
+            4
+        } else {
+            3
+        });
         let content = Rect::new(
             inner.x,
             inner.y,
             inner.width,
             inner.height.saturating_sub(footer),
         );
-        let wide = content.width >= 90;
+        let wide = content.width >= 90 && !shortcuts_page;
         let nav_w = if wide { 23 } else { 0 };
         if wide {
             for (i, p) in self.pages.iter().enumerate().take(content.height as usize) {
@@ -1757,7 +1840,7 @@ impl SettingsUi {
                 );
                 self.hits.push((r, Hit::Page(i)));
             }
-        } else {
+        } else if !shortcuts_page {
             let i = self.category;
             self.button(
                 frame,
@@ -1768,9 +1851,11 @@ impl SettingsUi {
         }
         let body = Rect::new(
             content.x + nav_w,
-            content.y + u16::from(!wide),
+            content.y + u16::from(!wide && !shortcuts_page),
             content.width - nav_w,
-            content.height.saturating_sub(u16::from(!wide)),
+            content
+                .height
+                .saturating_sub(u16::from(!wide && !shortcuts_page)),
         );
         if self.draft.is_none() {
             frame.render_widget(
@@ -1956,32 +2041,69 @@ impl SettingsUi {
         );
         self.buttons(
             frame,
-            foot,
-            vec![
-                (tr("保存 Ctrl+S", "Save Ctrl+S"), Hit::Save),
-                (tr("恢复 F6", "Reset F6"), Hit::Reset),
-                (tr("重载 F5", "Reload F5"), Hit::Reload),
-                (tr("错误 F8", "Issues F8"), Hit::Issues),
-                (tr("关闭 Esc", "Close Esc"), Hit::Close),
-            ],
+            Rect::new(
+                foot.x,
+                foot.y,
+                foot.width,
+                if shortcuts_page {
+                    foot.height.saturating_sub(1 + u16::from(inner.width >= 90))
+                } else {
+                    foot.height
+                },
+            ),
+            self.footer_actions(),
         );
         if let Some(i) = self.footer_focus {
-            let label = [
-                tr("保存全部", "Save all"),
-                tr("恢复本页", "Reset page"),
-                tr("重载", "Reload"),
-                tr("错误列表", "Issues"),
-                tr("关闭", "Close"),
-            ][i]
-                .clone();
+            if shortcuts_page {
+                let action = self.footer_actions()[i].1.clone();
+                if let Some((r, _)) = self.hits.iter().rev().find(|(r, h)| {
+                    r.y >= foot.y && std::mem::discriminant(h) == std::mem::discriminant(&action)
+                }) {
+                    for x in r.x..r.right() {
+                        frame.buffer_mut()[(x, r.y)].set_style(
+                            Style::new()
+                                .bg(palette.selected)
+                                .add_modifier(ratatui::style::Modifier::UNDERLINED),
+                        );
+                    }
+                }
+            } else {
+                let label = self.footer_actions()[i].0.clone();
+                frame.render_widget(
+                    Paragraph::new(format!("◀ {label} ▶ Enter · Tab"))
+                        .style(Style::new().bg(palette.selected)),
+                    Rect::new(
+                        foot.x,
+                        foot.y + u16::from(shortcuts_page && foot.height > 1),
+                        foot.width,
+                        1,
+                    ),
+                );
+            }
+        }
+        if shortcuts_page && inner.width >= 90 && foot.height > 2 && self.footer_focus.is_none() {
             frame.render_widget(
-                Paragraph::new(format!("◀ {label} ▶ Enter · Tab"))
-                    .style(Style::new().bg(palette.selected)),
-                Rect::new(foot.x, foot.y, foot.width, 1),
+                Paragraph::new(tr(
+                    "↑↓ 选择命令 · 所有操作可点击 · 录制中的 Esc / Enter 也作为按键",
+                    "↑↓ Select command · Click any action · Esc / Enter are recorded too",
+                ))
+                .style(Style::new().fg(palette.muted)),
+                Rect::new(foot.x, foot.bottom() - 2, foot.width, 1),
             );
         }
         if foot.height > 1 {
-            let msg = self.error.as_ref().unwrap_or(&self.message);
+            let shortcut_hint = tr(
+                "配置保存在用户级设置；其他窗口需重新加载。保存全部分类的共同草稿。",
+                "User-level configuration; reload other windows. Saves the shared draft for all categories.",
+            );
+            let msg = self
+                .error
+                .as_ref()
+                .unwrap_or(if shortcuts_page && self.message.is_empty() {
+                    &shortcut_hint
+                } else {
+                    &self.message
+                });
             frame.render_widget(
                 Paragraph::new(crate::preview::safe_text(msg)).style(Style::new().fg(
                     if self.error.is_some() {

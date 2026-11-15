@@ -471,3 +471,117 @@ fn effective_export_is_separate_from_importable_differences_and_does_not_write_s
     assert!(!root.join("config.toml").exists());
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn reference_layout_uses_all_aliases_real_filter_counts_and_independent_scroll() {
+    crate::i18n::with_language(crate::i18n::Language::EnUs, || {
+        let mut d = draft();
+        let mut m = Manager::default();
+        select(&mut m, &d, "overview.note.edit");
+        m.set_context("overview");
+        let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(180, 40)).unwrap();
+        let mut hits = vec![];
+        t.draw(|f| hits = m.draw(f, f.area(), &d)).unwrap();
+        let text = t
+            .backend()
+            .buffer()
+            .content
+            .iter()
+            .map(|c| c.symbol())
+            .collect::<String>();
+        assert!(
+            text.contains("Ctrl+F3 / F3"),
+            "both effective aliases belong in the table"
+        );
+        assert!(text.contains("Current command"));
+        for filter in 0..6 {
+            assert!(
+                hits.iter()
+                    .any(|(_, a)| matches!(a,Action::FilterTo(i) if *i==filter))
+            );
+        }
+        let before = m.selected;
+        m.scroll_at((m.list_area.x, m.list_area.y).into(), 3, &d);
+        assert_eq!(m.selected, before + 3);
+        let selected = m.selected;
+        m.scroll_at((m.detail_area.x, m.detail_area.y).into(), 3, &d);
+        assert_eq!(
+            m.selected, selected,
+            "inspector wheel must not select a command"
+        );
+        assert_eq!(m.detail_scroll, 3);
+        select(&mut m, &d, "overview.note.edit");
+        m.action(Action::RemoveNote(1), &mut d).unwrap();
+        assert!(matches!(m.mode, Mode::Note(_)));
+        assert!(!m.effective_keys(&d).iter().any(|k| k.display() == "F3"));
+        m.paste("Screenshot tool");
+        m.action(Action::Finish, &mut d).unwrap();
+        m.action(Action::FilterTo(5), &mut d).unwrap();
+        assert_eq!(m.commands(&d).len(), 1);
+        assert_eq!(m.commands(&d)[0].id, "overview.note.edit");
+        assert!(d.base.effective.shortcuts.bindings.is_empty());
+        m.action(Action::FilterTo(0), &mut d).unwrap();
+        m.search = "Edit note".into();
+        assert_eq!(m.commands(&d).len(), 1);
+        assert_eq!(m.commands(&d)[0].id, "overview.note.edit");
+        m.search = "源码编辑器".into();
+        assert!(m.commands(&d).is_empty());
+        m.search = "editor".into();
+        assert!(m.commands(&d).iter().any(|c| c.id == "editor.save"));
+    });
+    crate::i18n::with_language(crate::i18n::Language::ZhCn, || {
+        let d = draft();
+        let mut m = Manager::default();
+        m.search = "编辑便签".into();
+        assert_eq!(m.commands(&d).len(), 1);
+        assert_eq!(m.commands(&d)[0].id, "overview.note.edit");
+    });
+}
+
+#[test]
+fn recording_and_test_mouse_exits_are_visible_at_small_sizes_without_draft_writes() {
+    for language in [crate::i18n::Language::EnUs, crate::i18n::Language::ZhCn] {
+        crate::i18n::with_language(language, || {
+            for (width, height) in [(40, 12), (48, 16), (120, 30), (180, 40)] {
+                let mut d = draft();
+                let mut m = Manager::default();
+                select(&mut m, &d, "overview.note.edit");
+                m.action(Action::Record, &mut d).unwrap();
+                key(&mut m, &mut d, "Esc");
+                let mut t =
+                    ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
+                        .unwrap();
+                let mut hits = vec![];
+                t.draw(|f| hits = m.draw(f, f.area(), &d)).unwrap();
+                assert!(hits.iter().any(|(_, a)| matches!(a, Action::Finish)));
+                assert!(hits.iter().any(|(_, a)| matches!(a, Action::Cancel)));
+                assert!(
+                    !hits
+                        .iter()
+                        .any(|(_, a)| matches!(a, Action::Select(_) | Action::FilterTo(_)))
+                );
+                assert!(
+                    hits.iter()
+                        .all(|(r, _)| r.right() <= width && r.bottom() <= height)
+                );
+                m.action(Action::Cancel, &mut d).unwrap();
+                m.action(Action::Test, &mut d).unwrap();
+                m.action(
+                    Action::SetContext(CONTEXTS.iter().position(|c| *c == "overview").unwrap()),
+                    &mut d,
+                )
+                .unwrap();
+                key(&mut m, &mut d, "Ctrl+F3");
+                assert!(m.last_test.is_some());
+                m.action(Action::Context, &mut d).unwrap();
+                assert!(
+                    m.last_test.is_none(),
+                    "a tested candidate belongs to its original scope"
+                );
+                m.action(Action::ClearTest, &mut d).unwrap();
+                assert!(matches!(&m.mode,Mode::Test{received} if received.is_empty()));
+                assert!(!d.dirty());
+            }
+        });
+    }
+}
