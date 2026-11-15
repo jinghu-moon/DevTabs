@@ -1681,6 +1681,8 @@ impl SettingsUi {
         let enabled = self.hit_enabled(&hit);
         let style = if !enabled {
             Style::new().fg(p.muted)
+        } else if matches!(hit, Hit::Page(i) if i == self.category) {
+            self.category_style(self.category, false)
         } else if Self::hit_dangerous(&hit) {
             Style::new().fg(p.error)
         } else if matches!(hit, Hit::Save) {
@@ -1696,6 +1698,24 @@ impl SettingsUi {
         };
         f.render_widget(Paragraph::new(format!("[{label}] ")).style(style), r);
         self.hits.push((r, hit));
+    }
+    fn category_style(&self, index: usize, hovered: bool) -> Style {
+        use ratatui::style::Modifier;
+        let p = crate::appearance::palette();
+        let selected = index == self.category;
+        let style = Style::new()
+            .fg(if selected { p.accent } else { p.fg })
+            .bg(if selected || hovered {
+                p.selected
+            } else {
+                p.bg
+            })
+            .remove_modifier(Modifier::UNDERLINED);
+        if selected {
+            style.add_modifier(Modifier::BOLD)
+        } else {
+            style.remove_modifier(Modifier::BOLD)
+        }
     }
     fn hit_enabled(&self, hit: &Hit) -> bool {
         match hit {
@@ -1742,10 +1762,14 @@ impl SettingsUi {
                 .find(|(r, _)| r.contains(point.into()))
             && self.hit_enabled(hit)
         {
+            let style = if let Hit::Page(index) = hit {
+                self.category_style(*index, true)
+            } else {
+                Style::new().add_modifier(ratatui::style::Modifier::UNDERLINED)
+            };
             for y in r.y..r.bottom() {
                 for x in r.x..r.right() {
-                    f.buffer_mut()[(x, y)]
-                        .set_style(Style::new().add_modifier(ratatui::style::Modifier::UNDERLINED));
+                    f.buffer_mut()[(x, y)].set_style(style);
                 }
             }
         }
@@ -1828,14 +1852,10 @@ impl SettingsUi {
                 frame.render_widget(
                     Paragraph::new(format!(
                         "{} {}",
-                        if i == self.category { "▸" } else { " " },
+                        if i == self.category { "▎" } else { " " },
                         p.label()
                     ))
-                    .style(if i == self.category {
-                        Style::new().fg(palette.accent)
-                    } else {
-                        Style::default()
-                    }),
+                    .style(self.category_style(i, false)),
                     r,
                 );
                 self.hits.push((r, Hit::Page(i)));

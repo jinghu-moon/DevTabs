@@ -49,6 +49,169 @@ fn draw(ui: &mut SettingsUi, w: u16, h: u16) -> String {
         .collect()
 }
 #[test]
+fn category_hover_and_selection_remain_distinct_across_themes_and_input_focus() {
+    use crate::appearance::{Theme, palette, set};
+    use ratatui::{backend::TestBackend, style::Modifier};
+    let fixture = Fixture::new("schema=1\n");
+    let original = fs::read(fixture.0.join("config.toml")).unwrap();
+    for language in [crate::i18n::Language::ZhCn, crate::i18n::Language::EnUs] {
+        crate::i18n::with_language(language, || {
+            for theme in [
+                Theme::Terminal,
+                Theme::Tokyo,
+                Theme::Catppuccin,
+                Theme::Light,
+            ] {
+                let mut ui = fixture.ui();
+                set(theme);
+                let before = ui.draft.as_ref().unwrap().tree.clone();
+                let mut terminal = ratatui::Terminal::new(TestBackend::new(120, 34)).unwrap();
+                terminal.draw(|f| ui.draw(f)).unwrap();
+                let category = |ui: &SettingsUi, index| {
+                    ui.hits
+                        .iter()
+                        .find_map(|(r, h)| matches!(h, Hit::Page(i) if *i == index).then_some(*r))
+                        .unwrap()
+                };
+                let selected = category(&ui, 0);
+                let other = category(&ui, 1);
+                let p = palette();
+                for (scene, row) in [("hover-other", other), ("hover-selected", selected)] {
+                    let focus = (ui.category, ui.nav, ui.footer_focus);
+                    ui.mouse(MouseEvent {
+                        kind: MouseEventKind::Moved,
+                        column: row.right() - 1,
+                        row: row.y,
+                        modifiers: Mods::NONE,
+                    })
+                    .unwrap();
+                    terminal.draw(|f| ui.draw(f)).unwrap();
+                    assert_eq!(focus, (ui.category, ui.nav, ui.footer_focus));
+                    let buffer = terminal.backend().buffer();
+                    let active = &buffer[(selected.x, selected.y)];
+                    assert_eq!(active.symbol(), "▎");
+                    assert_eq!((active.fg, active.bg), (p.accent, p.selected));
+                    assert!(active.modifier.contains(Modifier::BOLD));
+                    assert!(!active.modifier.contains(Modifier::UNDERLINED));
+                    let inactive = &buffer[(other.right() - 1, other.y)];
+                    assert_eq!(inactive.fg, p.fg);
+                    assert_eq!(
+                        inactive.bg,
+                        if scene == "hover-other" {
+                            p.selected
+                        } else {
+                            p.bg
+                        }
+                    );
+                    assert!(
+                        !inactive
+                            .modifier
+                            .intersects(Modifier::BOLD | Modifier::UNDERLINED)
+                    );
+                    if let Some(dir) = std::env::var_os("DEVTABS_SETTINGS_NAV_FRAMES") {
+                        let dir = PathBuf::from(dir);
+                        fs::create_dir_all(&dir).unwrap();
+                        let cells = buffer.content.iter().map(|c| serde_json::json!({
+                            "s":c.symbol(), "fg":format!("{:?}", c.fg),
+                            "bg":format!("{:?}", c.bg), "modifier":format!("{:?}",c.modifier)
+                        })).collect::<Vec<_>>();
+                        fs::write(
+                            dir.join(format!("{language:?}-{theme:?}-{scene}.json")),
+                            serde_json::to_vec(
+                                &serde_json::json!({"width":120,"height":34,"cells":cells}),
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap();
+                    }
+                }
+                ui.mouse(MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    column: 119,
+                    row: 33,
+                    modifiers: Mods::NONE,
+                })
+                .unwrap();
+                key(&mut ui, KeyCode::Tab, Mods::NONE);
+                terminal.draw(|f| ui.draw(f)).unwrap();
+                assert!(!ui.nav, "content focus must retain the selected category");
+                assert_eq!(
+                    terminal.backend().buffer()[(selected.x, selected.y)].bg,
+                    p.selected
+                );
+                assert_eq!(terminal.backend().buffer()[(other.x, other.y)].bg, p.bg);
+                ui.mouse(MouseEvent {
+                    kind: MouseEventKind::Down(MouseButton::Left),
+                    column: other.right() - 1,
+                    row: other.y,
+                    modifiers: Mods::NONE,
+                })
+                .unwrap();
+                terminal.draw(|f| ui.draw(f)).unwrap();
+                assert_eq!(ui.category, 1, "the entire highlighted row is clickable");
+                assert_eq!(
+                    terminal.backend().buffer()[(other.x, other.y)].symbol(),
+                    "▎"
+                );
+                assert_eq!(
+                    terminal.backend().buffer()[(selected.x, selected.y)].bg,
+                    p.bg
+                );
+                ui.pointer = Some((selected.x, selected.y));
+                ui.reset_prompt = true;
+                terminal.draw(|f| ui.draw(f)).unwrap();
+                assert!(!ui.hits.iter().any(|(_, h)| matches!(h, Hit::Page(_))));
+                assert_eq!(
+                    terminal.backend().buffer()[(selected.x, selected.y)].bg,
+                    p.bg,
+                    "a modal must suppress hover on background categories"
+                );
+                assert_eq!(ui.draft.as_ref().unwrap().tree, before);
+                assert!(!ui.dirty());
+                assert_eq!(fs::read(fixture.0.join("config.toml")).unwrap(), original);
+            }
+        });
+    }
+    set(Theme::Terminal);
+}
+
+#[test]
+fn collapsed_category_keeps_selection_and_hover_without_underlines() {
+    use crate::appearance::{Theme, palette, set};
+    use ratatui::{backend::TestBackend, style::Modifier};
+    for theme in [Theme::Tokyo, Theme::Light] {
+        let fixture = Fixture::new("schema=1\n");
+        let mut ui = fixture.ui();
+        set(theme);
+        let mut terminal = ratatui::Terminal::new(TestBackend::new(80, 24)).unwrap();
+        terminal.draw(|f| ui.draw(f)).unwrap();
+        let row = ui
+            .hits
+            .iter()
+            .find_map(|(r, h)| matches!(h, Hit::Page(0)).then_some(*r))
+            .unwrap();
+        for hovered in [false, true] {
+            if hovered {
+                ui.mouse(MouseEvent {
+                    kind: MouseEventKind::Moved,
+                    column: row.right() - 1,
+                    row: row.y,
+                    modifiers: Mods::NONE,
+                })
+                .unwrap();
+                terminal.draw(|f| ui.draw(f)).unwrap();
+            }
+            let cell = &terminal.backend().buffer()[(row.x, row.y)];
+            assert_eq!((cell.fg, cell.bg), (palette().accent, palette().selected));
+            assert!(cell.modifier.contains(Modifier::BOLD));
+            assert!(!cell.modifier.contains(Modifier::UNDERLINED));
+            assert_eq!(ui.category, 0);
+            assert!(!ui.dirty());
+        }
+    }
+    set(Theme::Terminal);
+}
+#[test]
 fn disabled_danger_hover_and_primary_states_are_distinct_and_non_mutating() {
     let fixture = Fixture::new("schema=1\n[terminal]\nhistory_lines=0\n");
     let mut ui = fixture.ui();

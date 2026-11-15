@@ -135,3 +135,13 @@ git diff --check
 | release-only 性能/大量文件/图片质量比较工作负载 | ignore / 未运行 | 完整回归中的忽略项逐条显示原因；与设置正确性自动测试分开。 |
 
 代码与自动验收完成后按用户授权提交并推送；外部人工环境矩阵保持未运行状态，正式发布前单独完成。没有新增兼容读取、迁移器、真实配置自动搬运或真实全局热键改写。
+
+## 侧边栏状态样式优化（2026-11-15）
+
+以 `48e96c5` 为基线，分类导航 hover 改为整行主题弱底色；当前项增加持续底色、左侧竖条、主题强调色和加粗。hover 不再添加整行下划线，也不覆盖选中项样式。移开鼠标清除临时底色，内容区获得焦点后仍保留当前分类标识；窄窗当前分类按钮复用选中样式。沿用现有 Palette，不增加配置字段。
+
+升级前设置套件 62/0/0，升级后 64/0/0。新增测试覆盖中文/英文与 Terminal、Tokyo、Catppuccin、Light 四套主题，核对整行颜色、左侧标识、加粗和无下划线，验证 hover 不改焦点/分类/草稿/文件、行尾空白可点击、离开后恢复、弹层屏蔽背景 hover；另覆盖 Tokyo/Light 的 80×24 紧凑分类按钮。实际 TestBackend 帧共 16 个，存于 `artifacts/settings-sidebar/frames`，检查过其中中英文深浅主题 PNG 合成预览；该预览不冒充桌面截图。
+
+最终命令：`cargo test --target-dir target/shortcut-ui-redesign --workspace --all-targets --no-fail-fast -- --test-threads=1`。使用 `artifacts/settings-sidebar/full-home` 隔离配置，不设置 AST 审计导出变量；46 个套件 **597 通过、0 失败、33 忽略**，退出码 0，新增 2 个通过测试且忽略数量不变。其中 lib 264/0/7、真实 PTY 9/0/4、工作区 25/0/2、正式 AST 门禁 4/0/0。日志为 `artifacts/settings-sidebar/before.log`、`after.log`、`full.log`，机器汇总 `summary.json`；格式与差异空白检查通过。
+
+本地新版为 `artifacts/DevTabs-settings-sidebar/devtabs.exe`，从完成全量验证的独立 target 复制，SHA-256 与原构建相同；版本 `0.4.0`，build `5f83eb3b9d6b0616`。从项目根目录运行该文件后进入设置即可查看，现有旧版窗口需另开新版。构建、帧与日志按既定规则留在本地 artifacts/target，不提交到 Git。
